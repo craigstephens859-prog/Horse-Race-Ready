@@ -226,3 +226,4 @@ __pycache__/
 *publishable_key*.txt
 <PATH1>
 <PATH2>
+.streamlit/secrets.toml.txt
