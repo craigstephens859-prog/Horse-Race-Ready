@@ -221,3 +221,6 @@ __marimo__/
 venv/
 __pycache__/
 *.lnk
+.streamlit/secrets.toml
+*.lnk
+*publishable_key*.txt
