@@ -210,3 +210,8 @@ __marimo__/
 .streamlit/secrets.toml
 .streamlit/secrets.toml.txt
 
+
+# Streamlit secrets (do not commit)
+.streamlit/secrets.toml
+.streamlit/secrets.toml.txt
+
