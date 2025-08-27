@@ -1,18 +1,20 @@
 # app.py
 import os
 import re
+from uuid import uuid4
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
 # ===================== Page / Model Settings =====================
 
-st.set_page_config(page_title="AI Horse Race Analyzer & Handicapping",
-                   page_icon="🏇", layout="centered")
-st.title("🏇 AI Horse Race Analyzer & Handicapping")
+st.set_page_config(page_title="Horse Race Ready", page_icon="🏇", layout="centered")
+st.title("🏇 Horse Race Ready 🏇")
 
 # Model + temperature from secrets (safe defaults)
 MODEL = st.secrets.get("OPENAI_MODEL", "gpt-5")
-TEMP  = float(st.secrets.get("OPENAI_TEMPERATURE", "0.5"))
+TEMP = float(st.secrets.get("OPENAI_TEMPERATURE", "0.5"))
 
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -29,6 +31,80 @@ except Exception:
     openai.api_key = OPENAI_API_KEY
     use_sdk_v1 = False
 
+# ---------- Legal/Links (override via secrets) ----------
+REPO_USER = st.secrets.get("GH_USER", "craigstephens859-prog")
+REPO_NAME = st.secrets.get("GH_REPO", "horse-race-ready")
+
+_BASE_GH = f"https://github.com/{REPO_USER}/{REPO_NAME}/blob/main"
+TERMS_URL = st.secrets.get("TERMS_URL", f"{_BASE_GH}/TERMS.md")
+PRIVACY_URL = st.secrets.get("PRIVACY_URL", f"{_BASE_GH}/PRIVACY.md")
+CONTACT_URL = st.secrets.get("CONTACT_URL", "mailto:bluegrassdude@icloud.com")
+
+st.markdown(
+    f"""
+**Disclaimer:** This tool provides informational handicapping analysis only and is **not** financial or wagering advice.  
+Use at your own risk. By using this app, you agree to the <a href="{TERMS_URL}" target="_blank">Terms</a> and <a href="{PRIVACY_URL}" target="_blank">Privacy Policy</a>.  
+Questions? <a href="{CONTACT_URL}?subject=Horse%20Race%20Ready%20Support">Contact Support</a>.
+""",
+    unsafe_allow_html=True,
+)
+
+# ---------------- Supabase client (optional but recommended) ----------------
+try:
+    from supabase import create_client, Client  # pip install supabase
+except Exception:
+    create_client = None
+    Client = None
+
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+
+supabase = None  # type: Client | None
+if create_client and SUPABASE_URL and SUPABASE_ANON_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    except Exception:
+        supabase = None
+
+# Create a per-install ID so we can log usage even without Auth login
+if "install_id" not in st.session_state:
+    st.session_state.install_id = str(uuid4())
+
+def supa_ping():
+    """Insert a row into public.zz_ping (id bigserial, created_at timestamptz default now())."""
+    if not supabase:
+        st.info("Supabase not configured (add SUPABASE_URL and SUPABASE_ANON_KEY to secrets).")
+        return
+    try:
+        supabase.table("zz_ping").insert({}).execute()
+        st.success("Ping inserted into public.zz_ping ✅")
+    except Exception as e:
+        st.error(f"Ping failed: {e}")
+
+def upsert_usage(tokens_prompt: int = 0, tokens_completion: int = 0):
+    """
+    Best-effort usage meter. Tries to upsert into public.usage_daily with
+    composite key (user_id, day). This silently no-ops if schema/policies differ.
+    """
+    if not supabase:
+        return
+    try:
+        supabase.table("usage_daily").upsert(
+            {
+                "user_id": st.session_state.install_id,  # swap to real Auth user_id later
+                "day": str(date.today()),
+                "prompt_tokens": tokens_prompt,
+                "completion_tokens": tokens_completion,
+            },
+            on_conflict=["user_id", "day"],
+        ).execute()
+    except Exception:
+        # Safe ignore: your table/policies may differ
+        pass
+
+# Quick connectivity button
+if supabase and st.button("🔌 Test Supabase connection", use_container_width=True):
+    supa_ping()
 
 # ===================== Helpers =====================
 
@@ -64,7 +140,7 @@ def call_openai_messages(messages):
                 return resp["choices"][0]["message"]["content"]
             raise
 
-def detect_valid_race_headers(pp_text: str) -> list[tuple[int, int]]:
+def detect_valid_race_headers(pp_text: str):
     """
     Find 'Race <num>' headers that really look like section headers (not stray text).
     We require the next ~250 chars to contain one of these tokens: Purse, Furlong(s),
@@ -110,10 +186,10 @@ def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
     return pd.DataFrame(uniq)
 
 def build_user_prompt(pp_text: str,
-                      biases: list[str],
+                      biases,
                       surface_type: str,
                       surface_condition: str,
-                      scratches_list: list[str],
+                      scratches_list,
                       running_styles_text: str,
                       ml_context: str):
     style_glossary = (
@@ -287,6 +363,9 @@ if go:
             st.error(f"OpenAI error: {e}")
             st.stop()
 
+    # Best-effort usage logging (safe no-op if table/policy mismatches)
+    upsert_usage(tokens_prompt=1, tokens_completion=1)
+
     st.success("Analysis complete.")
     st.markdown(text)
     st.download_button("Download analysis (.txt)", data=text,
@@ -294,4 +373,3 @@ if go:
                        mime="text/plain", use_container_width=True)
 
 st.caption("Tip: This app expects **one race** per paste. You can use it for any track and any single race.")
-
