@@ -6,9 +6,8 @@ import streamlit as st
 
 # ===================== Page / Model Settings =====================
 
-st.set_page_config(page_title="AI Horse Race Analyzer & Handicapping",
-                   page_icon="🏇", layout="centered")
-st.title("🏇 AI Horse Race Analyzer & Handicapping")
+st.set_page_config(page_title="Horse Race Ready", page_icon="🏇", layout="centered")
+st.title("🏇 Horse Race Ready")
 
 # Model + temperature from secrets (safe defaults)
 MODEL = st.secrets.get("OPENAI_MODEL", "gpt-5")
@@ -29,6 +28,23 @@ except Exception:
     openai.api_key = OPENAI_API_KEY
     use_sdk_v1 = False
 
+# ---------- Legal/Links (override via secrets) ----------
+REPO_USER = st.secrets.get("GH_USER", "craigstephens859-prog")
+REPO_NAME = st.secrets.get("GH_REPO", "horse-race-ready")
+
+_BASE_GH = f"https://github.com/{REPO_USER}/{REPO_NAME}/blob/main"
+TERMS_URL   = st.secrets.get("TERMS_URL",   f"{_BASE_GH}/TERMS.md")
+PRIVACY_URL = st.secrets.get("PRIVACY_URL", f"{_BASE_GH}/PRIVACY.md")
+CONTACT_URL = st.secrets.get("CONTACT_URL", "mailto:bluegrassdude@icloud.com")  # override in secrets if you like
+
+st.markdown(
+    f"""
+**Disclaimer:** This tool provides informational handicapping analysis only and is **not** financial or wagering advice.  
+Use at your own risk. By using this app, you agree to the Terms and Privacy Policy.  
+Questions? <a href="mailto:bluegrassdude@icloud.com?subject=Horse%20Race%20Ready%20Support">bluegrassdude@icloud.com</a>.
+""",
+    unsafe_allow_html=True,
+)
 
 # ===================== Helpers =====================
 
@@ -64,7 +80,7 @@ def call_openai_messages(messages):
                 return resp["choices"][0]["message"]["content"]
             raise
 
-def detect_valid_race_headers(pp_text: str) -> list[tuple[int, int]]:
+def detect_valid_race_headers(pp_text: str):
     """
     Find 'Race <num>' headers that really look like section headers (not stray text).
     We require the next ~250 chars to contain one of these tokens: Purse, Furlong(s),
@@ -110,10 +126,10 @@ def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
     return pd.DataFrame(uniq)
 
 def build_user_prompt(pp_text: str,
-                      biases: list[str],
+                      biases,
                       surface_type: str,
                       surface_condition: str,
-                      scratches_list: list[str],
+                      scratches_list,
                       running_styles_text: str,
                       ml_context: str):
     style_glossary = (
@@ -294,4 +310,3 @@ if go:
                        mime="text/plain", use_container_width=True)
 
 st.caption("Tip: This app expects **one race** per paste. You can use it for any track and any single race.")
-
