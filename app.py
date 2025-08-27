@@ -1,13 +1,34 @@
 # app.py
-import os, re, requests, pandas as pd, streamlit as st
+import os
+import re
+import requests
+import pandas as pd
+import streamlit as st
 
-# ===================== Page / Keys / Links =====================
+# ===================== Page / App Header =====================
 st.set_page_config(page_title="Horse Race Ready", page_icon="🏇", layout="centered")
 st.title("🏇 Horse Race Ready 🏇")
 
-# --- OpenAI ---
+# ---------- Legal / Links (override via secrets if you want) ----------
+GH_USER = st.secrets.get("GH_USER", "craigstephens859-prog")
+GH_REPO = st.secrets.get("GH_REPO", "horse-race-ready")
+_BASE_GH = f"https://github.com/{GH_USER}/{GH_REPO}/blob/main"
+
+TERMS_URL   = st.secrets.get("TERMS_URL",   f"{_BASE_GH}/TERMS.md")
+PRIVACY_URL = st.secrets.get("PRIVACY_URL", f"{_BASE_GH}/PRIVACY.md")
+CONTACT_URL = st.secrets.get("CONTACT_URL", "mailto:bluegrassdude@icloud.com")
+
+st.markdown(
+    f"**Disclaimer:** This tool provides informational handicapping analysis only and is **not** financial or wagering advice.  \n"
+    f"Use at your own risk. By using this app, you agree to the "
+    f"[Terms]({TERMS_URL}) and [Privacy Policy]({PRIVACY_URL}).  \n"
+    f"Questions? [Contact Support]({CONTACT_URL})."
+)
+
+# ===================== Model Settings =====================
 MODEL = st.secrets.get("OPENAI_MODEL", "gpt-5")
-TEMP  = float(st.secrets.get("OPENAI_TEMPERATURE", "0.5"))
+TEMP = float(st.secrets.get("OPENAI_TEMPERATURE", "0.5"))
+
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     st.error("Add your key to `.streamlit/secrets.toml`:\n\nOPENAI_API_KEY = \"sk-...\"")
@@ -22,55 +43,12 @@ except Exception:
     openai.api_key = OPENAI_API_KEY
     use_sdk_v1 = False
 
-# --- Legal/Links (override via secrets) ---
-REPO_USER = st.secrets.get("GH_USER", "craigstephens859-prog")
-REPO_NAME = st.secrets.get("GH_REPO", "horse-race-ready")
-_BASE_GH  = f"https://github.com/{REPO_USER}/{REPO_NAME}/blob/main"
-TERMS_URL   = st.secrets.get("TERMS_URL",   f"{_BASE_GH}/TERMS.md")
-PRIVACY_URL = st.secrets.get("PRIVACY_URL", f"{_BASE_GH}/PRIVACY.md")
-SUPPORT_EMAIL = st.secrets.get("SUPPORT_EMAIL", "bluegrassdude@icloud.com")
-CONTACT_URL   = st.secrets.get("CONTACT_URL", f"mailto:{SUPPORT_EMAIL}?subject=Horse%20Race%20Ready%20Support")
-
-st.markdown(
-    f"""
-**Disclaimer:** This tool provides informational handicapping analysis only and is **not** financial or wagering advice.  
-Use at your own risk. By using this app, you agree to the
-[{ 'Terms' if TERMS_URL else 'Terms' }]({TERMS_URL}) and
-[{ 'Privacy Policy' if PRIVACY_URL else 'Privacy Policy' }]({PRIVACY_URL}).  
-Questions? [Contact Support]({CONTACT_URL}).
-""",
-    unsafe_allow_html=True,
-)
-
-# --- Optional: Supabase ping button (works only if both secrets exist) ---
-SUPABASE_URL = st.secrets.get("SUPABASE_URL")
-SUPABASE_ANON_KEY = st.secrets.get("SUPABASE_ANON_KEY")
-def supabase_ping():
-    try:
-        headers = {
-            "apikey": SUPABASE_ANON_KEY,
-            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "return=minimal",
-        }
-        r = requests.post(f"{SUPABASE_URL}/rest/v1/zz_ping", headers=headers, json={})  # json={} is key!
-        if r.ok:
-            st.success("Supabase ping OK ✅")
-        else:
-            st.error(f"Ping failed: {r.status_code} {r.text}")
-    except Exception as e:
-        st.error(f"Ping error: {e}")
-
-if SUPABASE_URL and SUPABASE_ANON_KEY:
-    if st.button("🧪 Test Supabase connection", use_container_width=True):
-        supabase_ping()
-
-# ===================== Helpers =====================
 def model_supports_temperature(model_name: str) -> bool:
     m = (model_name or "").lower()
     return not (m.startswith("gpt-5") or m.startswith("o4") or m.startswith("o3"))
 
 def call_openai_messages(messages):
+    """Wrapper that omits temperature when the model doesn't allow it."""
     if use_sdk_v1:
         try:
             kwargs = {"model": MODEL, "messages": messages}
@@ -96,26 +74,63 @@ def call_openai_messages(messages):
                 return resp["choices"][0]["message"]["content"]
             raise
 
+# ===================== Supabase Ping =====================
+def supabase_ping() -> tuple[bool, str]:
+    """
+    Requires a table: public.zz_ping (id bigserial pk, created_at timestamptz default now()).
+    RLS disabled (or a permissive insert policy).
+    """
+    url = st.secrets.get("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_ANON_KEY")
+    if not url or not key:
+        return False, "Missing SUPABASE_URL or SUPABASE_ANON_KEY in secrets."
+
+    try:
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        # Bulk-insert form; [{}] inserts a default row
+        r = requests.post(f"{url}/rest/v1/zz_ping", headers=headers, json=[{}])
+        if r.status_code in (201, 204):
+            return True, "Supabase ping OK ✅"
+        return False, f"{r.status_code}: {r.text}"
+    except Exception as e:
+        return False, str(e)
+
+if st.button("🧪 Test Supabase connection", use_container_width=True):
+    ok, msg = supabase_ping()
+    (st.success if ok else st.error)(f"Ping result: {msg}")
+
+# ===================== Parsing Helpers =====================
 def detect_valid_race_headers(pp_text: str):
     toks = ("purse", "furlong", "mile", "clm", "allow", "stake", "pars", "post time")
     headers = []
     for m in re.finditer(r"(?mi)^\s*Race\s+(\d+)\b", pp_text or ""):
+        start = m.start()
         win = (pp_text[m.end():m.end()+250] or "").lower()
         if any(t in win for t in toks):
-            headers.append((m.start(), int(m.group(1))))
+            headers.append((start, int(m.group(1))))
     return headers
 
 def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
     pat = re.compile(r'^\s*(\d+)\s+([A-Za-z0-9\'\.\-\s&]+?)\s+\(\s*(E\/P|E|P|S)\s*[\d]*\s*\)', re.MULTILINE)
     rows = []
     for m in pat.finditer(pp_text or ""):
-        rows.append({"#": m.group(1).strip(), "Horse": m.group(2).strip(),
-                     "DetectedStyle": m.group(3).replace("E/P", "E/P"), "OverrideStyle": ""})
+        rows.append({
+            "#": m.group(1).strip(),
+            "Horse": m.group(2).strip(),
+            "DetectedStyle": m.group(3).replace("E/P", "E/P"),
+            "OverrideStyle": ""
+        })
     seen, uniq = set(), []
     for r in rows:
         k = (r["#"], r["Horse"].lower())
         if k not in seen:
-            seen.add(k); uniq.append(r)
+            seen.add(k)
+            uniq.append(r)
     return pd.DataFrame(uniq)
 
 def build_user_prompt(pp_text: str, biases, surface_type: str, surface_condition: str,
@@ -171,6 +186,7 @@ st.markdown(
     "Paste the **BRIS PPs for a single race only** (from any track). "
     "If you paste a full card with multiple ‘Race #’ headers, the app will stop and ask you to retry."
 )
+
 pp_text = st.text_area("BRIS PPs (one race):", height=260, placeholder="Paste the full text block of a single race…")
 
 race_headers = detect_valid_race_headers(pp_text) if pp_text.strip() else []
@@ -179,12 +195,15 @@ if pp_text.strip():
         st.info("No explicit 'Race #' header detected — that's OK if your paste is a single-race block.")
     elif len(race_headers) > 1:
         st.error(
-            f"Detected **{len(race_headers)} races** in your paste. "
-            "Please paste **only one race**. Go back to your BRIS file, copy that race block only, and try again."
+            f"Detected **{len(race_headers)} races**. "
+            "Please paste **only one race** (copy just that race block from your BRIS file)."
         )
         st.stop()
 
-bias_options = ["favors speed", "favors stalkers", "favors closers", "inside bias", "outside bias", "tiring speed", "fair/neutral"]
+bias_options = [
+    "favors speed", "favors stalkers", "favors closers",
+    "inside bias", "outside bias", "tiring speed", "fair/neutral"
+]
 biases = st.multiselect("Track bias today (choose one or more):", options=bias_options, default=["favors speed"])
 
 surface_type = st.selectbox("Surface type:", ["Dirt", "Turf", "Synthetic"], index=0)
@@ -195,8 +214,10 @@ elif surface_type == "Turf":
 else:
     surface_condition = st.selectbox("Synthetic condition:", ["fast", "standard", "wet"], index=0)
 
-ml_context = st.text_input("Likely Morning Line / Tote Context (optional):",
-                           placeholder="e.g., heavy chalk; spread race; vulnerable favorite…")
+ml_context = st.text_input(
+    "Likely Morning Line / Tote Context (optional):",
+    placeholder="e.g., heavy chalk; spread race; vulnerable favorite…"
+)
 
 st.markdown("### Scratches")
 df_styles_full = extract_horses_and_styles(pp_text) if pp_text.strip() else pd.DataFrame()
@@ -228,7 +249,9 @@ edited = st.data_editor(
         "OverrideStyle": st.column_config.SelectboxColumn("OverrideStyle", options=style_options,
                                                           help="Choose to override; leave blank to keep detected."),
     },
-    hide_index=True, use_container_width=True, num_rows="fixed",
+    hide_index=True,
+    use_container_width=True,
+    num_rows="fixed",
 )
 
 final_style_lines = []
@@ -240,11 +263,14 @@ running_styles_text = "\n".join(final_style_lines) if final_style_lines else "No
 
 # ===================== Analyze =====================
 go = st.button("Analyze", type="primary", use_container_width=True)
+
 if go:
     if not pp_text.strip():
-        st.warning("Please paste BRIS PPs for a single race."); st.stop()
+        st.warning("Please paste BRIS PPs for a single race.")
+        st.stop()
     if len(race_headers) > 1:
-        st.error("Multiple races detected — please paste only one race."); st.stop()
+        st.error("Multiple races detected — please paste only one race.")
+        st.stop()
 
     user_prompt = build_user_prompt(
         pp_text=pp_text.strip(),
@@ -259,17 +285,26 @@ if go:
     with st.spinner("Handicapping…"):
         try:
             messages = [
-                {"role": "system", "content": "You are a professional value-based handicapper. Focus on value, pace, bias, class, form cycles, trainer/jockey intent and pedigree tendencies."},
+                {"role": "system", "content": (
+                    "You are a professional value-based handicapper. "
+                    "Focus on value, pace, bias, class, form cycles, trainer/jockey intent and pedigree tendencies."
+                )},
                 {"role": "user", "content": user_prompt},
             ]
             text = call_openai_messages(messages)
         except Exception as e:
-            st.error(f"OpenAI error: {e}"); st.stop()
+            st.error(f"OpenAI error: {e}")
+            st.stop()
 
     st.success("Analysis complete.")
     st.markdown(text)
-    st.download_button("Download analysis (.txt)", data=text, file_name="horse_racing_analysis.txt",
-                       mime="text/plain", use_container_width=True)
+    st.download_button(
+        "Download analysis (.txt)",
+        data=text,
+        file_name="horse_racing_analysis.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
 
 st.caption("Tip: This app expects **one race** per paste. You can use it for any track and any single race.")
 
