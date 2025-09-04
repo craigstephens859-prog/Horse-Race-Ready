@@ -10,20 +10,91 @@ st.set_page_config(page_title="Horse Race Ready", page_icon="🏇", layout="cent
 st.title("🏇 Horse Race Ready 🏇")
 
 # ---------- Legal / Links (override via secrets if you want) ----------
-GH_USER = st.secrets.get("GH_USER", "craigstephens859-prog")
-GH_REPO = st.secrets.get("GH_REPO", "horse-race-ready")
-_BASE_GH = f"https://github.com/{GH_USER}/{GH_REPO}/blob/main"
+SUPPORT_EMAIL = st.secrets.get("SUPPORT_EMAIL", "support@handicappinghorseraces.org")
+TERMS_URL   = (st.secrets.get("TERMS_URL", "") or "").strip()
+PRIVACY_URL = (st.secrets.get("PRIVACY_URL", "") or "").strip()
 
-TERMS_URL   = st.secrets.get("TERMS_URL",   f"{_BASE_GH}/TERMS.md")
-PRIVACY_URL = st.secrets.get("PRIVACY_URL", f"{_BASE_GH}/PRIVACY.md")
-CONTACT_URL = st.secrets.get("CONTACT_URL", "mailto:bluegrassdude@icloud.com")
+TERMS_MD = """
+# Terms of Use
 
-st.markdown(
-    f"**Disclaimer:** This tool provides informational handicapping analysis only and is **not** financial or wagering advice.  \n"
-    f"Use at your own risk. By using this app, you agree to the "
-    f"[Terms]({TERMS_URL}) and [Privacy Policy]({PRIVACY_URL}).  \n"
-    f"Questions? [Contact Support]({CONTACT_URL})."
-)
+This service provides informational handicapping analysis **only** and does not constitute financial, legal, or wagering advice. Use at your own risk.
+
+**Eligibility & Compliance.** You are solely responsible for complying with all laws, rules, and regulations of your jurisdiction.
+
+**No Guarantees.** Outcomes are uncertain. Past performance does not guarantee future results.
+
+**Limitation of Liability.** The app and its providers are not liable for any losses or damages arising from use of the service.
+
+**Governing Law.** These terms are governed by the laws of the United States and, to the extent applicable, the state/province/region from which you access the site, without regard to conflicts of law principles.
+
+**Changes.** We may update these terms at any time by posting an updated version.
+"""
+
+PRIVACY_MD = f"""
+# Privacy Policy
+
+**What we collect.** If provided, we may collect contact info (e.g., email) and operational logs necessary to run the app.
+
+**How we use it.** To operate, secure, improve, and support the service (e.g., troubleshooting, support responses).
+
+**Sharing.** We do not sell your personal data. We may share with service providers (e.g., hosting, analytics) who process data on our behalf under appropriate safeguards.
+
+**Security.** We use reasonable technical and organizational measures but cannot guarantee absolute security.
+
+**Your Choices.** You may request deletion of your contact info by emailing the address below.
+
+**Governing Law.** This policy is governed by U.S. law and, to the extent applicable, the state/province/region from which you access the site.
+
+**Contact.** {SUPPORT_EMAIL}
+"""
+
+def render_disclaimer():
+    # Safe defaults for toggles
+    st.session_state.setdefault("show_terms", False)
+    st.session_state.setdefault("show_privacy", False)
+
+    left, right = st.columns([3, 2])
+
+    with left:
+        # Simple disclaimer + mailto (no external TOS/Privacy links here)
+        st.markdown(
+            f"""
+**Disclaimer:** This tool provides informational handicapping analysis only and is **not** financial or wagering advice.  
+Questions? <a href="mailto:{SUPPORT_EMAIL}?subject=Horse%20Race%20Ready%20Support">{SUPPORT_EMAIL}</a>.
+""",
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        # If external URLs exist, link out. Otherwise, show inline modals.
+        if TERMS_URL and PRIVACY_URL:
+            st.link_button("Terms", TERMS_URL, use_container_width=True)
+            st.link_button("Privacy", PRIVACY_URL, use_container_width=True)
+        else:
+            t, p = st.columns(2)
+            with t:
+                if st.button("View Terms", use_container_width=True):
+                    st.session_state.show_terms = True
+            with p:
+                if st.button("View Privacy", use_container_width=True):
+                    st.session_state.show_privacy = True
+
+    # Inline viewers (when toggled)
+    if st.session_state.get("show_terms"):
+        with st.expander("Terms of Use", expanded=True):
+            st.markdown(TERMS_MD)
+            if st.button("Close Terms"):
+                st.session_state.show_terms = False
+
+    if st.session_state.get("show_privacy"):
+        with st.expander("Privacy Policy", expanded=True):
+            st.markdown(PRIVACY_MD)
+            if st.button("Close Privacy"):
+                st.session_state.show_privacy = False
+
+# Call it near the top (right after st.title)
+render_disclaimer()
+
 
 # ===================== Model Settings =====================
 MODEL = st.secrets.get("OPENAI_MODEL", "gpt-5")
