@@ -227,3 +227,7 @@ __pycache__/
 <PATH1>
 <PATH2>
 .streamlit/secrets.toml.txt
+analysis.txt
+overlays.csv
+tickets.csv
+tickets.txt

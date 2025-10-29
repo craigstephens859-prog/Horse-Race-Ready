@@ -1,0 +1,25 @@
+﻿[MASTER]
+ignore=.venv,.git,.streamlit,analysis.txt,overlays.csv,tickets.csv
+jobs=0
+
+[MESSAGES CONTROL]
+disable =
+    missing-module-docstring,
+    missing-function-docstring,
+    invalid-name,
+    too-many-branches,
+    too-many-locals,
+    too-many-statements,
+    broad-except
+
+[REPORTS]
+score = yes
+
+[FORMAT]
+max-line-length = 120
+
+[BASIC]
+good-names = i,j,k,df,pp,p,ev,ex,tri,idx,R
+
+[DESIGN]
+max-args = 10

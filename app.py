@@ -1,16 +1,29 @@
-import streamlit as st
-import pandas as pd
+# app.py
+# Horse Race Ready — IQ Mode (Full, final version)
+# - Robust PP parsing (incl. NA firsters)
+# - Auto track + race-type detection mapped to constant base_class_bias keys
+# - Track-bias integration (by track/surface/distance bucket + style/post)
+# - Per-horse angles + pedigree tweaks folded into class math
+# - Speed Figure parsing and integration
+# - Centralized MODEL_CONFIG for easy tuning
+# - Robust error handling with st.warning
+# - Advanced "common sense" A/B/C/D strategy builder w/ budgeting, field size logic, straight/box examples
+# - Super High 5 exotic support
+# - Classic bullet-style report with download buttons
+# - Resilient to older/newer Streamlit rerun APIs
+
+import os, re, json, math
+from typing import Dict, List, Tuple, Optional
+
 import numpy as np
-import re
+import pandas as pd
+import streamlit as st
 from itertools import product
-import json
-import os
-from typing import List, Dict, Tuple, Optional
 
 # ===================== Page / Model Settings =====================
 
 st.set_page_config(page_title="Horse Race Ready — IQ Mode", page_icon="🏇", layout="wide")
-st.title("🏇  Horse Race Ready — IQ Mode")
+st.title("🏇  Horse Race Ready — IQ Mode")
 
 # ---------- Durable state ----------
 if "parsed" not in st.session_state:
@@ -18,7 +31,7 @@ if "parsed" not in st.session_state:
 if "pp_text_cache" not in st.session_state:
     st.session_state["pp_text_cache"] = ""
 
-# Initialize session state for persistent inputs
+# Defaults for Race Info
 if 'track_name' not in st.session_state:
     st.session_state['track_name'] = "Keeneland"
 if 'surface_type' not in st.session_state:
@@ -50,13 +63,13 @@ openai = None
 try:
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-except:
+except Exception:
     use_sdk_v1 = False
 try:
     import openai
     if OPENAI_API_KEY:
         openai.api_key = OPENAI_API_KEY
-except:
+except Exception:
     openai = None
 
 def model_supports_temperature(model_name: str) -> bool:
@@ -91,6 +104,547 @@ def call_openai_messages(messages: List[Dict]) -> str:
                 return resp["choices"][0]["message"]["content"]
             return f"(Error in OpenAI call: {e})"
 
+# ===================== Model Config & Tuning =====================
+
+MODEL_CONFIG = {
+    # --- Rating Model ---
+    "softmax_tau": 0.85,  # Controls win prob "sharpness". Lower = more spread out.
+    "speed_fig_weight": 0.05, # (Fig - Avg) * Weight. 0.05 = 10 fig points = 0.5 bonus.
+    "first_timer_fig_default": 50, # Assumed speed fig for a 1st-time starter.
+    
+    # --- Pace & Style Model ---
+    "ppi_multiplier": 1.5, # Overall impact of the Pace Pressure Index (PPI).
+    "ppi_tailwind_factor": 0.6, # How much of the PPI value is given to E/EP or S horses.
+    "style_strength_weights": { # Multiplier for pace tailwind based on strength.
+        "Strong": 1.0, 
+        "Solid": 0.8, 
+        "Slight": 0.5, 
+        "Weak": 0.3
+    },
+    
+    # --- Manual Bias Model (Section B) ---
+    "style_match_table": {
+        "speed favoring": {"E": 0.70, "E/P": 0.50, "P": -0.20, "S": -0.50},
+        "closer favoring": {"E": -0.50, "E/P": -0.20, "P": 0.25, "S": 0.50},
+        "fair/neutral": {"E": 0.0, "E/P": 0.0, "P": 0.0, "S": 0.0},
+    },
+    "style_quirin_threshold": 6, # Quirin score needed for "strong" style bonus.
+    "style_quirin_bonus": 0.10, # Bonus for strong style (e.g., E w/ Q>=6).
+    "post_bias_rail_bonus": 0.40,
+    "post_bias_inner_bonus": 0.25,
+    "post_bias_mid_bonus": 0.15,
+    "post_bias_outside_bonus": 0.25,
+    
+    # --- Pedigree & Angle Tweaks (Cclass) ---
+    "ped_dist_bonus": 0.06,
+    "ped_dist_penalty": -0.04, # Note: This should be negative
+    "ped_dist_neutral_bonus": 0.03,
+    "ped_first_pct_threshold": 14, # Sire/Damsire 1st-time-win %
+    "ped_first_pct_bonus": 0.02,
+    "angle_debut_msw_bonus": 0.05,
+    "angle_debut_other_bonus": 0.03,
+    "angle_debut_sprint_bonus": 0.01,
+    "angle_second_career_bonus": 0.03,
+    "angle_surface_switch_bonus": 0.02,
+    "angle_blinkers_on_bonus": 0.02,
+    "angle_blinkers_off_bonus": 0.005,
+    "angle_shipper_bonus": 0.01,
+    "angle_off_track_route_bonus": 0.01,
+    "angle_roi_pos_max_bonus": 0.06, # Max bonus from positive ROI angles
+    "angle_roi_pos_per_bonus": 0.01, # Bonus per positive ROI angle
+    "angle_roi_neg_max_penalty": 0.03, # Max penalty from negative ROI angles (applied as -)
+    "angle_roi_neg_per_penalty": 0.005, # Penalty per negative ROI angle (applied as -)
+    "angle_tweak_min_clip": -0.12, # Min/Max total adjustment from all angles
+    "angle_tweak_max_clip": 0.12,
+    
+    # --- Exotics & Strategy ---
+    "exotic_bias_weights": (1.30, 1.15, 1.05, 1.03), # (1st, 2nd, 3rd, 4th) Harville bias
+    "strategy_confident": { # Placeholders, not used by new strategy builder
+        "ex_max": 4, "ex_min_prob": 0.020,
+        "tri_max": 6, "tri_min_prob": 0.010,
+        "sup_max": 8, "sup_min_prob": 0.008,
+    },
+    "strategy_value": { # Placeholders, not used by new strategy builder
+        "ex_max": 6, "ex_min_prob": 0.015,
+        "tri_max": 10, "tri_min_prob": 0.008,
+        "sup_max": 12, "sup_min_prob": 0.006,
+    }
+}
+
+# =========================
+# Track parsing, race-type, distance options, and track-bias integration
+# =========================
+
+# -------- Distance options (UI) --------
+DISTANCE_OPTIONS = [
+    # Short sprints
+    "4 Furlongs", "4 1/2 Furlongs", "4.5 Furlongs",
+    "5 Furlongs", "5 1/2 Furlongs", "5.5 Furlongs",
+    "6 Furlongs", "6 1/2 Furlongs", "6.5 Furlongs", "7 Furlongs",
+    # Routes & variants
+    "1 Mile", "1 Mile 70 Yards",
+    "1 1/16 Miles", "1 1/8 Miles", "1 3/16 Miles", "1 1/4 Miles",
+    "1 5/16 Miles", "1 3/8 Miles", "1 7/16 Miles", "1 1/2 Miles",
+    "1 9/16 Miles", "1 5/8 Miles", "1 3/4 Miles", "1 7/8 Miles", "2 Miles"
+]
+
+def _distance_bucket_from_text(distance_txt: str) -> str:
+    """
+    Buckets into ≤6f, 6.5–7f, or 8f+ (routes).
+    """
+    d = (distance_txt or "").strip().lower()
+    # Furlongs
+    if "furlong" in d:
+        s = d.replace("½", ".5").replace(" 1/2", ".5")
+        m = re.search(r'(\d+(?:\.\d+)?)', s)
+        if m:
+            val = float(m.group(1))
+            if val <= 6.0:  return "≤6f"
+            if val < 8.0:   return "6.5–7f"
+            return "8f+"
+    # Miles
+    if "mile" in d:
+        if "70" in d and "yard" in d:
+            return "8f+"
+        fracs = {"1/16": 1/16, "1/8": 1/8, "3/16": 3/16, "1/4": 1/4,
+                 "5/16": 5/16, "3/8": 3/8, "7/16": 7/16, "1/2": 0.5}
+        base = 0.0
+        m0 = re.search(r'(\d+)\s*mile', d)
+        if m0:
+            base = float(m0.group(1))
+        extra = 0.0
+        for f, v in fracs.items():
+            if f in d:
+                extra = v
+                break
+        total_mi = base + extra
+        total_f = total_mi * 8.0
+        if total_f < 6.5: return "≤6f"
+        if total_f < 8.0: return "6.5–7f"
+        return "8f+"
+    return "8f+"
+
+def distance_bucket(distance_txt: str) -> str:
+    try:
+        return _distance_bucket_from_text(distance_txt)
+    except Exception:
+        return "8f+"
+
+# -------- Canonical track names + aliases --------
+TRACK_ALIASES = {
+    "Del Mar": ["del mar", "dmr"],
+    "Keeneland": ["keeneland", "kee"],
+    "Churchill Downs": ["churchill downs", "cd", "churchill"],
+    "Kentucky Downs": ["kentucky downs", "kd"],
+    "Saratoga": ["saratoga", "sar"],
+    "Santa Anita": ["santa anita", "sa", "santa anita park"],
+    "Mountaineer": ["mountaineer", "mnr"],
+    "Charles Town": ["charlestown", "charles town", "ct"],
+    "Gulfstream": ["gulfstream", "gulfstream park", "gp"],
+    "Tampa Bay Downs": ["tampa", "tampa bay downs", "tam"],
+    "Belmont Park": ["belmont", "belmont park", "bel", "aqueduct at belmont", "belmont at aqueduct", "big a"],
+    "Horseshoe Indianapolis": ["horseshoe indianapolis", "indiana grand", "ind", "indy"],
+    "Penn National": ["penn national", "pen"],
+    "Presque Isle Downs": ["presque isle", "presque isle downs", "pid"],
+    "Woodbine": ["woodbine", "wo"],
+    "Evangeline Downs": ["evangeline", "evangeline downs", "evd"],
+    "Fairmount Park": ["fairmount park", "fanduel fairmount", "cah", "collinsville"],
+    "Finger Lakes": ["finger lakes", "fl"]
+}
+_CANON_BY_TOKEN = {}
+for canon, toks in TRACK_ALIASES.items():
+    for t in toks:
+        _CANON_BY_TOKEN[t] = canon
+
+def parse_track_name_from_pp(pp_text: str) -> str:
+    head = (pp_text or "")[:800].lower()
+    for token, canon in _CANON_BY_TOKEN.items():
+        if re.search(rf'\b{re.escape(token)}\b', head):
+            return canon
+    for canon, toks in TRACK_ALIASES.items():
+        for t in toks:
+            t_words = [w for w in t.split() if len(w) > 2]
+            if t_words and all(re.search(rf'\b{re.escape(w)}\b', head) for w in t_words):
+                return canon
+    return ""
+
+# -------- Race-type constants + detection --------
+# This dictionary is our constant. It measures the "reliability" of the race type.
+base_class_bias = {
+    "stakes (g1)": 0.90,
+    "stakes (g2)": 0.92,
+    "stakes (g3)": 0.93,
+    "stakes (listed)": 0.95,
+    "stakes": 0.95,
+    "allowance optional claiming (aoc)": 0.96,
+    "maiden special weight": 0.97,
+    "allowance": 0.99,
+    "starter handicap": 1.02,
+    "starter allowance": 1.03,
+    "waiver claiming": 1.07,
+    "claiming": 1.12,
+    "maiden claiming": 1.15,
+}
+
+condition_modifiers = {
+    "fast": 1.0, "firm": 1.0, "good": 1.03, "yielding": 1.04,
+    "muddy": 1.08, "sloppy": 1.10, "heavy": 1.10,
+}
+
+def detect_race_type(pp_text: str) -> str:
+    """
+    Normalize many wordings into the exact key set used by base_class_bias.
+    """
+    s = (pp_text or "")[:1000].lower()
+
+    # Graded stakes first
+    if re.search(r'\b(g1|grade\s*i)\b', s): return "stakes (g1)"
+    if re.search(r'\b(g2|grade\s*ii)\b', s): return "stakes (g2)"
+    if re.search(r'\b(g3|grade\s*iii)\b', s): return "stakes (g3)"
+
+    # Listed / generic stakes
+    if "listed" in s: return "stakes (listed)"
+    if re.search(r'\bstakes?\b', s): return "stakes"
+
+    # Maiden
+    if re.search(r'\b(mdn|maiden)\b', s):
+        if re.search(r'(mcl|mdn\s*clm|maiden\s*claim)', s): return "maiden claiming"
+        if re.search(r'(msw|maiden\s*special|maiden\s*sp\s*wt)', s): return "maiden special weight"
+        return "maiden special weight"
+
+    # AOC
+    if re.search(r'\b(oc|aoc|optional\s*claim)\b', s): return "allowance optional claiming (aoc)"
+
+    # Starter
+    if re.search(r'\bstarter\s*allow', s): return "starter allowance"
+    if re.search(r'\bstarter\s*h(andi)?cap\b', s): return "starter handicap"
+
+    # Waiver Claiming
+    if re.search(r'\b(waiver|wcl|w\s*clm)\b', s): return "waiver claiming"
+
+    # Claiming
+    if re.search(r'\bclm|claiming\b', s): return "claiming"
+
+    # Allowance last
+    if re.search(r'\ballow(ance)?\b', s): return "allowance"
+
+    return "allowance"
+
+# -------- Track bias profiles (additive deltas; conservative magnitude) --------
+TRACK_BIAS_PROFILES = {
+    "Keeneland": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.35, "E/P": 0.20, "P": -0.10, "S": -0.25},
+                         "post":     {"rail": 0.20, "inner": 0.10, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": 0.00, "S": -0.10},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Del Mar": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Churchill Downs": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.15, "E/P": 0.05, "P": 0.00, "S": -0.10},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Kentucky Downs": {
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": -0.05, "E/P": 0.00, "P": 0.10, "S": 0.15},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
+            "6.5–7f": {"runstyle": {"E": -0.05, "E/P": 0.00, "P": 0.10, "S": 0.15},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
+            "8f+":    {"runstyle": {"E": -0.10, "E/P": 0.00, "P": 0.10, "S": 0.20},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}}
+        }
+    },
+    "Saratoga": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Santa Anita": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Mountaineer": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
+        }
+    },
+    "Charles Town": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.45, "E/P": 0.25, "P": -0.15, "S": -0.35},
+                         "post":     {"rail": 0.25, "inner": 0.15, "mid": -0.05, "outside": -0.10}},
+            "6.5–7f": {"runstyle": {"E": 0.30, "E/P": 0.20, "P": -0.10, "S": -0.25},
+                         "post":     {"rail": 0.15, "inner": 0.10, "mid": -0.05, "outside": -0.10}},
+            "8f+":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": 0.00, "S": -0.10},
+                         "post":     {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
+        }
+    },
+    "Gulfstream": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Synthetic": {
+            "≤6f":    {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
+        }
+    },
+    "Tampa Bay Downs": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Belmont Park": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.15, "E/P": 0.05, "P": 0.00, "S": -0.10},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Horseshoe Indianapolis": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
+        }
+    },
+    "Penn National": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
+        }
+    },
+    "Presque Isle Downs": {
+        "Synthetic": {
+            "≤6f":    {"runstyle": {"E": 0.15, "E/P": 0.10, "P": 0.00, "S": -0.10},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}}
+        }
+    },
+    "Woodbine": {
+        "Synthetic": {
+            "≤6f":    {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.00}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Evangeline Downs": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
+        }
+    },
+    "Fairmount Park": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
+        }
+    },
+    "Finger Lakes": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+                         "post":     {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                         "post":     {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
+        }
+    }
+}
+
+def _canonical_track(track_name: str) -> str:
+    t = (track_name or "").strip().lower()
+    for canon, toks in TRACK_ALIASES.items():
+        if t == canon.lower() or t in toks:
+            return canon
+    for canon, toks in TRACK_ALIASES.items():
+        for tok in toks:
+            if tok in t:
+                return canon
+    return (track_name or "").strip()
+
+def _post_bucket(post_str: str) -> str:
+    try:
+        post = int(re.sub(r"[^\d]", "", str(post_str)))
+    except Exception as e:
+        st.warning(f"Failed to parse post number: '{post_str}'. Error: {e}")
+        post = None # Default to None and let it become 'mid'
+    if post is None:
+        return "mid"
+    if post == 1:       return "rail"
+    if 2 <= post <= 3:  return "inner"
+    if 4 <= post <= 7:  return "mid"
+    return "outside"
+
+def _style_norm(style: str) -> str:
+    s = (style or "NA").upper()
+    return "E/P" if s in ("EP", "E/P") else s
+
+def _get_track_bias_delta(track_name: str, surface_type: str, distance_txt: str,
+                          style: str, post_str: str) -> float:
+    canon = _canonical_track(track_name)
+    surf  = (surface_type or "Dirt").strip().title()
+    buck  = distance_bucket(distance_txt)  # ≤6f / 6.5–7f / 8f+
+    cfg   = (TRACK_BIAS_PROFILES.get(canon, {})
+                                .get(surf, {})
+                                .get(buck, {}))
+    if not cfg:
+        return 0.0
+    s_norm = _style_norm(style)
+    runstyle_delta = float((cfg.get("runstyle", {}) or {}).get(s_norm, 0.0))
+    post_delta     = float((cfg.get("post", {}) or {}).get(_post_bucket(post_str), 0.0))
+    return float(np.clip(runstyle_delta + post_delta, -1.0, 1.0))
+
 # ===================== Core Helpers =====================
 
 def detect_valid_race_headers(pp_text: str):
@@ -104,14 +658,15 @@ def detect_valid_race_headers(pp_text: str):
 
 HORSE_HDR_RE = re.compile(
     r"""(?mi)^\s*
-    (\d+)                              # post/program
-    \s+([A-Za-z0-9'.\-\s&]+?)          # horse name
+    (\d+)              # post/program
+    \s+([A-Za-z0-9'.\-\s&]+?)   # horse name
     \s*\(\s*
-    (E\/P|EP|E|P|S|NA)                 # style
-    (?:\s+(\d+))?                      # optional quirin
-    \s*\)\s*$                          #
+    (E\/P|EP|E|P|S|NA)      # style
+    (?:\s+(\d+))?           # optional quirin
+    \s*\)\s*$              #
     """, re.VERBOSE
 )
+
 def _normalize_style(tok: str) -> str:
     t = (tok or "").upper().strip()
     return "E/P" if t in ("EP", "E/P") else t
@@ -120,7 +675,7 @@ def calculate_style_strength(style: str, quirin: float) -> str:
     s = (style or "NA").upper()
     try:
         q = float(quirin)
-    except:
+    except Exception:
         return "Solid"
     if pd.isna(q): return "Solid"
     if s in ("E", "E/P"):
@@ -172,7 +727,10 @@ def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
         df["Quirin"] = df["Quirin"].clip(lower=0, upper=8)
     return df
 
-_ODDS_TOKEN = r"([+-]?\d+(?:\.\d+)?|\d+\s*/\s*\d+|\d+\s*-\s*\d+)"
+# === FIX 2: Re-ordered regex to catch fractions first ===
+_ODDS_TOKEN = r"(\d+\s*/\s*\d+|\d+\s*-\s*\d+|[+-]?\d+(?:\.\d+)?)"
+# ========================================================
+
 def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
     ml = {}
     blocks = {name: block for _, name, block in split_into_horse_chunks(pp_text)}
@@ -214,19 +772,47 @@ def parse_pedigree_snips(block: str) -> dict:
         out["dam_dpi"] = float(d.group(1))
     return out
 
+SPEED_FIG_RE = re.compile(
+    # Matches a date, track, etc., then a race type, then captures the first fig
+    r"(?mi)^\s*(\d{2}[A-Za-z]{3}\d{2})\s+.*?" # Date (e.g., 23Sep23)
+    r"\b(Clm|Mdn|Md Sp Wt|Alw|OC|G1|G2|G3|Stk|Hcp)\b" # A race type keyword
+    r".*?\s+(\d{2,3})\s+" # The first 2-3 digit number after the type
+)
+
+def parse_speed_figures_for_block(block: str) -> List[int]:
+    """
+    Parses a horse's PP text block and extracts all main speed figures.
+    """
+    figs = []
+    if not block:
+        return figs
+    
+    for m in SPEED_FIG_RE.finditer(block):
+        try:
+            # The speed figure is the second capture group
+            fig_val = int(m.group(2))
+            # Basic sanity check for a realistic speed figure
+            if 40 < fig_val < 130:
+                figs.append(fig_val)
+        except Exception:
+            pass # Ignore if conversion fails
+            
+    # We only care about the most recent figs, e.g., last 10
+    return figs[:10]
+
 # ---------- Probability helpers ----------
-def softmax_from_rating(ratings: np.ndarray, tau: float = 0.85) -> np.ndarray:
-    """Convert ratings to probabilities with a temperature (lower tau = sharper)."""
+def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
     if ratings.size == 0:
         return ratings
-    x = np.array(ratings, dtype=float) / max(tau, 1e-6)
+    _tau = tau if tau is not None else MODEL_CONFIG['softmax_tau']
+    x = np.array(ratings, dtype=float) / max(_tau, 1e-6)
     x = x - np.max(x)
     ex = np.exp(x)
     p = ex / np.sum(ex)
     return p
 
 def compute_ppi(df_styles: pd.DataFrame) -> dict:
-    """PPI that works with Detected/Override styles."""
+    """PPI that works with Detected/Override styles. Returns {'ppi':float, 'by_horse':{name:tailwind}}"""
     if df_styles is None or df_styles.empty:
         return {"ppi": 0.0, "by_horse": {}}
     styles, names, strengths = [], [], []
@@ -241,81 +827,64 @@ def compute_ppi(df_styles: pd.DataFrame) -> dict:
         if stl in counts:
             counts[stl] += 1
     total = sum(counts.values()) or 1
-    ppi_val = (counts["E"] + counts["E/P"] - counts["P"] - counts["S"]) * 10.0 / total
+    
+    ppi_val = (counts["E"] + counts["E/P"] - counts["P"] - counts["S"]) * MODEL_CONFIG['ppi_multiplier'] / total
+
     by_horse = {}
+    strength_weights = MODEL_CONFIG['style_strength_weights']
+    tailwind_factor = MODEL_CONFIG['ppi_tailwind_factor']
+    
     for stl, nm, strength in zip(styles, names, strengths):
-        wt = {"Strong":1.0, "Solid":0.8, "Slight":0.5, "Weak":0.3}.get(str(strength), 0.8)
+        wt = strength_weights.get(str(strength), 0.8)
         if stl in ("E", "E/P"):
-            by_horse[nm] = round(0.6 * wt * ppi_val, 3)
+            by_horse[nm] = round(tailwind_factor * wt * ppi_val, 3)
         elif stl == "S":
-            by_horse[nm] = round(-0.6 * wt * ppi_val, 3)
+            by_horse[nm] = round(-tailwind_factor * wt * ppi_val, 3)
         else:
             by_horse[nm] = 0.0
     return {"ppi": round(ppi_val,3), "by_horse": by_horse}
-
-def compute_bias_ratings(df_styles: pd.DataFrame, surface_type: str, distance_txt: str, condition_txt: str,
-                         race_type: str, running_style_bias: str, post_bias_pick: str,
-                         ppi_value: float = 0.0, pedigree_per_horse: Optional[Dict[str, dict]] = None) -> pd.DataFrame:
-    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace",
-            "Cclass", "Atrack", "Arace", "R"]
-    if df_styles is None or df_styles.empty:
-        return pd.DataFrame(columns=cols)
-    rows = []
-    ppi_map = compute_ppi(df_styles).get("by_horse", {})
-    key = (running_style_bias or "").upper()
-    if key in ("E","E/P"):
-        bias_key = "speed favoring"
-    elif key in ("P","S"):
-        bias_key = "closer favoring"
-    else:
-        bias_key = "none"
-    cstyle_map = {
-        "speed favoring": {"E":0.70, "E/P":0.50, "P":-0.20, "S":-0.50},
-        "closer favoring": {"E":-0.50, "E/P":-0.20, "P":0.25, "S":0.50},
-        "none": {"E":0.0, "E/P":0.0, "P":0.0, "S":0.0}
-    }
-    for _, row in df_styles.iterrows():
-        post = row.get("Post","")
-        name = row.get("Horse","")
-        style = _normalize_style(row.get("OverrideStyle") or row.get("DetectedStyle") or row.get("Style") or "")
-        quirin = float(row.get("Quirin",0)) if pd.notna(row.get("Quirin",np.nan)) else np.nan
-        ppi = float(ppi_map.get(name,0.0))
-        cstyle = cstyle_map.get(bias_key, cstyle_map["none"]).get(style, 0.0)
-        try:
-            post_num = int(re.sub(r"[^\d]","", str(post))) if post else 0
-        except:
-            post_num = 0
-        def post_bias_val(p):
-            return 0.0
-        if post_bias_pick.lower() == "favors rail":
-            def post_bias_val(p): return 0.25 if p==1 else 0.0
-        elif post_bias_pick.lower() == "1-3":
-            def post_bias_val(p): return 0.25 if 1<=p<=3 else 0.0
-        elif post_bias_pick.lower() == "4-7":
-            def post_bias_val(p): return 0.25 if 4<=p<=7 else 0.0
-        elif post_bias_pick.lower() == "8+":
-            def post_bias_val(p): return 0.25 if p>=8 else 0.0
-        cpost = post_bias_val(post_num)
-        cpace = ppi
-        Cclass = 0.0
-        a_track_h = 0.0
-        arace = Cclass + cstyle + cpost + cpace
-        R = a_track_h + arace
-        rows.append({"#":post, "Post":post, "Horse":name, "Style":style, "Quirin":quirin,
-                     "Cstyle":round(cstyle,2), "Cpost":round(cpost,2), "Cpace":round(cpace,2),
-                     "Cclass":Cclass, "Atrack":round(a_track_h,2), "Arace":round(arace,2), "R":round(R,2)})
-    return pd.DataFrame(rows)
 
 def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: Dict[str,float],
                                 chaos_index: float, track_name: str, surface_type: str,
                                 distance_txt: str, race_type: str,
                                 angles_per_horse: Dict[str,pd.DataFrame],
                                 pedigree_per_horse: Dict[str,dict], figs_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Applies speed figure enhancements (R_ENHANCE_ADJ) to the base ratings.
+    """
     if ratings_df is None or ratings_df.empty:
         return ratings_df
+    
     df = ratings_df.copy()
-    df["R_ENHANCE_ADJ"] = 0.0
+
+    # --- SPEED FIGURE LOGIC ---
+    if figs_df.empty or "AvgTop2" not in figs_df.columns:
+        # No figures were parsed or dataframe is empty
+        st.caption("No speed figures parsed. R_ENHANCE_ADJ set to 0.")
+        df["R_ENHANCE_ADJ"] = 0.0
+    else:
+        # 1. Merge the figures into the main ratings dataframe
+        df = df.merge(figs_df[["Horse", "AvgTop2"]], on="Horse", how="left")
+        
+        # 2. Calculate the average "AvgTop2" for all horses *in this race*
+        # We fillna with a low value for first-timers
+        df["AvgTop2"].fillna(MODEL_CONFIG['first_timer_fig_default'], inplace=True)
+        race_avg_fig = df["AvgTop2"].mean()
+
+        # 3. Define the enhancement (R_ENHANCE_ADJ)
+        SPEED_FIG_WEIGHT = MODEL_CONFIG['speed_fig_weight']
+        
+        df["R_ENHANCE_ADJ"] = (df["AvgTop2"] - race_avg_fig) * SPEED_FIG_WEIGHT
+        
+        # 4. Clean up the temporary column
+        df.drop(columns=["AvgTop2"], inplace=True)
+
+    # --- END SPEED FIGURE LOGIC ---
+
+    # Apply the final adjustment
+    df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0) # Ensure no NaNs
     df["R"] = (df["R"].astype(float) + df["R_ENHANCE_ADJ"].astype(float)).round(2)
+    
     return df
 
 # ---------- Odds helpers ----------
@@ -333,18 +902,20 @@ def fair_to_american_str(p: float) -> str:
 def str_to_decimal_odds(s: str) -> Optional[float]:
     s = (s or "").strip()
     if not s: return None
-    if re.fullmatch(r'[+-]?\d+(\.\d+)?', s):
-        v = float(s); return max(v, 1.01)
-    if re.fullmatch(r'\+\d+', s) or re.fullmatch(r'-\d+', s):
-        return 1 + (float(s)/100.0 if float(s)>0 else 100.0/abs(float(s)))
-    if "-" in s:
-        a,b = s.split("-",1)
-        try: return float(a)/float(b) + 1.0
-        except: return None
-    if "/" in s:
-        a,b = s.split("/",1)
-        try: return float(a)/float(b) + 1.0
-        except: return None
+    try:
+        if re.fullmatch(r'[+-]?\d+(\.\d+)?', s):
+            v = float(s); return max(v, 1.01)
+        if re.fullmatch(r'\+\d+', s) or re.fullmatch(r'-\d+', s):
+            return 1 + (float(s)/100.0 if float(s)>0 else 100.0/abs(float(s)))
+        if "-" in s:
+            a,b = s.split("-",1)
+            return float(a)/float(b) + 1.0
+        if "/" in s:
+            a,b = s.split("/",1)
+            return float(a)/float(b) + 1.0
+    except Exception as e:
+        st.warning(f"Could not parse odds string: '{s}'. Error: {e}")
+        return None
     return None
 
 def overlay_table(fair_probs: Dict[str,float], offered: Dict[str,float]) -> pd.DataFrame:
@@ -368,67 +939,130 @@ def calculate_exotics_biased(fair_probs: Dict[str,float],
                              anchor_second: Optional[str] = None,
                              pool_third: Optional[set] = None,
                              pool_fourth: Optional[set] = None,
-                             weights=(1.30, 1.15, 1.05, 1.03),
-                             top_n: int = 15) -> Tuple[pd.DataFrame,pd.DataFrame,pd.DataFrame]:
+                             weights=MODEL_CONFIG['exotic_bias_weights'],
+                             top_n: int = 50) -> Tuple[pd.DataFrame,pd.DataFrame,pd.DataFrame,pd.DataFrame]:
+    
     horses = list(fair_probs.keys())
     probs = np.array([fair_probs[h] for h in horses])
     n = len(horses)
     if n < 2:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     def w_first(h):  return weights[0] if anchor_first and h == anchor_first else 1.0
     def w_second(h): return weights[1] if anchor_second and h == anchor_second else 1.0
     def w_third(h):  return weights[2] if pool_third and h in pool_third else 1.0
     def w_fourth(h): return weights[3] if pool_fourth and h in pool_fourth else 1.0
+    # Add a 5th weight for SH5, re-using 4th
+    def w_fifth(h):  return weights[3] if pool_fourth and h in pool_fourth else 1.0
+
 
     # EXACTA
     ex_rows = []
     for i,j in product(range(n), range(n)):
         if i == j: continue
-        prob = probs[i]*(probs[j]/(1.0-probs[i]))
+        denom_ex = 1.0 - probs[i]
+        if denom_ex <= 1e-9: continue
+        prob = probs[i] * (probs[j] / denom_ex)
         prob *= w_first(horses[i]) * w_second(horses[j])
         ex_rows.append({"Ticket":f"{horses[i]} → {horses[j]}", "Prob":prob})
-    # renormalize after biasing
+
     ex_total = sum(r["Prob"] for r in ex_rows) or 1.0
     for r in ex_rows: r["Prob"] = r["Prob"]/ex_total
-    for r in ex_rows: r["Fair Odds"] = (1.0/r["Prob"])-1
+    for r in ex_rows:
+        if r["Prob"] > 1e-9: 
+            r["Fair Odds"] = (1.0/r["Prob"])-1
+        else:
+            r["Fair Odds"] = float('inf')
     df_ex = pd.DataFrame(ex_rows).sort_values(by="Prob", ascending=False).head(top_n)
 
     if n < 3:
-        return df_ex, pd.DataFrame(), pd.DataFrame()
+        return df_ex, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     # TRIFECTA
     tri_rows = []
     top8 = np.argsort(-probs)[:min(n,8)]
     for i,j,k in product(top8, top8, top8):
         if len({i,j,k}) != 3: continue
-        p_ij = probs[i]*(probs[j]/(1.0-probs[i]))
-        prob_ijk = p_ij*(probs[k]/(1.0-probs[i]-probs[j]))
+        denom_ij = 1.0 - probs[i]
+        denom_ijk = 1.0 - probs[i] - probs[j]
+        if denom_ij <= 1e-9 or denom_ijk <= 1e-9: continue
+
+        p_ij = probs[i]*(probs[j]/denom_ij)
+        prob_ijk = p_ij*(probs[k]/denom_ijk)
         prob_ijk *= w_first(horses[i]) * w_second(horses[j]) * w_third(horses[k])
         tri_rows.append({"Ticket":f"{horses[i]} → {horses[j]} → {horses[k]}", "Prob":prob_ijk})
+
     tri_total = sum(r["Prob"] for r in tri_rows) or 1.0
     for r in tri_rows: r["Prob"] = r["Prob"]/tri_total
-    for r in tri_rows: r["Fair Odds"] = (1.0/r["Prob"])-1
+    for r in tri_rows:
+        if r["Prob"] > 1e-9:
+            r["Fair Odds"] = (1.0/r["Prob"])-1
+        else:
+            r["Fair Odds"] = float('inf')
     df_tri = pd.DataFrame(tri_rows).sort_values(by="Prob", ascending=False).head(top_n)
 
     if n < 4:
-        return df_ex, df_tri, pd.DataFrame()
+        return df_ex, df_tri, pd.DataFrame(), pd.DataFrame()
 
     # SUPERFECTA
     super_rows = []
-    top6 = np.argsort(-probs)[:min(n,6)]
+    top6 = np.argsort(-probs)[:min(n,6)] # Keep this at top6 for performance
     for i,j,k,l in product(top6, top6, top6, top6):
         if len({i,j,k,l}) != 4: continue
-        p_ij = probs[i]*(probs[j]/(1.0-probs[i]))
-        p_ijk = p_ij*(probs[k]/(1.0-probs[i]-probs[j]))
-        prob_ijkl = p_ijk*(probs[l]/(1.0-probs[i]-probs[j]-probs[k]))
+        denom_ij = 1.0 - probs[i]
+        denom_ijk = 1.0 - probs[i] - probs[j]
+        denom_ijkl = 1.0 - probs[i] - probs[j] - probs[k]
+        if denom_ij <= 1e-9 or denom_ijk <= 1e-9 or denom_ijkl <= 1e-9: continue
+
+        p_ij = probs[i]*(probs[j]/denom_ij)
+        p_ijk = p_ij*(probs[k]/denom_ijk)
+        prob_ijkl = p_ijk*(probs[l]/denom_ijkl)
         prob_ijkl *= w_first(horses[i]) * w_second(horses[j]) * w_third(horses[k]) * w_fourth(horses[l])
         super_rows.append({"Ticket":f"{horses[i]} → {horses[j]} → {horses[k]} → {horses[l]}", "Prob":prob_ijkl})
+
     super_total = sum(r["Prob"] for r in super_rows) or 1.0
     for r in super_rows: r["Prob"] = r["Prob"]/super_total
-    for r in super_rows: r["Fair Odds"] = (1.0/r["Prob"])-1
+    for r in super_rows:
+        if r["Prob"] > 1e-9:
+            r["Fair Odds"] = (1.0/r["Prob"])-1
+        else:
+            r["Fair Odds"] = float('inf')
     df_super = pd.DataFrame(super_rows).sort_values(by="Prob", ascending=False).head(top_n)
-    return df_ex, df_tri, df_super
+
+    if n < 5:
+        return df_ex, df_tri, df_super, pd.DataFrame()
+        
+    # --- NEW: SUPER HIGH 5 ---
+    sh5_rows = []
+    top7 = np.argsort(-probs)[:min(n,7)] # Use Top 7 for SH5
+    for i,j,k,l,m in product(top7, top7, top7, top7, top7):
+        if len({i,j,k,l,m}) != 5: continue
+        denom_ij = 1.0 - probs[i]
+        denom_ijk = 1.0 - probs[i] - probs[j]
+        denom_ijkl = 1.0 - probs[i] - probs[j] - probs[k]
+        denom_ijklm = 1.0 - probs[i] - probs[j] - probs[k] - probs[l]
+        if denom_ij <= 1e-9 or denom_ijk <= 1e-9 or denom_ijkl <= 1e-9 or denom_ijklm <= 1e-9: continue
+
+        p_ij = probs[i]*(probs[j]/denom_ij)
+        p_ijk = p_ij*(probs[k]/denom_ijk)
+        p_ijkl = p_ijk*(probs[l]/denom_ijkl)
+        prob_ijklm = p_ijkl*(probs[m]/denom_ijklm)
+        
+        prob_ijklm *= (w_first(horses[i]) * w_second(horses[j]) * w_third(horses[k]) * w_fourth(horses[l]) * w_fifth(horses[m]))
+                        
+        sh5_rows.append({"Ticket":f"{horses[i]} → {horses[j]} → {horses[k]} → {horses[l]} → {horses[m]}", "Prob":prob_ijklm})
+
+    sh5_total = sum(r["Prob"] for r in sh5_rows) or 1.0
+    for r in sh5_rows: r["Prob"] = r["Prob"]/sh5_total
+    for r in sh5_rows:
+        if r["Prob"] > 1e-9:
+            r["Fair Odds"] = (1.0/r["Prob"])-1
+        else:
+            r["Fair Odds"] = float('inf')
+    df_super_hi_5 = pd.DataFrame(sh5_rows).sort_values(by="Prob", ascending=False).head(top_n)
+    
+    return df_ex, df_tri, df_super, df_super_hi_5
+
 
 def format_exotics_for_prompt(df: pd.DataFrame, title: str) -> str:
     if df is None or df.empty:
@@ -436,29 +1070,43 @@ def format_exotics_for_prompt(df: pd.DataFrame, title: str) -> str:
     df = df.copy()
     if "Prob %" not in df.columns:
         df["Prob %"] = (df["Prob"]*100).round(2)
+    # Format Fair Odds to handle potential infinity
+    df["Fair Odds"] = df["Fair Odds"].apply(lambda x: f"{x:.2f}" if np.isfinite(x) else "inf")
     md = df[["Ticket","Prob %","Fair Odds"]].to_markdown(index=False)
     return f"**{title} (Model-Derived)**\n{md}\n"
 
-# -------- Purse auto-detect (robust) --------
-def detect_purse_amount(pp_text: str) -> Optional[int]:
-    s = pp_text or ""
-    m = re.search(r'(?mi)\bPurse\b[^$\n\r]*\$\s*([\d,]+)', s)
-    if m:
-        try: return int(m.group(1).replace(",", ""))
-        except: pass
-    m = re.search(r'(?mi)\b(?:Added|Value)\b[^$\n\r]*\$\s*([\d,]+)', s)
-    if m:
-        try: return int(m.group(1).replace(",", ""))
-        except: pass
-    m = re.search(r'(?mi)\b(Mdn|Maiden|Allowance|Alw|Claiming|Clm|Starter|Stake|Stakes)\b[^:\n\r]{0,50}\b(\d{2,4})\s*[Kk]\b', s)
-    if m:
-        try: return int(m.group(2)) * 1000
-        except: pass
-    m = re.search(r'(?m)\$\s*([\d,]{5,})', s)
-    if m:
-        try: return int(m.group(1).replace(",", ""))
-        except: pass
-    return None
+# -------- Class + suitability model --------
+def calculate_final_rating(race_type,
+                           race_surface,
+                           race_distance_category,
+                           race_surface_condition,
+                           horse_surface_pref,
+                           horse_distance_pref):
+    """
+    Calculates a final "rating" scalar (lower is better) by combining:
+    base class bias × surface fit × distance fit × condition variance.
+    """
+    base_bias = base_class_bias.get(str(race_type).strip().lower(), 1.10)
+
+    # Surface fit
+    surface_modifier = 1.0
+    if str(horse_surface_pref).lower() == "any":
+        surface_modifier = 1.01
+    elif race_surface.lower() != str(horse_surface_pref).lower():
+        surface_modifier = 1.12
+
+    # Distance fit
+    distance_modifier = 1.0
+    if str(horse_distance_pref).lower() == "any":
+        distance_modifier = 1.02
+    elif race_distance_category != horse_distance_pref:
+        distance_modifier = 1.15
+
+    # Condition variance (confidence)
+    condition_modifier = condition_modifiers.get(str(race_surface_condition).lower(), 1.0)
+
+    final_score = base_bias * surface_modifier * distance_modifier * condition_modifier
+    return round(final_score, 4)
 
 # ===================== 1. Paste PPs & Parse (durable) =====================
 
@@ -497,7 +1145,6 @@ if not st.session_state["parsed"]:
     st.info("Paste your PPs and click **Parse PPs** to continue.")
     st.stop()
 
-# From here on, we operate on the cached, parsed text
 pp_text = st.session_state["pp_text_cache"]
 
 # ===================== 2. Race Info (Confirm) =====================
@@ -505,24 +1152,20 @@ pp_text = st.session_state["pp_text_cache"]
 st.header("2. Race Info (Confirm)")
 first_line = (pp_text.split("\n",1)[0] or "").strip()
 
-# Auto-parse track name
-track_match = re.match(r'^\s*([A-Za-z\s]+?)\s+Race', first_line)
-default_track = track_match.group(1).strip() if track_match else st.session_state['track_name']
-col1,col2,col3,col4,col5 = st.columns(5)
-with col1:
-    track_name = st.text_input("Track:", value=default_track, key="track_input")
-    st.session_state['track_name'] = track_name
+# Track
+parsed_track = parse_track_name_from_pp(pp_text)
+track_name = st.text_input("Track:", value=(parsed_track or st.session_state['track_name']))
+st.session_state['track_name'] = track_name
 
-# Auto-parse surface
+# Surface auto from header, but allow override
 default_surface = st.session_state['surface_type']
 if re.search(r'(?i)\bturf|trf\b', first_line): default_surface = "Turf"
 if re.search(r'(?i)\baw|tap|synth|poly\b', first_line): default_surface = "Synthetic"
-with col2:
-    surface_type = st.selectbox("Surface:", ["Dirt","Turf","Synthetic"],
-                                index=["Dirt","Turf","Synthetic"].index(default_surface), key="surface_input")
-    st.session_state['surface_type'] = surface_type
+surface_type = st.selectbox("Surface:", ["Dirt","Turf","Synthetic"],
+                            index=["Dirt","Turf","Synthetic"].index(default_surface) if default_surface in ["Dirt", "Turf", "Synthetic"] else 0) # Added check
+st.session_state['surface_type'] = surface_type
 
-# Auto-parse track condition
+# Condition
 conditions = ["fast","good","wet-fast","muddy","sloppy","firm","yielding","soft","heavy"]
 cond_found = None
 for cond in conditions:
@@ -530,13 +1173,11 @@ for cond in conditions:
         cond_found = cond
         break
 default_condition = cond_found if cond_found else st.session_state['condition_txt']
-with col3:
-    condition_txt = st.selectbox("Condition:", conditions,
-                                 index=conditions.index(default_condition) if default_condition in conditions else 0,
-                                 key="condition_input")
-    st.session_state['condition_txt'] = condition_txt
+condition_txt = st.selectbox("Condition:", conditions,
+                             index=conditions.index(default_condition) if default_condition in conditions else 0)
+st.session_state['condition_txt'] = condition_txt
 
-# Auto-parse distance
+# Distance (auto + dropdown)
 def _auto_distance_label(s: str) -> str:
     m = re.search(r'(?i)\b(\d+(?:\s*1/2|½)?\s*furlongs?)\b', s)
     if m: return m.group(1).title().replace("1/2","½")
@@ -549,54 +1190,61 @@ def _auto_distance_label(s: str) -> str:
     return "6 Furlongs"
 
 auto_distance = _auto_distance_label(first_line)
-distance_options = [
-    "4 Furlongs","4 1/2 Furlongs","5 Furlongs","5 1/2 Furlongs","6 Furlongs","6 1/2 Furlongs","7 Furlongs","7 1/2 Furlongs",
-    "8 Furlongs","8 1/2 Furlongs","9 Furlongs",
-    "1 Mile","1 1/16 Miles","1 1/8 Miles","1 3/16 Miles","1 1/4 Miles","1 5/16 Miles","1 3/8 Miles","1 7/16 Miles",
-    "1 1/2 Miles","1 5/8 Miles","1 3/4 Miles","1 7/8 Miles","2 Miles"
-]
-auto_dist_option = (auto_distance or "").replace("½","1/2")
-if st.session_state['distance_txt'] in distance_options:
-    default_index = distance_options.index(st.session_state['distance_txt'])
-elif auto_dist_option in distance_options:
-    default_index = distance_options.index(auto_dist_option)
-else:
-    default_index = distance_options.index("6 Furlongs")
-with col4:
-    distance_txt = st.selectbox("Distance:", distance_options, index=default_index, key="distance_input")
-    st.session_state['distance_txt'] = distance_txt
+# try to map to option variants
+preferred = (auto_distance or "").replace("½","1/2").replace(" 1/2"," 1/2")
+idx = DISTANCE_OPTIONS.index("6 Furlongs") if "6 Furlongs" in DISTANCE_OPTIONS else 0
+for opt in (preferred, auto_distance, st.session_state['distance_txt']):
+    if opt in DISTANCE_OPTIONS:
+        idx = DISTANCE_OPTIONS.index(opt); break
+distance_txt = st.selectbox("Distance:", DISTANCE_OPTIONS, index=idx)
+st.session_state['distance_txt'] = distance_txt
 
-# Auto-detect purse (robust, scans full text)
+# Purse
+def detect_purse_amount(pp_text: str) -> Optional[int]:
+    s = pp_text or ""
+    m = re.search(r'(?mi)\bPurse\b[^$\n\r]*\$\s*([\d,]+)', s)
+    if m:
+        try: return int(m.group(1).replace(",", ""))
+        except: pass
+    m = re.search(r'(?mi)\b(?:Added|Value)\b[^$\n\r]*\$\s*([\d,]+)', s)
+    if m:
+        try: return int(m.group(1).replace(",", ""))
+        except: pass
+    m = re.search(r'(?mi)\b(Mdn|Maiden|Allowance|Alw|Claiming|Clm|Starter|Stake|Stakes)\b[^:\n\r]{0,50}\b(\d{2,4})\s*[Kk]\b', s)
+    if m:
+        try: return int(m.group(2)) * 1000
+        except: pass
+    m = re.search(r'(?m)\$\s*([\d,]{5,})', s)
+    if m:
+        try: return int(m.group(1).replace(",", ""))
+        except: pass
+    return None
+
 auto_purse = detect_purse_amount(pp_text)
 default_purse = int(auto_purse) if auto_purse else st.session_state['purse_val']
-with col5:
-    purse_val = st.number_input("Purse ($)", min_value=0, step=5000, value=default_purse, key="purse_input")
-    st.session_state['purse_val'] = purse_val
+purse_val = st.number_input("Purse ($)", min_value=0, step=5000, value=default_purse)
+st.session_state['purse_val'] = purse_val
 
-# Detect race type (full-text)
-def detect_race_type(pp_text: str) -> str:
-    s = (pp_text or "").lower()
-    if "stakes" in s or "stake" in s:
-        if re.search(r'grade\s*i|\bg1\b', s): return "Stakes (G1)"
-        if re.search(r'grade\s*ii|\bg2\b', s): return "Stakes (G2)"
-        if re.search(r'grade\s*iii|\bg3\b', s): return "Stakes (G3)"
-        if "listed" in s: return "Stakes (Listed)"
-        return "Stakes"
-    if "allow" in s or "alw" in s: return "Allowance"
-    if re.search(r'\bmdn\b|\bmaiden\b', s):
-        if re.search(r'\bmc\b|\bmaid(?:en)?\s*claim', s): return "Maiden Claiming"
-        if re.search(r'\bmdn\s*sp|maiden\s*sp|mdn\s*special', s): return "Maiden Special Weight"
-        return "Maiden (other)"
-    return "Other"
-
+# Race type detection + override list (constant keys only)
 race_type_detected = detect_race_type(pp_text)
 st.caption(f"Detected race type: **{race_type_detected}**")
-race_type_list = ["Stakes (G1)","Stakes (G2)","Stakes (G3)","Stakes (Listed)",
-                  "Stakes","Allowance","Maiden Claiming","Maiden (other)","Other"]
-default_rt_index = race_type_list.index(race_type_detected) if race_type_detected in race_type_list else len(race_type_list)-1
-race_type_manual = st.selectbox("Race Type (override):", race_type_list, index=default_rt_index, key="race_type_input")
-race_type = race_type_manual if race_type_manual else race_type_detected
-race_type_detected = race_type
+# Ensure base_class_bias is not empty before proceeding
+if not base_class_bias:
+    st.error("Race type definitions (base_class_bias) are missing or failed to load.")
+    st.stop()
+try:
+    race_type_index = list(base_class_bias.keys()).index(race_type_detected) if race_type_detected in base_class_bias else list(base_class_bias.keys()).index("allowance")
+except ValueError:
+     st.warning("Default race type 'allowance' not found in bias definitions. Using first available type.")
+     race_type_index = 0 # Default to the first item if 'allowance' isn't found
+
+race_type_manual = st.selectbox(
+    "Race Type (override):",
+    options=list(base_class_bias.keys()),
+    index=race_type_index,
+)
+race_type = race_type_manual or race_type_detected
+race_type_detected = race_type  # lock in constant key
 
 # ===================== A. Race Setup: Scratches, ML & Styles =====================
 
@@ -625,14 +1273,29 @@ col_cfg = {
 }
 df_editor = st.data_editor(df_styles, use_container_width=True, column_config=col_cfg)
 
-# ===================== B. Angle Parsing / Pedigree =====================
+# ===================== B. Angle Parsing / Pedigree / Figs =====================
 
-angles_per_horse = {}
-pedigree_per_horse = {}
+angles_per_horse: Dict[str, pd.DataFrame] = {}
+pedigree_per_horse: Dict[str, dict] = {}
+figs_per_horse: Dict[str, List[int]] = {}
+
 for _post, name, block in split_into_horse_chunks(pp_text):
     if name in df_editor["Horse"].values:
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
+        figs_per_horse[name] = parse_speed_figures_for_block(block)
+
+# Create the figs_df
+figs_data = []
+for name, fig_list in figs_per_horse.items():
+    if fig_list: # Only add horses that have figures
+        figs_data.append({
+            "Horse": name,
+            "Figures": fig_list, # The list of parsed figs
+            "BestFig": max(fig_list),
+            "AvgTop2": round(np.mean(sorted(fig_list, reverse=True)[:2]), 1)
+        })
+figs_df = pd.DataFrame(figs_data) # <--- THIS IS THE NEW FIGS DATAFRAME
 
 df_final_field = df_editor[df_editor["Scratched"]==False].copy()
 if df_final_field.empty:
@@ -649,10 +1312,124 @@ df_final_field["Style"] = df_final_field.apply(
 if "#" not in df_final_field.columns:
     df_final_field["#"] = df_final_field["Post"].astype(str)
 
+# PPI
 ppi_results = compute_ppi(df_final_field)
 ppi_val = ppi_results.get("ppi", 0.0)
+ppi_map_by_horse = ppi_results.get("by_horse", {})
 
-# ===================== C. Bias-Adjusted Ratings =====================
+# ===================== Class build per horse (angles+pedigree in background) =====================
+
+def _infer_horse_surface_pref(name: str, ped: dict, ang_df: Optional[pd.DataFrame], race_surface: str) -> str:
+    cats = " ".join(ang_df["Category"].astype(str).tolist()).lower() if (ang_df is not None and not ang_df.empty) else ""
+    if "dirt to turf" in cats: return "Turf"
+    if "turf to dirt" in cats: return "Dirt"
+    # If nothing clear, use race surface (neutral) to avoid over-penalizing
+    return race_surface
+
+def _infer_horse_distance_pref(ped: dict) -> str:
+    awds = [x for x in [ped.get("sire_awd"), ped.get("damsire_awd")] if pd.notna(x)]
+    if not awds:
+        return "any"
+    m = float(np.nanmean(awds))
+    if m <= 6.5: return "≤6f"
+    if m >= 7.5: return "8f+"
+    return "6.5–7f"
+
+def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_cond: str) -> float:
+    """
+    Small, capped additive tweak that folds pedigree + common angles into Cclass.
+    Positive values help; negatives hurt.
+    """
+    ped = (pedigree_per_horse.get(name, {}) or {})
+    ang = angles_per_horse.get(name)
+    tweak = 0.0
+
+    # 1) Pedigree AWD vs today's distance bucket
+    awds = [x for x in [ped.get("sire_awd"), ped.get("damsire_awd")] if pd.notna(x)]
+    awd_mean = float(np.nanmean(awds)) if awds else np.nan
+    if awd_mean == awd_mean: # Check if not NaN
+        if race_bucket == "≤6f":
+            if awd_mean <= 6.5: tweak += MODEL_CONFIG['ped_dist_bonus']
+            elif awd_mean >= 7.5: tweak += MODEL_CONFIG['ped_dist_penalty']
+        elif race_bucket == "8f+":
+            if awd_mean >= 7.5: tweak += MODEL_CONFIG['ped_dist_bonus']
+            elif awd_mean <= 6.5: tweak += MODEL_CONFIG['ped_dist_penalty']
+        else: # 6.5-7f bucket
+            if 6.3 <= awd_mean <= 7.7: tweak += MODEL_CONFIG['ped_dist_neutral_bonus']
+
+    # Sprint/debut pop from 1st% in true sprints
+    if race_bucket == "≤6f":
+        for v in [ped.get("sire_1st"), ped.get("damsire_1st")]:
+            if pd.notna(v):
+                if float(v) >= MODEL_CONFIG['ped_first_pct_threshold']: 
+                    tweak += MODEL_CONFIG['ped_first_pct_bonus']
+
+    # 2) Angles
+    if ang is not None and not ang.empty:
+        cats = " ".join(ang["Category"].astype(str).tolist()).lower()
+        if "1st time str" in cats or "debut mdnspwt" in cats or "maiden sp wt" in cats:
+            tweak += MODEL_CONFIG['angle_debut_msw_bonus'] if race_type_detected == "maiden special weight" else MODEL_CONFIG['angle_debut_other_bonus']
+            if race_bucket == "≤6f": tweak += MODEL_CONFIG['angle_debut_sprint_bonus']
+        if "2nd career" in cats:
+            tweak += MODEL_CONFIG['angle_second_career_bonus']
+        if ("turf to dirt" in cats and race_surface.lower() == "dirt"):
+            tweak += MODEL_CONFIG['angle_surface_switch_bonus']
+        if ("dirt to turf" in cats and race_surface.lower() == "turf"):
+            tweak += MODEL_CONFIG['angle_surface_switch_bonus']
+        if "blinkers on" in cats:
+            tweak += MODEL_CONFIG['angle_blinkers_on_bonus']
+        if "blinkers off" in cats:
+            tweak += MODEL_CONFIG['angle_blinkers_off_bonus']
+        if "shipper" in cats:
+            tweak += MODEL_CONFIG['angle_shipper_bonus']
+        try:
+            if 'ROI' in ang.columns:
+                pos_ct = int((ang["ROI"] > 0).sum())
+                neg_ct = int((ang["ROI"] < 0).sum())
+                tweak += min(MODEL_CONFIG['angle_roi_pos_max_bonus'], MODEL_CONFIG['angle_roi_pos_per_bonus'] * pos_ct)
+                tweak -= min(MODEL_CONFIG['angle_roi_neg_max_penalty'], MODEL_CONFIG['angle_roi_neg_per_penalty'] * neg_ct)
+        except Exception as e:
+            st.warning(f"Error during angle ROI calculation for horse '{name}'. Error: {e}")
+            pass
+
+    # 3) Condition nuance
+    if race_cond in {"muddy","sloppy","heavy"} and awd_mean == awd_mean: # Check if not NaN
+        if race_bucket != "≤6f" and awd_mean >= 7.5:
+            tweak += MODEL_CONFIG['angle_off_track_route_bonus']
+
+    return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
+
+# Build Cclass as additive bonus (invert calculate_final_rating lower-is-better)
+race_surface = surface_type
+race_cond = condition_txt
+race_bucket = distance_bucket(distance_txt)
+
+Cclass_vals = []
+for _, r in df_final_field.iterrows():
+    name = r["Horse"]
+    ped  = pedigree_per_horse.get(name, {}) or {}
+    ang  = angles_per_horse.get(name) # Can be None
+    if ang is None:
+         ang = pd.DataFrame() # Ensure ang is DataFrame for _infer_horse_surface_pref
+    surf_pref = _infer_horse_surface_pref(name, ped, ang, race_surface)
+    dist_pref = _infer_horse_distance_pref(ped)
+
+    base_scalar = calculate_final_rating(
+        race_type=race_type_detected,
+        race_surface=race_surface,
+        race_distance_category=race_bucket,
+        race_surface_condition=race_cond,
+        horse_surface_pref=surf_pref,
+        horse_distance_pref=dist_pref
+    )
+    # Convert to additive bonus; more reliable (lower scalar) -> bigger bonus
+    cclass_add = round(1.00 - base_scalar, 3)
+    cclass_add += _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
+    Cclass_vals.append(cclass_add)
+
+df_final_field["Cclass"] = Cclass_vals
+
+# ===================== B. Bias-Adjusted Ratings =====================
 
 st.header("B. Bias-Adjusted Ratings")
 b_col1, b_col2, b_col3 = st.columns(3)
@@ -666,66 +1443,187 @@ with b_col2:
     running_style_biases = st.multiselect(
         "Select Running Style Biases:",
         options=["E","E/P","P","S"],
-        default=[], key="style_biases"
+        default=["E"], key="style_biases"
     )
 with b_col3:
-    post_biases = st.multiselect("Select Post Position Biases:",
-                                 options=["None","Favors Rail","1-3","4-7","8+"],
-                                 default=["None"], key="post_biases")
+    post_biases = st.multiselect(
+        "Select Post Position Biases:",
+        options=["no significant post bias", "favors rail (1)", "favors inner (1-3)", "favors mid (4-7)", "favors outside (8+)"],
+        default=["no significant post bias"],
+        key="post_biases"
+    )
 
 if not running_style_biases or not post_biases:
     st.info("Pick at least one **Style** bias and one **Post** bias.")
     st.stop()
 
-scenarios = list(product(running_style_biases, post_biases))
+def _style_bias_label_from_choice(choice: str) -> str:
+    # Map single-letter selection into our style_match table buckets
+    up = (choice or "").upper()
+    if up in ("E", "E/P"): return "speed favoring"
+    if up in ("P", "S"):   return "closer favoring"
+    return "fair/neutral"
+
+def style_match_score(running_style_bias: str, style: str, quirin: float) -> float:
+    # running_style_bias is already mapped to a label (speed/closer/fair)
+    bias = (running_style_bias or "").strip().lower()
+    stl = (style or "NA").upper()
+    
+    table = MODEL_CONFIG['style_match_table']
+    base = table.get(bias, table["fair/neutral"]).get(stl, 0.0)
+    
+    try:
+        q = float(quirin)
+    except Exception:
+        q = np.nan
+        
+    if stl in ("E","E/P") and pd.notna(q) and q >= MODEL_CONFIG['style_quirin_threshold']:
+        base += MODEL_CONFIG['style_quirin_bonus']
+    return float(np.clip(base, -1.0, 1.0))
+
+def post_bias_score(post_bias_pick: str, post_str: str) -> float:
+    pick = (post_bias_pick or "").strip().lower()
+    try:
+        post = int(re.sub(r"[^\d]", "", str(post_str)))
+    except Exception as e:
+        st.warning(f"Failed to parse post number: '{post_str}'. Error: {e}")
+        post = None
+        
+    table = {
+        "favors rail (1)": lambda p: MODEL_CONFIG['post_bias_rail_bonus'] if p == 1 else 0.0,
+        "favors inner (1-3)": lambda p: MODEL_CONFIG['post_bias_inner_bonus'] if p and 1 <= p <= 3 else 0.0,
+        "favors mid (4-7)": lambda p: MODEL_CONFIG['post_bias_mid_bonus'] if p and 4 <= p <= 7 else 0.0,
+        "favors outside (8+)": lambda p: MODEL_CONFIG['post_bias_outside_bonus'] if p and p >= 8 else 0.0,
+        "no significant post bias": lambda p: 0.0
+    }
+    fn = table.get(pick, table["no significant post bias"])
+    return float(np.clip(fn(post), -0.5, 0.5))
+
+def compute_bias_ratings(df_styles: pd.DataFrame,
+                         surface_type: str,
+                         distance_txt: str,
+                         condition_txt: str,
+                         race_type: str,
+                         running_style_bias: str,
+                         post_bias_pick: str,
+                         ppi_value: float = 0.0, # ppi_value arg seems unused, ppi_map is recalculated
+                         pedigree_per_horse: Optional[Dict[str,dict]] = None,
+                         track_name: str = "") -> pd.DataFrame:
+    """
+    Reads 'Cclass' from df_styles (pre-built), adds Cstyle/Cpost/Cpace (+Atrack),
+    sums to Arace and R. Returns rating table.
+    """
+    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace", "Cclass", "Atrack", "Arace", "R"]
+    if df_styles is None or df_styles.empty:
+        return pd.DataFrame(columns=cols)
+
+    # Ensure class column present
+    if "Cclass" not in df_styles.columns:
+        df_styles = df_styles.copy()
+        df_styles["Cclass"] = 0.0 # Default Cclass if missing
+
+    # Derive per-horse pace tailwind from PPI
+    ppi_map = compute_ppi(df_styles).get("by_horse", {})
+
+    rows = []
+    mapped_bias = _style_bias_label_from_choice(running_style_bias)
+    for _, row in df_styles.iterrows():
+        post = str(row.get("Post", row.get("#", "")))
+        name = str(row.get("Horse"))
+        style = _style_norm(row.get("Style") or row.get("OverrideStyle") or row.get("DetectedStyle"))
+        quirin = row.get("Quirin", np.nan) # Keep as potential NaN
+
+        cstyle = style_match_score(mapped_bias, style, quirin) # Pass potential NaN
+        cpost  = post_bias_score(post_bias_pick, post)
+        cpace  = float(ppi_map.get(name, 0.0))
+
+        a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
+
+        c_class = float(row.get("Cclass", 0.0))
+
+        arace = c_class + cstyle + cpost + cpace + a_track
+        R     = arace
+
+        # Ensure Quirin is formatted correctly for display (handle NaN)
+        quirin_display = quirin if pd.notna(quirin) else None
+
+        rows.append({
+            "#": post, "Post": post, "Horse": name, "Style": style, "Quirin": quirin_display,
+            "Cstyle": round(cstyle, 2), "Cpost": round(cpost, 2), "Cpace": round(cpace, 2),
+            "Cclass": round(c_class, 2), "Atrack": round(a_track, 2), "Arace": round(arace, 2), "R": round(R, 2)
+        })
+    out = pd.DataFrame(rows, columns=cols)
+    return out.sort_values(by="R", ascending=False)
+
+
+def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
+    if ratings_df is None or ratings_df.empty or "R" not in ratings_df.columns or "Horse" not in ratings_df.columns:
+        return {}
+    # Ensure 'R' is numeric, coercing errors to NaN, then fill NaN with a default (e.g., median or 0)
+    ratings_df['R_numeric'] = pd.to_numeric(ratings_df['R'], errors='coerce')
+    median_r = ratings_df['R_numeric'].median()
+    if pd.isna(median_r): median_r = 0 # Handle case where all are NaN
+    ratings_df['R_numeric'].fillna(median_r, inplace=True)
+
+    r = ratings_df["R_numeric"].values
+    if len(r) == 0: return {}
+
+    p = softmax_from_rating(r) # tau will be pulled from MODEL_CONFIG
+
+    # Clean up temporary column
+    ratings_df.drop(columns=['R_numeric'], inplace=True)
+
+    # Ensure probabilities sum to 1 (or very close)
+    p_sum = np.sum(p)
+    if p_sum > 0:
+      p = p / p_sum
+
+    return {h: p[i] for i, h in enumerate(ratings_df["Horse"].values)}
+
+
+# Build scenarios
+scenarios = [(s, p) for s in running_style_biases for p in post_biases]
 tabs = st.tabs([f"S: {s} | P: {p}" for s,p in scenarios])
 all_scenario_ratings = {}
 
-# Simplified weight presets (placeholders)
+# Simple weight presets (placeholders retained)
 def get_weight_preset(surface, distance): return {"class_form":1.0, "trs_jky":1.0}
 def apply_strategy_profile_to_weights(w, profile): return w
 def adjust_by_race_type(w, rt): return w
 def apply_purse_scaling(w, purse): return w if w else {}
 
-base_weights = get_weight_preset(st.session_state['surface_type'], st.session_state['distance_txt'])
+base_weights = get_weight_preset(surface_type, distance_txt)
 profiled_weights = apply_strategy_profile_to_weights(base_weights, strategy_profile)
 racetype_weights = adjust_by_race_type(profiled_weights, race_type_detected)
-final_weights = apply_purse_scaling(racetype_weights, st.session_state['purse_val'])
-
-def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
-    if ratings_df is None or ratings_df.empty:
-        return {}
-    r = ratings_df["R"].astype(float).values
-    p = softmax_from_rating(r, tau=0.85)
-    return {h:p[i] for i,h in enumerate(ratings_df["Horse"].values)}
+final_weights = apply_purse_scaling(racetype_weights, purse_val)
 
 for i, (rbias, pbias) in enumerate(scenarios):
     with tabs[i]:
         ratings_df = compute_bias_ratings(
-            df_styles=df_final_field,
-            surface_type=st.session_state['surface_type'],
-            distance_txt=st.session_state['distance_txt'],
-            condition_txt=st.session_state['condition_txt'],
+            df_styles=df_final_field.copy(), # Pass a copy to avoid modifying original
+            surface_type=surface_type,
+            distance_txt=distance_txt,
+            condition_txt=condition_txt,
             race_type=race_type_detected,
             running_style_bias=rbias,
             post_bias_pick=pbias,
-            ppi_value=ppi_val,
-            pedigree_per_horse=pedigree_per_horse
+            # ppi_value=ppi_val, # Removed as it's recalculated inside
+            pedigree_per_horse=pedigree_per_horse,
+            track_name=track_name
         )
         ratings_df = apply_enhancements_and_figs(
             ratings_df=ratings_df,
             pp_text=pp_text,
             processed_weights=final_weights,
             chaos_index=0.0,
-            track_name=st.session_state['track_name'],
-            surface_type=st.session_state['surface_type'],
-            distance_txt=st.session_state['distance_txt'],
+            track_name=track_name,
+            surface_type=surface_type,
+            distance_txt=distance_txt,
             race_type=race_type_detected,
             angles_per_horse=angles_per_horse,
             pedigree_per_horse=pedigree_per_horse,
-            figs_df=pd.DataFrame()
+            figs_df=figs_df # <--- PASS THE REAL FIGS_DF
         )
-        # Non-uniform fair probs from Ratings
         fair_probs = fair_probs_from_ratings(ratings_df)
         if 'Horse' in ratings_df.columns:
             ratings_df["Fair %"] = ratings_df["Horse"].map(lambda h: f"{fair_probs.get(h,0)*100:.1f}%")
@@ -733,11 +1631,11 @@ for i, (rbias, pbias) in enumerate(scenarios):
         else:
             ratings_df["Fair %"] = ""
             ratings_df["Fair Odds"] = ""
-        all_scenario_ratings[(rbias,pbias)] = (ratings_df, fair_probs)
+        all_scenario_ratings[(rbias,pbias)] = (ratings_df.copy(), fair_probs) # Store copy and probs
 
         disp = ratings_df.sort_values(by="R", ascending=False)
         if "R_ENHANCE_ADJ" in disp.columns:
-            disp = disp.drop(columns=["R_ENHANCE_ADJ"])  # hide helper column
+            disp = disp.drop(columns=["R_ENHANCE_ADJ"])
         st.dataframe(
             disp,
             use_container_width=True, hide_index=True,
@@ -745,23 +1643,44 @@ for i, (rbias, pbias) in enumerate(scenarios):
                 "R": st.column_config.NumberColumn("Rating", format="%.2f"),
                 "Cstyle": st.column_config.NumberColumn("C-Style", format="%.2f"),
                 "Cpost": st.column_config.NumberColumn("C-Post", format="%.2f"),
-                "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f")
+                "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f"),
+                "Cclass": st.column_config.NumberColumn("C-Class", format="%.2f"),
+                "Atrack": st.column_config.NumberColumn("A-Track", format="%.2f"),
+                "Arace": st.column_config.NumberColumn("A-Race", format="%.2f"),
+                # Format Quirin to show integer or be blank
+                "Quirin": st.column_config.NumberColumn("Quirin", format="%d", help="BRIS Pace Points"),
             }
         )
 
-primary_key = scenarios[0]
-primary_df, primary_probs = all_scenario_ratings[primary_key]
-st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
+# Ensure primary key exists before accessing
+if scenarios:
+    primary_key = scenarios[0]
+    if primary_key in all_scenario_ratings:
+        primary_df, primary_probs = all_scenario_ratings[primary_key]
+        st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
+    else:
+        st.error("Primary scenario ratings not found. Check calculations.")
+        primary_df, primary_probs = pd.DataFrame(), {} # Assign defaults
+        st.stop()
+else:
+    st.error("No scenarios generated. Check bias selections.")
+    primary_df, primary_probs = pd.DataFrame(), {} # Assign defaults
+    st.stop()
 
-# ===================== D. Overlays & Betting Strategy =====================
 
-st.header("C. Overlays & Betting Strategy")
+# ===================== C. Overlays & Betting Strategy =====================
+
+st.header("C. Overlays Table")
+
+# Offered odds map
 offered_odds_map = {}
 for _, r in df_final_field.iterrows():
-    odds_str = str(r["Live Odds"]).strip() or str(r["ML"]).strip()
+    odds_str = str(r.get("Live Odds", "")).strip() or str(r.get("ML", "")).strip()
     dec = str_to_decimal_odds(odds_str)
-    if dec: offered_odds_map[r["Horse"]] = dec
+    if dec:
+        offered_odds_map[r["Horse"]] = dec
 
+# Overlay table vs fair line
 df_ol = overlay_table(fair_probs=primary_probs, offered=offered_odds_map)
 st.dataframe(
     df_ol,
@@ -772,123 +1691,289 @@ st.dataframe(
     }
 )
 
-# ---------- Choose anchors for exotics (bias-aware) ----------
-def pick_anchor_horses(ratings_df: pd.DataFrame, post_bias: str) -> Tuple[Optional[str], Optional[str]]:
-    if ratings_df is None or ratings_df.empty:
-        return None, None
-    df = ratings_df.sort_values(by="R", ascending=False).copy()
-    anchor1 = None
-    if post_bias.lower() in ("favors rail","1-3"):
-        df_rail = df[df["Post"].astype(str).str.extract(r"(\d+)")[0].astype(int).between(1,3, inclusive="both")]
-        if not df_rail.empty:
-            anchor1 = df_rail.iloc[0]["Horse"]
-    if not anchor1:
-        anchor1 = df.iloc[0]["Horse"]
-    # anchor2 = best remaining by rating
-    df_rest = df[df["Horse"] != anchor1]
-    anchor2 = df_rest.iloc[0]["Horse"] if not df_rest.empty else None
-    return anchor1, anchor2
+# All ticketing strategy UI has been removed from this section
+# It is now generated "behind the scenes" in Section D.
 
-anchor1, anchor2 = pick_anchor_horses(primary_df, primary_key[1])
+# ===================== D. Strategy Builder & Classic Report =====================
 
-# Pools for 3rd/4th: top 3 and top 6 not including anchors
-df_ranked = primary_df.sort_values(by="R", ascending=False)
-pool3 = set(df_ranked[df_ranked["Horse"]\
-         .isin([h for h in df_ranked["Horse"].tolist() if h not in (anchor1, anchor2)])]\
-         ["Horse"].head(3).tolist())
-pool4 = set(df_ranked[df_ranked["Horse"]\
-         .isin([h for h in df_ranked["Horse"].tolist() if h not in (anchor1, anchor2)])]\
-         ["Horse"].head(6).tolist())
+def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame, 
+                           strategy_profile: str, name_to_post: Dict[str, str],
+                           name_to_ml: Dict[str, str], field_size: int, ppi_val: float) -> str:
+    """
+    Builds a clearer, simplified betting strategy report using A/B/C/D grouping, 
+    minimum base bet examples, field size logic, and specific bet types (straight/box).
+    """
+    
+    # --- 1. Helper Functions ---
+    def format_horse_list(horse_names: List[str]) -> str:
+        """Creates a bulleted list of horses with post, name, and ML."""
+        if not horse_names:
+            return "* None"
+        lines = []
+        # Sort horses by post number before displaying
+        sorted_horses = sorted(horse_names, key=lambda name: int(name_to_post.get(name, '999')))
+        for name in sorted_horses:
+            post = name_to_post.get(name, '??')
+            ml = name_to_ml.get(name, 'N/A')
+            lines.append(f"* **#{post} - {name}** (ML: {ml})")
+        return "\n".join(lines)
 
-df_ex, df_tri, df_super = calculate_exotics_biased(
-    fair_probs=primary_probs,
-    anchor_first=anchor1,
-    anchor_second=anchor2,
-    pool_third=pool3,
-    pool_fourth=pool4,
-    weights=(1.30, 1.15, 1.05, 1.03),
-    top_n=15
-)
+    def get_bet_cost(base: float, num_combos: int) -> str:
+        """Calculates and formats simple bet cost."""
+        cost = base * num_combos
+        base_str = f"${base:.2f}"
+        return f"{num_combos} combos = **${cost:.2f}** (at {base_str} base)"
+        
+    def get_box_combos(num_horses: int, box_size: int) -> int:
+        """Calculates combinations for a box bet."""
+        import math
+        if num_horses < box_size: return 0
+        return math.factorial(num_horses) // math.factorial(num_horses - box_size)
 
-# ===================== E. Classic Report (LLM Generation) =====================
+    # === FIX 1: Defined the missing helper function ===
+    def get_min_cost_str(base: float, *legs) -> str:
+        """Calculates part-wheel combos and cost from leg sizes."""
+        final_combos = 1
+        leg_counts = [l for l in legs if l > 0] # Filter out 0s
+        if not leg_counts:
+            final_combos = 0
+        else:
+            for l in leg_counts:
+                final_combos *= l
+        
+        cost = base * final_combos
+        base_str = f"${base:.2f}"
+        return f"{final_combos} combos = **${cost:.2f}** (at {base_str} base)"
+    # ===================================================
+
+    # --- 2. A/B/C/D Grouping Logic (Simplified) ---
+    A_group, B_group, C_group, D_group = [], [], [], []
+    
+    all_horses = primary_df['Horse'].tolist()
+    pos_ev_horses = set(df_ol[df_ol["EV per $1"] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
+    
+    if strategy_profile == "Confident":
+        A_group = all_horses[:1] 
+        if len(all_horses) > 1 and primary_df.iloc[1]['R'] > (primary_df.iloc[0]['R'] * 0.90): # Only add #2 if very close
+             A_group.append(all_horses[1])
+    else: # Value Hunter - Prioritize top pick + overlays
+        A_group = list(set([all_horses[0]]) | pos_ev_horses) 
+        if len(A_group) > 4: # Cap A group size for Value Hunter
+             A_group = sorted(A_group, key=lambda h: primary_df[primary_df['Horse'] == h].index[0])[:4] # Keep top 4 ranked from the value pool
+
+    B_group = [h for h in all_horses if h not in A_group][:3] 
+    C_group = [h for h in all_horses if h not in A_group and h not in B_group][:4]
+    D_group = [h for h in all_horses if h not in A_group and h not in B_group and h not in C_group]
+
+    nA, nB, nC, nD = len(A_group), len(B_group), len(C_group), len(D_group)
+    nAll = field_size # Total runners
+
+    # --- 3. Build Pace Projection ---
+    pace_report = "### Pace Projection\n"
+    if ppi_val > 0.5:
+        pace_report += f"* **Fast Pace Likely (PPI {ppi_val:+.2f}):** Favors horses that can press or stalk ('E/P', 'P') and potentially closers ('S') if leaders tire. Pure speed ('E') might fade.\n"
+    elif ppi_val < -0.5:
+        pace_report += f"* **Slow Pace Likely (PPI {ppi_val:+.2f}):** Favors horses near the lead ('E', 'E/P'). Closers ('P', 'S') may find it hard to catch up.\n"
+    else:
+        pace_report += f"* **Moderate Pace Expected (PPI {ppi_val:+.2f}):** Fair for most styles. Tactical speed ('E/P') is often useful.\n"
+
+    # --- 4. Build Contender Analysis (Simplified) ---
+    contender_report = "### Contender Analysis\n"
+    contender_report += "**Key Win Contenders (A-Group):**\n" + format_horse_list(A_group) + "\n"
+    contender_report += "* _Primary win threats based on model rank and/or betting value. Use these horses ON TOP in exactas, trifectas, etc._\n\n"
+    
+    contender_report += "**Primary Challengers (B-Group):**\n" + format_horse_list(B_group) + "\n"
+    contender_report += "* _Logical contenders expected to finish 2nd or 3rd. Use directly underneath A-Group horses._\n"
+    
+    top_rated_horse = all_horses[0]
+    is_overlay = top_rated_horse in pos_ev_horses
+    top_ml_str = name_to_ml.get(top_rated_horse, '100')
+    top_ml_dec = str_to_decimal_odds(top_ml_str) or 101
+    is_underlay = not is_overlay and (primary_probs.get(top_rated_horse, 0) > (1 / top_ml_dec)) and top_ml_dec < 4 # Define underlay as < 3/1
+
+    if is_overlay:
+         contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
+    elif is_underlay:
+         contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
+
+    # --- 5. Build Simplified Blueprint Section ---
+    blueprint_report = "### Betting Strategy Blueprints (Scale Base Bets to Budget: Max ~$100 Recommended)\n"
+    blueprint_report += "_Costs are examples using minimum base bets ($0.50 Tri, $0.10 Super/SH5). Adjust base amount ($0.10, $0.50, $1.00+) per ticket to fit your total budget for this race._\n"
+
+    # --- Field Size Logic ---
+    if field_size <= 6:
+        blueprint_report += "\n**Note:** With a small field (<=6 runners), Superfecta and Super High 5 payouts are often very low. Focus on Win, Exacta, and Trifecta bets.\n"
+        # Generate only Win/Ex/Tri for small fields
+        blueprint_report += f"\n#### {strategy_profile} Profile Plan (Small Field)\n"
+        if strategy_profile == "Value Hunter":
+             blueprint_report += f"* **Win Bets:** Consider betting all **A-Group** horses.\n"
+        else: # Confident
+             blueprint_report += f"* **Win Bet:** Focus on top **A-Group** horse(s).\n"
+        
+        # Exacta Examples
+        blueprint_report += f"* **Exacta Part-Wheel:** `A / B,C` ({nA}x{nB+nC}) - {get_min_cost_str(1.00, nA, nB+nC)}\n"
+        if nA >= 2:
+            ex_box_combos = get_box_combos(nA, 2)
+            blueprint_report += f"* **Exacta Box (A-Group):** `{', '.join(map(str,[int(name_to_post.get(h,'0')) for h in A_group]))}` BOX - {get_bet_cost(1.00, ex_box_combos)}\n"
+        
+        # Trifecta Examples
+        blueprint_report += f"* **Trifecta Part-Wheel:** `A / B / C` ({nA}x{nB}x{nC}) - {get_min_cost_str(0.50, nA, nB, nC)}\n"
+        if nA >= 3:
+            tri_box_combos = get_box_combos(nA, 3)
+            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str,[int(name_to_post.get(h,'0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
+        
+        blueprint_report += "_Structure: Use A-horses on top, spread underneath with B and C._\n"
+
+    else: # Standard logic for fields > 6
+        # --- Confident Blueprint ---
+        blueprint_report += f"\n#### Confident Profile Plan\n"
+        blueprint_report += "_Focus: Key A-Group horses ON TOP._\n"
+        blueprint_report += f"* **Win Bet:** Focus on top **A-Group** horse(s).\n"
+        blueprint_report += f"* **Exacta (Part-Wheel):** `A / B` ({nA}x{nB}) - {get_min_cost_str(1.00, nA, nB)}\n"
+        if nA >=1 and nB >= 1 and nC >=1: # Check if groups have members for straight example
+             blueprint_report += f"* **Straight Trifecta:** `Top A / Top B / Top C` (1 combo) - Consider at higher base (e.g., $1 or $2).\n"
+        blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B / C` ({nA}x{nB}x{nC}) - {get_min_cost_str(0.50, nA, nB, nC)}\n"
+        blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B / C / D` ({nA}x{nB}x{nC}x{nD}) - {get_min_cost_str(0.10, nA, nB, nC, nD)}\n"
+        if field_size >= 7: # Only suggest SH5 if 7+ runners
+            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B / C / D / ALL` ({nA}x{nB}x{nC}x{nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB, nC, nD, nAll)}\n"
+        
+        # --- Value-Hunter Blueprint ---
+        blueprint_report += f"\n#### Value-Hunter Profile Plan\n"
+        blueprint_report += "_Focus: Use A-Group (includes overlays) ON TOP, spread wider underneath._\n"
+        blueprint_report += f"* **Win Bets:** Consider betting all **A-Group** horses.\n"
+        blueprint_report += f"* **Exacta (Part-Wheel):** `A / B,C` ({nA}x{nB+nC}) - {get_min_cost_str(1.00, nA, nB + nC)}\n"
+        if nA >= 3: # Example box if A group is large enough
+             tri_box_combos = get_box_combos(nA, 3)
+             blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str,[int(name_to_post.get(h,'0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
+        blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B,C / B,C,D` ({nA}x{nB+nC}x{nB+nC+nD}) - {get_min_cost_str(0.50, nA, nB + nC, nB + nC + nD)}\n"
+        blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B,C / B,C,D / ALL` ({nA}x{nB+nC}x{nB+nC+nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll)}\n"
+        if field_size >= 7: # Only suggest SH5 if 7+ runners
+            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{nB+nC}x{nB+nC+nD}x{nAll}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll, nAll)}\n"
+
+    # --- 6. Build Final Report String ---
+    final_report = f"""
+{pace_report}
+---
+{contender_report}
+---
+### A/B/C/D Contender Groups for Tickets
+
+**A-Group (Key Win Contenders - Use ON TOP)**
+{format_horse_list(A_group)}
+
+**B-Group (Primary Challengers - Use 2nd/3rd)**
+{format_horse_list(B_group)}
+
+**C-Group (Underneath Keys - Use 2nd/3rd/4th)**
+{format_horse_list(C_group)}
+
+**D-Group (Exotic Fillers - Use 3rd/4th/5th)**
+{format_horse_list(D_group)}
+
+---
+{blueprint_report}
+---
+### Bankroll & Strategy Notes
+* **Budget:** Decide your total wager amount for this race (e.g., $20, $50, up to ~$100 recommended max).
+* **Scale Base Bets:** Adjust the base bet amount ($0.10, $0.50, $1.00+) on the blueprint tickets to match your budget. Use an online wager calculator or your betting platform's tools to confirm costs.
+* **Confidence:** Bet more confidently when A/B groups look strong. Reduce base bets or narrow the C/D groups in tickets if less confident.
+* **Small Fields (<=6):** Focus on Win/Exacta/Trifecta as complex exotics pay less.
+* **Play SH5** mainly on mandatory payout days or when you have a very strong opinion & budget allows.
+"""
+    return final_report
+
 
 st.header("D. Classic Report")
 if st.button("Analyze This Race", type="primary", key="analyze_button"):
     with st.spinner("Handicapping Race..."):
         try:
+            # --- 1. Build Data for Strategy & Prompt ---
+            if primary_df.empty or not all(col in primary_df.columns for col in ['Horse', 'R', 'Fair %', 'Fair Odds']):
+                st.error("Primary ratings data is incomplete for report generation.")
+                st.stop()
+
             primary_sorted = primary_df.sort_values(by="R", ascending=False)
             name_to_post = pd.Series(df_final_field["Post"].values,
                                      index=df_final_field["Horse"]).to_dict()
-            top_table = primary_sorted[['Horse','R','Fair %','Fair Odds']].to_markdown(index=False)
-            overlay_pos = df_ol[df_ol["EV per $1"]>0]
+            name_to_ml = pd.Series(df_final_field["ML"].values, 
+                                   index=df_final_field["Horse"]).to_dict()
+            field_size = len(primary_df)
+            
+            top_table = primary_sorted[['Horse','R','Fair %','Fair Odds']].head(5).to_markdown(index=False)
+
+            overlay_pos = df_ol[df_ol["EV per $1"] > 0] if not df_ol.empty else pd.DataFrame()
             overlay_table_md = (overlay_pos[['Horse','Fair %','Fair (AM)','Board (dec)','EV per $1']].to_markdown(index=False)
                                 if not overlay_pos.empty else "None.")
-            ex_md = format_exotics_for_prompt(df=df_ex.head(5), title="Top 5 Exactas")
-            tri_md = format_exotics_for_prompt(df=df_tri.head(5), title="Top 5 Trifectas")
-            super_md = format_exotics_for_prompt(df=df_super.head(5), title="Top 5 Superfectas")
+
+            # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
+            strategy_report_md = build_betting_strategy(
+                primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
+            )
+
+            # --- 3. Update the LLM Prompt ---
             prompt = f"""
-Act as a superior quantitative horse racing analyst.
+Act as a professional horse racing analyst writing a clear, concise, and actionable betting report suitable for handicappers of all levels.
 
 --- RACE CONTEXT ---
-- Track: {st.session_state['track_name']}
-- Surface: {st.session_state['surface_type']} ({st.session_state['condition_txt']}) • Distance: {st.session_state['distance_txt']}
+- Track: {track_name}
+- Surface: {surface_type} ({condition_txt}) • Distance: {distance_txt}
 - Race Type: {race_type_detected}
-- Purse: ${st.session_state['purse_val']:,}
-- Pace Scenario: (PPI {ppi_val:+.2f})
-- Primary Bias Scenario: {primary_key[0]} (style), {primary_key[1]} (post)
-- Strategy Profile: {strategy_profile}
+- Purse: ${purse_val:,}
+- Strategy Profile Selected: {strategy_profile}
+- Field Size: {field_size} horses
 
---- MODEL-DERIVED DATA ---
-Horse→Post #:
-{json.dumps(name_to_post, indent=2)}
-Top Rated (this scenario):
+--- KEY MODEL OUTPUTS ---
+Top 5 Rated Horses:
 {top_table}
-Positive EV Win Overlays (vs. board):
-{overlay_table_md}
-Anchors for verticals (bias-aware): Winner = {anchor1}, Runner-up = {anchor2}
-{ex_md}
-{tri_md}
-{super_md}
 
---- TASK: WRITE CLASSIC REPORT ---
-- **Race Summary:** 1-2 sentences on race shape, pace, bias.
-- **Pace & Bias Analysis:** Who benefits/hurt by pace and {primary_key[0]} bias?
-- **Top Win Contenders:** 2-3 top horses, note +EV overlays.
-- **Primary Underneath Keys:** 2-4 horses for 2nd/3rd/4th.
-- **Vulnerable Favorites:** Overbet horses to avoid.
-- **Betting Strategy:** Win/Place bets, Exacta/Trifecta/Superfecta plans using horse names.
+Horses Offering Potential Value (Overlays):
+{overlay_table_md}
+
+--- FULL ANALYSIS & BETTING PLAN ---
+{strategy_report_md}
+
+--- TASK: WRITE CLASSIC REPORT (Simplified & Clear) ---
+Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" section clearly.
+- **Race Summary:** 1-2 sentences about the race conditions.
+- **Pace Projection:** Use the "Pace Projection" section provided. Explain briefly what it means for different running styles.
+- **Contender Analysis:** - Summarize the **A-Group** (Key Win Contenders) and **B-Group** (Primary Challengers). Use their names and post numbers. Briefly explain *why* they are contenders (e.g., "Top rated," "Good value overlay," "Logical threat"). 
+    - Mention the simple **Value Note** about the top-rated horse if provided.
+    - Keep this section focused on the top ~4 contenders overall (A + top B).
+- **Betting Strategy:**
+    - Clearly state the selected **Strategy Profile** ({strategy_profile}).
+    - Present the **A/B/C/D Contender Groups** exactly as listed (with names, posts, MLs).
+    - Present the **Betting Strategy Blueprints** for the selected profile ({strategy_profile}). Show the example ticket structures (e.g., "Trifecta: A / B / C", "Exacta Box: A-Group") and their calculated minimum costs. 
+    - IMPORTANT: Emphasize that these are *blueprints* and the user should **scale the base bet amounts** ($0.10, $0.50, etc.) to fit their own budget per race (mentioning ~$100 max recommended).
+    - Include the final **Bankroll & Strategy Notes**.
+- **Tone:** Be informative, direct, and easy to understand. Avoid overly complex jargon. Use horse names and post numbers (#) frequently.
 """
             report = call_openai_messages(messages=[{"role":"user","content":prompt}])
             st.markdown(report)
 
-            # ---- Save outputs with UTF-8 to avoid Windows 'charmap' errors ----
+            # ---- Save to disk (optional) ----
+            report_str = report if isinstance(report, str) else str(report)
             with open("analysis.txt","w", encoding="utf-8", errors="replace") as f:
-                f.write(report)
-            df_ol.to_csv("overlays.csv", index=False, encoding="utf-8-sig")
+                f.write(report_str)
 
-            tickets = []
-            if not df_ex.empty:
-                df_ex["Prob %"] = (df_ex["Prob"]*100).round(2)
-                for _, row in df_ex.iterrows():
-                    tickets.append({"Ticket":row["Ticket"], "Type":"Exacta", "Prob%":row["Prob %"], "Fair Odds":row["Fair Odds"]})
-            if not df_tri.empty:
-                df_tri["Prob %"] = (df_tri["Prob"]*100).round(2)
-                for _, row in df_tri.iterrows():
-                    tickets.append({"Ticket":row["Ticket"], "Type":"Trifecta", "Prob%":row["Prob %"], "Fair Odds":row["Fair Odds"]})
-            if not df_super.empty:
-                df_super["Prob %"] = (df_super["Prob"]*100).round(2)
-                for _, row in df_super.iterrows():
-                    tickets.append({"Ticket":row["Ticket"], "Type":"Superfecta", "Prob%":row["Prob %"], "Fair Odds":row["Fair Odds"]})
-            race_nums = sorted(detect_valid_race_headers(pp_text))
-            for i in range(len(race_nums)-1):
-                if race_nums[i+1] == race_nums[i] + 1:
-                    tickets.append({"Ticket":f"Daily Double: Race {race_nums[i]}→{race_nums[i+1]}", "Type":"DailyDouble", "Prob%":None, "Fair Odds":None})
-            if len(race_nums)>=3:
-                for i in range(len(race_nums)-2):
-                    if race_nums[i+2] == race_nums[i] + 2:
-                        tickets.append({"Ticket":f"Pick 3: Races {race_nums[i]}→{race_nums[i+1]}→{race_nums[i+2]}", "Type":"Pick3", "Prob%":None, "Fair Odds":None})
-            if tickets:
-                df_tickets = pd.DataFrame(tickets)
-                df_tickets.to_csv("tickets.csv", index=False, encoding="utf-8-sig")
+            if isinstance(df_ol, pd.DataFrame):
+                df_ol.to_csv("overlays.csv", index=False, encoding="utf-8-sig")
+            else:
+                pd.DataFrame().to_csv("overlays.csv", index=False, encoding="utf-8-sig")
+
+            # --- Create a tickets.txt from the strategy report ---
+            with open("tickets.txt","w", encoding="utf-8", errors="replace") as f:
+                f.write(strategy_report_md) # Save the raw strategy markdown
+            tickets_bytes = strategy_report_md.encode("utf-8")
+
+            # ---- Download buttons (browser) ----
+            analysis_bytes = report_str.encode("utf-8")
+            overlays_bytes = df_ol.to_csv(index=False).encode("utf-8-sig") if isinstance(df_ol, pd.DataFrame) else b""
+
+            st.download_button("⬇️ Download Full Analysis (.txt)", data=analysis_bytes, file_name="analysis.txt", mime="text/plain")
+            st.download_button("⬇️ Download Overlays (CSV)", data=overlays_bytes, file_name="overlays.csv", mime="text/csv")
+            st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain") # Renamed for clarity
+
         except Exception as e:
             st.error(f"Error generating report: {e}")
+            import traceback
+            st.error(traceback.format_exc())
