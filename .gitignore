@@ -231,3 +231,11 @@ analysis.txt
 overlays.csv
 tickets.csv
 tickets.txt
+
+# Backup files
+*.bak
+*.bak-*
+app.autobackup.py
+app.backup.py
+app.before-*.py
+pylint_report.txt
