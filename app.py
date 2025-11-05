@@ -772,6 +772,204 @@ def parse_pedigree_snips(block: str) -> dict:
         out["dam_dpi"] = float(d.group(1))
     return out
 
+def parse_jockey_trainer_for_block(block: str, debug: bool = False) -> dict:
+    """
+    Parses jockey and trainer names from a horse's PP text block.
+    
+    BRISNET Format:
+    - Jockey: "KIMURA KAZUSHI (0 0-0-0 0%)"
+    - Trainer: "Trnr: DAmato Philip (0 0-0-0 0%)"
+    
+    Returns dict with keys: 'jockey', 'trainer'
+    """
+    result = {
+        'jockey': '',
+        'trainer': ''
+    }
+    
+    if not block:
+        return result
+    
+    # Parse jockey - appears on a line by itself in ALL CAPS before "Trnr:"
+    # Format: "KIMURA KAZUSHI (0 0-0-0 0%)" or "RISPOLI UMBERTO (0 0-0-0 0%)"
+    jockey_match = re.search(r'^([A-Z][A-Z\s\'.-]+?)\s*\([\d\s-]+%\)', block, re.MULTILINE)
+    if jockey_match:
+        jockey_name = jockey_match.group(1).strip()
+        # Clean up extra spaces and convert to title case for readability
+        jockey_name = ' '.join(jockey_name.split())
+        result['jockey'] = jockey_name
+        
+        if debug:
+            print(f"  Jockey found: '{jockey_name}'")
+    
+    # Parse trainer - appears on line starting with "Trnr:"
+    # Format: "Trnr: DAmato Philip (0 0-0-0 0%)"
+    trainer_match = re.search(r'Trnr:\s*([A-Za-z][A-Za-z\s,\'.-]+?)\s*\([\d\s-]+%\)', block, re.MULTILINE)
+    if trainer_match:
+        trainer_name = trainer_match.group(1).strip()
+        # Clean up extra spaces
+        trainer_name = ' '.join(trainer_name.split())
+        result['trainer'] = trainer_name
+        
+        if debug:
+            print(f"  Trainer found: '{trainer_name}'")
+    
+    return result
+
+def parse_running_style_for_block(block: str, debug: bool = False) -> dict:
+    """
+    Parses running style from a horse's PP text block header.
+    
+    BRISNET Format in header line:
+    - "1 Omnipontet (S 1)" - S = Sustained
+    - "2 Nay V Belle (E/P 3)" - E/P = Early/Presser
+    - "4 Queen Maxima (P 1)" - P = Presser
+    - "5 Sunglow (E 8)" - E = Early
+    - "7 Puro Magic (NA 0)" - NA = Not Available
+    
+    Returns dict with key: 'running_style'
+    """
+    result = {
+        'running_style': ''
+    }
+    
+    if not block:
+        return result
+    
+    # Parse running style from header - appears in parentheses after horse name
+    # Format: "Post# HorseName (STYLE #)"
+    # Style can be: E, E/P, P, S, or NA
+    style_match = re.search(r'^\s*\d+\s+[A-Za-z\s=\'-]+\s+\(([A-Z/]+)\s+\d+\)', block, re.MULTILINE)
+    if style_match:
+        running_style = style_match.group(1).strip()
+        result['running_style'] = running_style
+        
+        if debug:
+            print(f"  Running Style found: '{running_style}'")
+    
+    return result
+
+def parse_quickplay_comments_for_block(block: str, debug: bool = False) -> dict:
+    """
+    Parses QuickPlay handicapping comments from a horse's PP text block.
+    
+    BRISNET Format:
+    - Positive: "ñ 21% trainer: NonGraded Stk"
+    - Negative: "× Has not raced for more than 3 months"
+    
+    Returns dict with keys: 'positive_comments' (list), 'negative_comments' (list)
+    """
+    result = {
+        'positive_comments': [],
+        'negative_comments': []
+    }
+    
+    if not block:
+        return result
+    
+    # Parse positive comments - lines starting with ñ
+    positive_matches = re.findall(r'^ñ\s*(.+)$', block, re.MULTILINE)
+    result['positive_comments'] = [comment.strip() for comment in positive_matches]
+    
+    # Parse negative comments - lines starting with ×
+    negative_matches = re.findall(r'^×\s*(.+)$', block, re.MULTILINE)
+    result['negative_comments'] = [comment.strip() for comment in negative_matches]
+    
+    if debug:
+        if result['positive_comments']:
+            print(f"  Positive comments ({len(result['positive_comments'])}):")
+            for comment in result['positive_comments']:
+                print(f"    ñ {comment}")
+        if result['negative_comments']:
+            print(f"  Negative comments ({len(result['negative_comments'])}):")
+            for comment in result['negative_comments']:
+                print(f"    × {comment}")
+    
+    return result
+
+def parse_recent_workout_for_block(block: str, debug: bool = False) -> dict:
+    """
+    Parses the most recent workout from a horse's PP text block.
+    
+    BRISNET Format (workout lines appear at bottom of horse block):
+    - "25Oct SA 4f ft :47« H 12/62"
+    - "18Oct SA 5f ft 1:02© Hg 37/48"
+    
+    Format: Date Track Distance Surface Time Grade Rank/Total
+    
+    Returns dict with keys: 'workout_date', 'workout_track', 'workout_distance', 
+                           'workout_time', 'workout_rank', 'workout_total'
+    """
+    result = {
+        'workout_date': '',
+        'workout_track': '',
+        'workout_distance': '',
+        'workout_time': '',
+        'workout_rank': '',
+        'workout_total': ''
+    }
+    
+    if not block:
+        return result
+    
+    # Workout lines typically start with date pattern like "25Oct" or "18Oct"
+    # Format: DDMmmYY Track Distance Surface Time Grade Rank/Total
+    # Example: "25Oct SA 4f ft :47« H 12/62"
+    # Example with bullet: "×26Oct SA 4f ft :47¨ H 1/11" (× char 215 indicates best workout)
+    # Look for lines with this pattern after the race data ends
+    # Time can include special chars: « (char 171), © (169), ª (170), ¬ (172), ® (174), ¯ (175), ° (176), ¨ (168)
+    workout_pattern = r'×?(\d{1,2}[A-Z][a-z]{2})\s+([A-Z][A-Za-z]{1,3})\s+(\d+f?)\s+(?:ft|gd|sy|sl|fm|hy|my|tr\.t|˜)\s+([\d:\.«©ª¬®¯°¨]+)\s+[A-Z]?g?\s+(\d+)/(\d+)'
+    
+    matches = re.findall(workout_pattern, block, re.MULTILINE)
+    
+    if matches:
+        # Take the first (most recent) workout
+        first_workout = matches[0]
+        result['workout_date'] = first_workout[0]
+        result['workout_track'] = first_workout[1]
+        result['workout_distance'] = first_workout[2]
+        result['workout_time'] = first_workout[3]
+        result['workout_rank'] = first_workout[4]
+        result['workout_total'] = first_workout[5]
+        
+        if debug:
+            print(f"  Recent workout: {result['workout_date']} {result['workout_track']} {result['workout_distance']} {result['workout_time']} (#{result['workout_rank']}/{result['workout_total']})")
+    
+    return result
+
+def parse_prime_power_for_block(block, debug=False):
+    """
+    Parse Prime Power rating and rank from a BRISNET horse block.
+    
+    Format: "Prime Power: 131.9 (7th)"
+    
+    Returns dict with:
+    - prime_power: float rating value (e.g., 131.9)
+    - prime_power_rank: str rank (e.g., "7th")
+    """
+    result = {
+        'prime_power': None,
+        'prime_power_rank': None
+    }
+    
+    # Pattern: "Prime Power: 131.9 (7th)"
+    # Captures the decimal number and the rank in parentheses
+    prime_power_pattern = r'Prime Power:\s+([\d.]+)\s+\((\d+(?:st|nd|rd|th))\)'
+    
+    match = re.search(prime_power_pattern, block)
+    
+    if match:
+        try:
+            result['prime_power'] = float(match.group(1))
+            result['prime_power_rank'] = match.group(2)
+            
+            if debug:
+                print(f"  Prime Power: {result['prime_power']} (rank: {result['prime_power_rank']})")
+        except ValueError:
+            pass
+    
+    return result
+
 # BRISNET Speed Figure Regex - Match the number pattern directly
 # Format: "| ¨¨¬ OC50k/n1x-N ¨¨ 92 101/ 93 +4 +4 98 2 4©..."
 # Key insight: The "pipe" is actually broken bar ¦ (char 166) not | (char 124)!
@@ -1358,44 +1556,22 @@ df_editor = st.data_editor(df_styles, use_container_width=True, column_config=co
 angles_per_horse: Dict[str, pd.DataFrame] = {}
 pedigree_per_horse: Dict[str, dict] = {}
 figs_per_horse: Dict[str, dict] = {}  # Changed from List[int] to dict
-
-# Enable debug for first horse only to avoid spam
-debug_enabled = st.checkbox("🐛 Enable Speed Figure Debug Logging", value=True, key="debug_speed_figs")
-first_horse_debugged = False
+jockey_trainer_per_horse: Dict[str, dict] = {}
+running_style_per_horse: Dict[str, dict] = {}
+quickplay_per_horse: Dict[str, dict] = {}
+workout_per_horse: Dict[str, dict] = {}
+prime_power_per_horse: Dict[str, dict] = {}
 
 for _post, name, block in split_into_horse_chunks(pp_text):
     if name in df_editor["Horse"].values:
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
-        
-        # Debug first horse only
-        should_debug = debug_enabled and not first_horse_debugged
-        if should_debug:
-            st.write(f"### 🐛 DEBUG: Parsing speed figures for horse '{name}'")
-            first_horse_debugged = True
-            
-        figs_per_horse[name] = parse_speed_figures_for_block(block, debug=should_debug)
-
-# DEBUG: Show what was parsed for speed figures
-if debug_enabled:
-    st.write("### 🐛 DEBUG: Speed Figure Parsing Results")
-    debug_data = []
-    for name, fig_dict in figs_per_horse.items():
-        spd_list = fig_dict.get("SPD", [])
-        debug_data.append({
-            "Horse": name,
-            "E1_count": len(fig_dict.get("E1", [])),
-            "E2_count": len(fig_dict.get("E2", [])),
-            "LP_count": len(fig_dict.get("LP", [])),
-            "SPD_count": len(fig_dict.get("SPD", [])),
-            "RR_count": len(fig_dict.get("RR", [])),
-            "CR_count": len(fig_dict.get("CR", [])),
-            "Sample_SPD": str(spd_list[:3]) if spd_list else "[]"  # Convert to string to avoid Arrow error
-        })
-    if debug_data:
-        st.dataframe(pd.DataFrame(debug_data), use_container_width=True)
-    else:
-        st.warning("⚠️ No horses found in figs_per_horse - parsing returned empty for all horses")
+        jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
+        running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
+        quickplay_per_horse[name] = parse_quickplay_comments_for_block(block, debug=False)
+        workout_per_horse[name] = parse_recent_workout_for_block(block, debug=False)
+        prime_power_per_horse[name] = parse_prime_power_for_block(block, debug=False)
+        figs_per_horse[name] = parse_speed_figures_for_block(block, debug=False)
 
 # Create the figs_df
 figs_data = []
@@ -1439,6 +1615,65 @@ df_final_field['CR'] = df_final_field['Horse'].map(
 )
 
 st.caption(f"✅ Added speed figure columns: LastFig, E1, E2, RR, CR to df_final_field")
+
+# Add Jockey and Trainer columns
+df_final_field['Jockey'] = df_final_field['Horse'].map(
+    lambda h: jockey_trainer_per_horse.get(h, {}).get('jockey', '')
+)
+df_final_field['Trainer'] = df_final_field['Horse'].map(
+    lambda h: jockey_trainer_per_horse.get(h, {}).get('trainer', '')
+)
+
+st.caption(f"✅ Added jockey/trainer columns: Jockey, Trainer to df_final_field")
+
+# Add Running Style column from BRISNET
+df_final_field['RunningStyle'] = df_final_field['Horse'].map(
+    lambda h: running_style_per_horse.get(h, {}).get('running_style', '')
+)
+
+st.caption(f"✅ Added running style column: RunningStyle to df_final_field")
+
+# Add QuickPlay comment columns
+df_final_field['QuickPlayPositive'] = df_final_field['Horse'].map(
+    lambda h: '; '.join(quickplay_per_horse.get(h, {}).get('positive_comments', []))
+)
+df_final_field['QuickPlayNegative'] = df_final_field['Horse'].map(
+    lambda h: '; '.join(quickplay_per_horse.get(h, {}).get('negative_comments', []))
+)
+
+st.caption(f"✅ Added QuickPlay columns: QuickPlayPositive, QuickPlayNegative to df_final_field")
+
+# Add Recent Workout columns
+df_final_field['WorkoutDate'] = df_final_field['Horse'].map(
+    lambda h: workout_per_horse.get(h, {}).get('workout_date', '')
+)
+df_final_field['WorkoutTrack'] = df_final_field['Horse'].map(
+    lambda h: workout_per_horse.get(h, {}).get('workout_track', '')
+)
+df_final_field['WorkoutDistance'] = df_final_field['Horse'].map(
+    lambda h: workout_per_horse.get(h, {}).get('workout_distance', '')
+)
+df_final_field['WorkoutTime'] = df_final_field['Horse'].map(
+    lambda h: workout_per_horse.get(h, {}).get('workout_time', '')
+)
+df_final_field['WorkoutRank'] = df_final_field['Horse'].map(
+    lambda h: workout_per_horse.get(h, {}).get('workout_rank', '')
+)
+df_final_field['WorkoutTotal'] = df_final_field['Horse'].map(
+    lambda h: workout_per_horse.get(h, {}).get('workout_total', '')
+)
+
+st.caption(f"✅ Added workout columns: WorkoutDate, WorkoutTrack, WorkoutDistance, WorkoutTime, WorkoutRank, WorkoutTotal to df_final_field")
+
+# Add Prime Power columns
+df_final_field['PrimePower'] = df_final_field['Horse'].map(
+    lambda h: prime_power_per_horse.get(h, {}).get('prime_power', None)
+)
+df_final_field['PrimePowerRank'] = df_final_field['Horse'].map(
+    lambda h: prime_power_per_horse.get(h, {}).get('prime_power_rank', '')
+)
+
+st.caption(f"✅ Added Prime Power columns: PrimePower, PrimePowerRank to df_final_field")
 
 # Ensure StyleStrength and Style exist
 df_final_field["StyleStrength"] = df_final_field.apply(
@@ -1894,15 +2129,19 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     
     all_horses = primary_df['Horse'].tolist()
     pos_ev_horses = set(df_ol[df_ol["EV per $1"] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
+    neg_ev_horses = set(df_ol[df_ol["EV per $1"] < -0.05]['Horse'].tolist()) if not df_ol.empty else set()
     
     if strategy_profile == "Confident":
-        A_group = all_horses[:1] 
-        if len(all_horses) > 1 and primary_df.iloc[1]['R'] > (primary_df.iloc[0]['R'] * 0.90): # Only add #2 if very close
-             A_group.append(all_horses[1])
-    else: # Value Hunter - Prioritize top pick + overlays
-        A_group = list(set([all_horses[0]]) | pos_ev_horses) 
-        if len(A_group) > 4: # Cap A group size for Value Hunter
-             A_group = sorted(A_group, key=lambda h: primary_df[primary_df['Horse'] == h].index[0])[:4] # Keep top 4 ranked from the value pool
+        # Confident Model: A-Group = UNDERLAYS (favorites with negative EV), C-Group = OVERLAYS
+        # Underlays are horses bet BELOW their fair value (low odds, chalk horses)
+        A_group = [h for h in all_horses if h in neg_ev_horses][:3]  # Top 3 underlays (favorites)
+        if not A_group:  # Fallback if no clear underlays
+            A_group = all_horses[:2]  # Use top 2 rated horses
+    else: # Value Hunter - Prioritize overlays
+        # Value Hunter: A-Group = OVERLAYS (positive EV), C-Group = UNDERLAYS (favorites)
+        A_group = [h for h in all_horses if h in pos_ev_horses][:3]  # Top 3 overlays
+        if not A_group:  # Fallback if no overlays
+            A_group = [all_horses[0]] if all_horses else []  # Use top pick
 
     B_group = [h for h in all_horses if h not in A_group][:3] 
     C_group = [h for h in all_horses if h not in A_group and h not in B_group][:4]
