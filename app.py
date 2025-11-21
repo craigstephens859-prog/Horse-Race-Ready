@@ -2325,7 +2325,8 @@ for i, (rbias, pbias) in enumerate(scenarios):
 
         all_scenario_ratings[(rbias, pbias)] = (ratings_df, use_probs)
 
-        disp = ratings_df.sort_values(by="R", ascending=False)
+        # Table display (guard for helper column)
+        disp = ratings_df.sort_values(by="R", ascending=False).copy()
         if "R_ENHANCE_ADJ" in disp.columns:
             disp = disp.drop(columns=["R_ENHANCE_ADJ"])
         
@@ -2351,6 +2352,10 @@ for i, (rbias, pbias) in enumerate(scenarios):
             column_config={
                 "#": st.column_config.TextColumn("#", width="small"),
                 "Horse": st.column_config.TextColumn("Horse", width="medium"),
+                "R": st.column_config.NumberColumn("Rating", format="%.2f"),
+                "Cstyle": st.column_config.NumberColumn("C-Style", format="%.2f"),
+                "Cpost": st.column_config.NumberColumn("C-Post", format="%.2f"),
+                "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f"),
                 "Prime": st.column_config.NumberColumn("Prime", format="%.0f"),
                 "R": st.column_config.NumberColumn("Rating", format="%.2f"),
                 "Frac1": st.column_config.NumberColumn("Frac1", format="%.1f", help="Avg Early Fractional Position (first 3 races)"),
