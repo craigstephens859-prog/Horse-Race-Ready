@@ -2303,12 +2303,9 @@ for i, (rbias, pbias) in enumerate(scenarios):
             figs_df=figs_df # <--- PASS THE REAL FIGS_DF
         )
         
-        # Apply ML adjustment with trainer intent features
-        ratings_df = ml_adjust(ratings_df, trainer_intent_per_horse)
-
         fair_probs = fair_probs_from_ratings(ratings_df)
 
-        # NEW: safe market blend, no NaN failures
+        # SAFE market blend (no sklearn, no NaNs)
         market_df = _build_market_table(df_final_field, fair_probs)
         use_probs = adjust_probs_with_market(market_df, race_type_detected)
         if not use_probs:
@@ -2318,14 +2315,17 @@ for i, (rbias, pbias) in enumerate(scenarios):
             valid_rows = int(market_df["live_prob"].notna().sum() + market_df["ml_prob"].notna().sum())
             st.caption(f"Market blend applied using {valid_rows} Live/ML entries (α={_alpha_from_race_type(race_type_detected):.2f}).")
 
-        # write Fair % / Fair Odds from *use_probs*
+        # Show Fair% / Fair Odds from the probabilities we actually use
         if 'Horse' in ratings_df.columns:
-            ratings_df["Fair %"]   = ratings_df["Horse"].map(lambda h: f"{use_probs.get(h,0)*100:.1f}%")
+            ratings_df["Fair %"]    = ratings_df["Horse"].map(lambda h: f"{use_probs.get(h,0)*100:.1f}%")
             ratings_df["Fair Odds"] = ratings_df["Horse"].map(lambda h: fair_to_american_str(use_probs.get(h,0)))
         else:
             ratings_df["Fair %"] = ""
             ratings_df["Fair Odds"] = ""
-        all_scenario_ratings[(rbias,pbias)] = (ratings_df.copy(), use_probs) # Store copy and probs        disp = ratings_df.sort_values(by="R", ascending=False)
+
+        all_scenario_ratings[(rbias, pbias)] = (ratings_df, use_probs)
+
+        disp = ratings_df.sort_values(by="R", ascending=False)
         if "R_ENHANCE_ADJ" in disp.columns:
             disp = disp.drop(columns=["R_ENHANCE_ADJ"])
         
