@@ -636,15 +636,22 @@ def _canonical_track(track_name: str) -> str:
 def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["APEX"] = 0.0
+    
+    # Ensure AvgTop2 column exists
+    if "AvgTop2" not in df.columns:
+        df["AvgTop2"] = MODEL_CONFIG['first_timer_fig_default']
+    
     max_prime = df["Prime"].max()
     avg_lp = np.nanmean([np.mean(a["lp"] or [50]) for a in all_angles_per_horse.values()])
     best_frac = min([np.mean([f[0] for f in a["frac"]][:3]) for a in all_angles_per_horse.values()], default=99)
+    race_avg_avgtop2 = df["AvgTop2"].mean()
+    
     for i, r in df.iterrows():
         h = r["Horse"]
         if h not in all_angles_per_horse:
             continue
         a = all_angles_per_horse[h]
-        adj = (df["AvgTop2"] - df["AvgTop2"].mean()) * MODEL_CONFIG["speed_fig_weight"]
+        adj = (r["AvgTop2"] - race_avg_avgtop2) * MODEL_CONFIG["speed_fig_weight"]
         adj += (r["Prime"] - max_prime) * 0.09 + (np.mean(a["lp"] or [50]) - avg_lp) * 0.07
         adj += 0.08 if a["trainer_win"] >= 23 else 0
         adj += 0.07 if any(j in a["jockey"] for j in ["Irad Ortiz Jr","Flavien Prat","Jose Ortiz","Joel Rosario","John Velazquez","Tyler Gaffalione"]) else 0
