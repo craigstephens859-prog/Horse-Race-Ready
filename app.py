@@ -896,7 +896,7 @@ def parse_all_angles(block: str) -> dict:
             pass
     
     # Trainer win% from: "Trnr: Cluley Denis (120 23-17-14 19%)"
-    trainer_match = re.search(r"Trnr:.*?\([\d\s\-]+(\d+)%\)", block or "")
+    trainer_match = re.search(r"Trnr:.*?\([^\)]+\s+(\d+)%\)", block or "")
     trainer_win = float(trainer_match.group(1)) if trainer_match else 0
     
     # Jockey from QuickPlay comments or race lines
@@ -915,8 +915,8 @@ def parse_all_angles(block: str) -> dict:
         except:
             pass
     
-    # Bullet works (marked with "B" in workout lines)
-    bullets = len(re.findall(r"(?m)^\d{2}[A-Za-z]{3}\s+\w+\s+\d+f.*?B", block or ""))
+    # Bullet works (marked with "B" or "Bg" in workout lines)
+    bullets = len(re.findall(r"(?m)^\d{2}[A-Za-z]{3}.*?\sB(?:g|\b)", block or ""))
     
     # Equipment changes from QuickPlay comments
     equip = ""
