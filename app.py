@@ -1291,15 +1291,17 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
 
     # --- ADD PRIME POWER AND APEX ENHANCEMENT (after AvgTop2 is available) ---
     df["Prime"] = df["Horse"].map(lambda h: all_angles_per_horse.get(h, {}).get("prime", np.nan))
-    df = apex_enhance(df)
+    df = apex_enhance(df)  # apex_enhance already adds APEX to R internally
 
     # Clean up the temporary AvgTop2 column if it exists
     if "AvgTop2" in df.columns:
         df.drop(columns=["AvgTop2"], inplace=True)
 
-    # --- END SPEED FIGURE LOGIC ---    # Apply the final adjustment
-    df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0) # Ensure no NaNs
-    df["R"] = (df["R"].astype(float) + df["R_ENHANCE_ADJ"].astype(float)).round(2)
+    # --- END SPEED FIGURE LOGIC ---
+    # NOTE: R already includes R_ENHANCE_ADJ + APEX from apex_enhance()
+    # Clean up the helper column
+    if "R_ENHANCE_ADJ" in df.columns:
+        df.drop(columns=["R_ENHANCE_ADJ"], inplace=True)
     
     return df
 
@@ -1856,6 +1858,16 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         equip_lasix_per_horse[name] = parse_equip_lasix(block)
         all_angles_per_horse[name] = parse_all_angles(block)
         trainer_intent_per_horse[name] = parse_trainer_intent(block)
+
+# Debug: Check what was parsed
+st.caption(f"🔍 Parsed all_angles_per_horse for {len(all_angles_per_horse)} horses")
+if all_angles_per_horse:
+    sample_horse = list(all_angles_per_horse.keys())[0]
+    st.caption(f"Sample data for {sample_horse}: prime={all_angles_per_horse[sample_horse].get('prime', 'N/A')}")
+st.caption(f"🔍 Parsed trainer_intent_per_horse for {len(trainer_intent_per_horse)} horses")
+if trainer_intent_per_horse:
+    sample_horse = list(trainer_intent_per_horse.keys())[0]
+    st.caption(f"Sample intent for {sample_horse}: {trainer_intent_per_horse[sample_horse]}")
 
 # Create the figs_df
 figs_data = []
