@@ -1,0 +1,96 @@
+# ============================================================================
+# STEP-BY-STEP MERGE INSTRUCTIONS
+# Merging 8-Angle Enhancement System into streamlit_app.py
+# ============================================================================
+
+STEP 1: BACKUP CURRENT FILE
+----------------------------
+Copy streamlit_app.py to streamlit_app_BACKUP.py
+
+
+STEP 2: ADD MODEL_CONFIG (After line 105, after OpenAI setup)
+--------------------------------------------------------------
+Insert the complete MODEL_CONFIG dictionary from the pasted code
+This includes all 8 angle configurations (beyer, trainer, jockey, workouts, pedigree, pace, frac_variant, quirin)
+
+
+STEP 3: ADD base_class_bias DICTIONARY (After MODEL_CONFIG)
+------------------------------------------------------------
+base_class_bias = {
+    "Stakes (G1)": 1.15,
+    "Stakes (G2)": 1.10,
+    "Stakes (G3)": 1.08,
+    "Stakes (Listed)": 1.05,
+    "Stakes": 1.03,
+    "Allowance": 1.00,
+    "Maiden Special Weight": 0.95,
+    "Maiden Claiming": 0.88,
+    "Maiden (other)": 0.92,
+    "Claiming": 0.85,
+    "Other": 1.00
+}
+
+
+STEP 4: ADD HELPER FUNCTIONS (After base_class_bias)
+-----------------------------------------------------
+- distance_bucket(dist_text: str)
+- _distance_bucket_from_text(txt: str)
+- _format_horse(h: str, post: Dict, ml: Dict)
+- _format_horse_list_simple(lst: List[str])
+
+
+STEP 5: ADD ALL 8 ENHANCEMENT FUNCTIONS (Before apply_enhancements_and_figs)
+-----------------------------------------------------------------------------
+Copy these functions from pasted code:
+1. enhance_with_beyer_figures
+2. enhance_with_quirin_style  
+3. enhance_with_trainer_angles + detect_trainer_angles
+4. enhance_with_jockey_angles + detect_jockey_angles
+5. enhance_with_workouts
+6. enhance_with_pedigree
+7. enhance_with_pace_figures
+8. enhance_with_frac_variants
+
+
+STEP 6: ADD BRISNET PARSERS (After enhancement functions)
+----------------------------------------------------------
+Copy these parser functions from pasted code:
+- parse_brisnet_all_angles
+- parse_brisnet_beyers
+- parse_brisnet_trainers
+- parse_brisnet_jockeys
+- parse_brisnet_workouts
+- parse_brisnet_pedigree  
+- parse_brisnet_pace_figures
+
+
+STEP 7: ADD master_enhance_pipeline (After parsers)
+----------------------------------------------------
+Copy the complete master_enhance_pipeline function
+
+
+STEP 8: REPLACE apply_enhancements_and_figs FUNCTION (Around line 390)
+-----------------------------------------------------------------------
+Replace the current stub function with full implementation that calls:
+- parse_brisnet_all_angles to get all data
+- master_enhance_pipeline to run 8-angle enhancement
+- Return enhanced ratings_df
+
+
+STEP 9: TEST THE MERGED FILE
+-----------------------------
+1. Save as streamlit_app_MERGED.py
+2. Run: streamlit run .streamlit/streamlit_app_MERGED.py
+3. Test with sample PP data
+4. Verify all 8 angles work correctly
+
+
+STEP 10: DEPLOY (After testing succeeds)
+-----------------------------------------
+Rename streamlit_app.py to streamlit_app_OLD.py
+Rename streamlit_app_MERGED.py to streamlit_app.py
+
+============================================================================
+Would you like me to create the complete merged file for you using Python?
+Reply 'yes' and I'll generate the full ~1200 line merged file.
+============================================================================

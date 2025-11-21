@@ -1,0 +1,18 @@
+# Summary of changes to make to app.py:
+
+1. Add import at top (after existing imports):
+   from horse_angles8 import compute_eight_angles, apply_angles_to_ratings, DEFAULTS as ANGLE_DEFAULTS
+
+2. Find where primary_df is finalized (search for 'primary_df' and analysis section)
+
+3. Add after primary_df is ready:
+   # Compute 8-angle enhancements
+   angles_df = compute_eight_angles(primary_df)
+   
+4. Add Streamlit expander to display angles:
+   with st.expander("🎯 8-Angle Analysis"):
+       st.dataframe(angles_df)
+
+5. Guard MODEL_CONFIG lookups with .get() and ANGLE_DEFAULTS fallback
+
+Let me create a patch script...

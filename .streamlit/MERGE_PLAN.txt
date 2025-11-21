@@ -1,0 +1,15 @@
+# MERGED FILE CREATION PLAN
+# This document outlines the integration of 8-Angle Enhancement into streamlit_app.py
+
+## Components to Add:
+1. MODEL_CONFIG dictionary (lines after imports)
+2. base_class_bias dictionary
+3. All 8 enhancement functions
+4. All BRISNET parsers
+5. master_enhance_pipeline function
+6. Integration into apply_enhancements_and_figs function
+
+## File will be created in .streamlit/streamlit_app_MERGED.py
+## After review, you can replace streamlit_app.py with the merged version
+
+Starting file creation...

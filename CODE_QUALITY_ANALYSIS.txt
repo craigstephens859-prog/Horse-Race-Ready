@@ -1,0 +1,184 @@
+================================================================================
+PYTHON CODE QUALITY ANALYSIS & FIX PLAN
+Horse Racing Picks Repository
+================================================================================
+
+CURRENT STATUS:
+===============
+✅ app.py - Compiles successfully (no syntax errors)
+✅ horse_angles8.py - Compiles successfully (no syntax errors)
+❌ ruff - Not installed
+❌ black - Not installed  
+❌ flake8 - Not installed
+
+================================================================================
+RECOMMENDED LOCAL COMMANDS TO RUN:
+================================================================================
+
+1. INSTALL LINTING/FORMATTING TOOLS
+   pip install ruff black flake8 pytest
+
+2. COMPILE CHECK
+   python -m py_compile app.py
+   python -m py_compile horse_angles8.py
+
+3. LINTING (after installing ruff)
+   ruff check app.py
+   ruff check horse_angles8.py
+   ruff check --fix app.py          # Auto-fix safe issues
+   ruff check --fix horse_angles8.py
+
+4. FORMATTING (after installing black)
+   black --check app.py             # Preview changes
+   black app.py                     # Apply formatting
+   black horse_angles8.py
+
+5. ADDITIONAL LINTING (optional, after installing flake8)
+   flake8 app.py --max-line-length=120 --ignore=E501,W503
+   flake8 horse_angles8.py --max-line-length=120
+
+6. TYPE CHECKING (if mypy installed)
+   mypy app.py --ignore-missing-imports
+   mypy horse_angles8.py --ignore-missing-imports
+
+7. TESTING (if tests exist)
+   pytest -v
+   pytest -q  # Quick mode
+
+================================================================================
+MANUAL CODE REVIEW FINDINGS:
+================================================================================
+
+ISSUE 1: Import organization in app.py
+--------------------------------------
+Current (Line 1-7):
+  import os, re, json, math  # Multiple imports on one line
+  from typing import Dict, List, Tuple, Optional
+  import numpy as np
+  import pandas as pd
+  import streamlit as st
+  from itertools import product
+  from horse_angles8 import compute_eight_angles, apply_angles_to_ratings, DEFAULTS as ANGLE_DEFAULTS
+
+Fix: Separate multiple imports
+  import os
+  import re
+  import json
+  import math
+  from typing import Dict, List, Tuple, Optional
+  import numpy as np
+  import pandas as pd
+  import streamlit as st
+  from itertools import product
+  from horse_angles8 import compute_eight_angles, apply_angles_to_ratings, DEFAULTS as ANGLE_DEFAULTS
+
+ISSUE 2: Missing error handling in horse_angles8.py  
+-------------------------------------------------------
+The _coerce_num function uses broad Exception catch.
+
+Recommendation: Catch specific exceptions
+  except (ValueError, TypeError, AttributeError):
+
+ISSUE 3: Long lines (if formatters were available)
+---------------------------------------------------
+Some lines exceed 88 characters (Black default) or 120 characters (common limit)
+These would be auto-fixed by Black.
+
+ISSUE 4: Potential date parsing issues (mentioned in earlier context)
+----------------------------------------------------------------------
+Need to add defensive date parsing with try/except blocks.
+
+================================================================================
+MINIMAL EDITS TO PASS ALL CHECKS:
+================================================================================
+
+FILE: app.py
+============
+
+DIFF 1: Fix import statement (Line 1)
+--------------------------------------
+--- a/app.py
++++ b/app.py
+@@ -1,4 +1,7 @@
+-import os, re, json, math
++import json
++import math
++import os
++import re
+ from typing import Dict, List, Tuple, Optional
+ import numpy as np
+ import pandas as pd
+
+
+FILE: horse_angles8.py
+======================
+
+DIFF 2: Improve exception handling (Line 15)
+---------------------------------------------
+--- a/horse_angles8.py
++++ b/horse_angles8.py
+@@ -12,7 +12,7 @@ def _coerce_num(v, default: float = 0.0) -> float:
+         if isinstance(v,(int,float)): return float(v)
+         s=str(v).strip().replace('%','')
+         return float(s) if s else default
+-    except Exception:
++    except (ValueError, TypeError, AttributeError):
+         return default
+
+================================================================================
+INTEGRATION STATUS:
+================================================================================
+
+✅ horse_angles8.py module created
+✅ Import added to app.py (line 7)
+⚠️  Angle computation NOT YET INTEGRATED into analysis workflow
+⚠️  Streamlit expander for angles display NOT YET ADDED
+
+TO COMPLETE INTEGRATION:
+Add after primary_df is finalized (around line 1650-1700):
+
+    # Compute and apply 8-angle scores
+    try:
+        angles_df = compute_eight_angles(primary_df)
+        primary_df = apply_angles_to_ratings(primary_df, angles_df, weight=0.25)
+        
+        # Display angle breakdown
+        with st.expander("📊 View 8-Angle Breakdown"):
+            st.dataframe(
+                angles_df.round(3),
+                use_container_width=True,
+                column_config={
+                    "Angles_Total": st.column_config.NumberColumn("Total Score", format="%.3f")
+                }
+            )
+    except Exception as e:
+        st.warning(f"Angle calculation skipped: {e}")
+
+================================================================================
+SUMMARY CHECKLIST:
+================================================================================
+
+COMPLETED:
+----------
+☑ app.py compiles without errors
+☑ horse_angles8.py compiles without errors
+☑ Module import added to app.py
+☑ Defensive coding in place (no crashes on missing columns)
+
+TO DO (INSTALL TOOLS FIRST):
+-----------------------------
+☐ pip install ruff black flake8
+☐ Run: ruff check --fix app.py
+☐ Run: ruff check --fix horse_angles8.py  
+☐ Run: black app.py
+☐ Run: black horse_angles8.py
+
+TO DO (CODE INTEGRATION):
+--------------------------
+☐ Apply DIFF 1: Split multi-import line in app.py
+☐ Apply DIFF 2: Improve exception handling in horse_angles8.py
+☐ Add angle computation call in analysis workflow
+☐ Add Streamlit expander to display angles
+☐ Test with real PP data
+
+================================================================================
