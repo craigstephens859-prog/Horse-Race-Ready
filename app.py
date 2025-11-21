@@ -20,6 +20,15 @@ import pandas as pd
 import streamlit as st
 from itertools import product
 
+# ML imports (optional - graceful fallback if not installed)
+try:
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import StandardScaler
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    st.warning("⚠️ scikit-learn not installed. ML adjustment disabled. Install with: pip install scikit-learn")
+
 # ===================== Page / Model Settings =====================
 
 st.set_page_config(page_title="Horse Race Ready — IQ Mode", page_icon="🏇", layout="wide")
@@ -107,14 +116,17 @@ def call_openai_messages(messages: List[Dict]) -> str:
 # ===================== Model Config & Tuning =====================
 
 MODEL_CONFIG = {
-    # --- Rating Model ---
-    "softmax_tau": 0.85,  # Controls win prob "sharpness". Lower = more spread out.
-    "speed_fig_weight": 0.05, # (Fig - Avg) * Weight. 0.05 = 10 fig points = 0.5 bonus.
-    "first_timer_fig_default": 50, # Assumed speed fig for a 1st-time starter.
+    "softmax_tau": 0.55, "speed_fig_weight": 0.05, "first_timer_fig_default": 50,
+    "ppi_multiplier": 1.0, "ppi_tailwind_factor": 0.3,
+    "prime_power_weight": 0.09, "late_pace_weight": 0.07, "trainer_meet_bonus": 0.08,
+    "jockey_upgrade_bonus": 0.07, "layoff_bullet_bonus": 0.10, "class_drop_bonus": 0.12,
+    "front_bandages_bonus": 0.05, "lasix_off_penalty": -0.08, "back_fig_par_bonus": 0.08,
+    "quirin_lp_sneak_bonus": 0.11, "frac_pace_bonus": 0.09, "dam_sire_turf_bonus": 0.10,
+    "dam_sire_route_bonus": 0.09, "trainer_pattern_roi_scale": 0.02, "bad_trip_bonus": 0.06,
+    "fig_trend_bonus": 0.11, "equip_bonus": 0.07, "bounce_penalty": -0.09,
+    "sire_mud_bonus": 0.08, "owner_roi_bonus": 0.06, "odds_drift_bonus": 0.05,
     
     # --- Pace & Style Model ---
-    "ppi_multiplier": 1.5, # Overall impact of the Pace Pressure Index (PPI).
-    "ppi_tailwind_factor": 0.6, # How much of the PPI value is given to E/EP or S horses.
     "style_strength_weights": { # Multiplier for pace tailwind based on strength.
         "Strong": 1.0, 
         "Solid": 0.8, 
@@ -156,6 +168,14 @@ MODEL_CONFIG = {
     "angle_roi_neg_per_penalty": 0.005, # Penalty per negative ROI angle (applied as -)
     "angle_tweak_min_clip": -0.12, # Min/Max total adjustment from all angles
     "angle_tweak_max_clip": 0.12,
+    
+    # --- Trainer Intent Signals ---
+    "trainer_intent_class_drop_bonus": 0.12,  # Big drop = win now
+    "trainer_intent_jky_switch_bonus": 0.09,  # To top jky = intent
+    "trainer_intent_equip_bonus": 0.08,       # Blinkers on = focus
+    "trainer_intent_layoff_works_bonus": 0.10,# Sharp works post-layoff
+    "trainer_intent_ship_bonus": 0.07,        # From better track
+    "trainer_intent_roi_threshold": 1.5,      # Positive ROI angle multiplier
     
     # --- Exotics & Strategy ---
     "exotic_bias_weights": (1.30, 1.15, 1.05, 1.03), # (1st, 2nd, 3rd, 4th) Harville bias
@@ -613,6 +633,62 @@ def _canonical_track(track_name: str) -> str:
                 return canon
     return (track_name or "").strip()
 
+def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["APEX"] = 0.0
+    max_prime = df["Prime"].max()
+    avg_lp = np.nanmean([np.mean(a["lp"] or [50]) for a in all_angles.values()])
+    best_frac = min([np.mean([f[0] for f in a["frac"]][:3]) for a in all_angles.values()], default=99)
+    for i, r in df.iterrows():
+        h, a = r["Horse"], all_angles[h]
+        adj = (df["AvgTop2"] - df["AvgTop2"].mean()) * MODEL_CONFIG["speed_fig_weight"]
+        adj += (r["Prime"] - max_prime) * 0.09 + (np.mean(a["lp"] or [50]) - avg_lp) * 0.07
+        adj += 0.08 if a["trainer_win"] >= 23 else 0
+        adj += 0.07 if any(j in a["jockey"] for j in ["Irad Ortiz Jr","Flavien Prat","Jose Ortiz","Joel Rosario","John Velazquez","Tyler Gaffalione"]) else 0
+        adj += 0.10 if 45 <= a["layoff"] <= 180 and a["bullets"] >= 3 else 0
+        adj += 0.12 if any("Drop in Class" in p for p in a["patterns"]) else 0
+        adj += 0.05 if "Front Bandages On" in a["equip"] else 0
+        adj -= 0.08 if "Lasix Off" in a["equip"] else 0
+        adj += 0.08 if max(figs_per_horse.get(h,[])[1:4] or [0]) >= today_par + 8 else 0
+        adj += 0.11 if r["Style"] not in ("E","E/P") and np.mean(a["lp"] or [50]) >= avg_lp + 8 else 0
+        adj += 0.09 if np.mean([f[0] for f in a["frac"]][:3]) <= best_frac + 2 else 0
+        adj += 0.10 if surface_type=="Turf" and a["dam_sire"][0] >= 19 else 0
+        adj += 0.09 if distance_bucket(distance_txt)=="8f+" and a["dam_sire"][1] >= 22 else 0
+        adj += min(sum(p for p in a["patterns"] if p>0) * 0.02, 0.12)
+        adj += a["trips"] * 0.06 if a["trips"] >= 2 else 0
+        adj += 0.11 if len(figs_per_horse.get(h,[])) >= 3 and figs_per_horse[h][0] > figs_per_horse[h][1] > figs_per_horse[h][2] else 0
+        adj += 0.07 if a["equip"] and "Lasix Off" not in a["equip"] else 0
+        adj -= 0.09 if a["bounce"] else 0
+        adj += 0.08 if condition_txt in ("muddy","sloppy") and a["sire_mud"] >= 18 else 0
+        adj += 0.06 if a["owner_roi"] > 0 else 0
+        
+        # Trainer Intent Signals
+        intent = trainer_intent_per_horse.get(h, {})
+        adj += MODEL_CONFIG["trainer_intent_class_drop_bonus"] if intent.get("class_drop_pct", 0) >= 30 else 0
+        adj += MODEL_CONFIG["trainer_intent_jky_switch_bonus"] if intent.get("jky_switch", False) and a.get("trainer_win", 0) >= 20 else 0
+        adj += MODEL_CONFIG["trainer_intent_equip_bonus"] if intent.get("equip_change") == "blink_on" else 0
+        adj += MODEL_CONFIG["trainer_intent_layoff_works_bonus"] if a.get("layoff", 0) > 45 and intent.get("layoff_works", 0) >= 3 else 0
+        adj += MODEL_CONFIG["trainer_intent_ship_bonus"] if intent.get("ship_from", "") in ["SAR", "CD", "BEL"] else 0  # Elite tracks
+        adj += (intent.get("roi_angles", 0) / MODEL_CONFIG["trainer_intent_roi_threshold"]) * 0.04  # Scaled ROI boost
+        
+        # Post-Time Odds Drift Tracker (Live Odds vs ML Delta)
+        ml_dec  = str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) if h in df_final_field["Horse"].values else None
+        live_dec = str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "Live Odds"].iloc[0]) if h in df_final_field["Horse"].values else None
+        if ml_dec and live_dec:
+            live_dec = live_dec or ml_dec
+        elif ml_dec:
+            live_dec = ml_dec
+        else:
+            ml_dec = live_dec = None
+        
+        if ml_dec and live_dec and ml_dec > 0:
+            drift_pct = max(0, (ml_dec - live_dec) / ml_dec)  # only positive drift rewarded
+            adj += drift_pct * 0.50  # 50 basis points per 100% drift
+        
+        df.loc[i, "APEX"] = round(adj, 3)
+    df["R"] = (df["R"] + df["APEX"]).round(2)
+    return df
+
 def _post_bucket(post_str: str) -> str:
     try:
         post = int(re.sub(r"[^\d]", "", str(post_str)))
@@ -701,6 +777,21 @@ def split_into_horse_chunks(pp_text: str) -> List[tuple]:
         chunks.append((post, name, block))
     return chunks
 
+def parse_equip_lasix(block: str) -> Tuple[str, str]:
+    # Blinkers: Look for B or b in equipment line (BRIS standard)
+    equip_line = re.search(r"(?i)Equipment.*?([A-Za-z]+)", block or "")
+    blink = "on" if equip_line and "B" in equip_line.group(1).upper() else "off"
+    if re.search(r"Blinkers\s+On", block or "", re.I): blink = "on"
+    if re.search(r"Blinkers\s+Off", block or "", re.I): blink = "off"
+    
+    # Lasix: L = first, L# = repeat, no L = off
+    lasix = "off"
+    if re.search(r"\bL\b", block or ""): lasix = "first"
+    elif re.search(r"\bL\d+\b", block or ""): lasix = "repeat"
+    elif re.search(r"Lasix", block or "", re.I): lasix = "on"
+    
+    return blink, lasix
+
 def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
     rows = []
     for m in HORSE_HDR_RE.finditer(pp_text or ""):
@@ -744,6 +835,36 @@ def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
         if m_labeled:
             ml[name.strip()] = m_labeled.group(1).replace(" ", "")
     return ml
+
+def parse_all_angles(block: str) -> dict:
+    d = {
+        "prime": int(m.group(1)) if (m:=re.search(r"(?mi)^\s*\d+\s+[A-Za-z0-9'.\-\s&]+\s+\(\s*(?:E\/P|EP|E|P|S|NA)\b.*?(\d{3})\s*$", block or "")) else np.nan,
+        "lp": [int(m.group(3)) for m in re.finditer(r"(?mi)^\s*\d{2}[A-Za-z]{3}\d{2}.*?\s+(\d{2,3})\s+.*?(\d{2,3})\s+.*?(\d{2,3})\s*$", block or "")][:10],
+        "frac": [(int(m.group(1)),int(m.group(2)),int(m.group(3))) for m in re.finditer(r"(?mi)^\s*\d{2}[A-Za-z]{3}\d{2}.*?\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+.*?(\d+)f?t?", block or "")][:8],
+        "trainer_win": float(m.group(2)) if (m:=re.search(r"(?i)Trainer:.*?(\d+)%", block or "")) else 0,
+        "jockey": (m.group(1).strip() if (m:=re.search(r"(?i)Jockey:\s*([A-Za-z\s]+?)\s+\(", block or "")) else "NA"),
+        "layoff": int(m.group(1)) if (m:=re.search(r"(\d+) Days", block or "")) else 0,
+        "bullets": sum(1 for w in re.findall(r"\d{1,3} Days?.\s*(\d{1,2}f|\d{1,2}\.\d).*\*?", block) if "B" in w),
+        "equip": re.search(r"(Front Bandages On|Lasix Off|Equip Change)", block or "").group(0) if re.search(r"(Front Bandages On|Lasix Off|Equip Change)", block) else "",
+        "dam_sire": (float(m.group(1)), float(m.group(2))) if (m:=re.search(r"(?i)Dam.?s\s+Sire.*?Turf.*?(\d+)%.*?Route.*?(\d+)%", block or "")) else (0,0),
+        "sire_mud": float(m.group(1)) if (m:=re.search(r"(?i)Sire.*?Mud.*?(\d+)%", block or "")) else 0,
+        "patterns": [float(m.group(2)) for m in re.finditer(r"(?i)(First Turf|First Route|2nd Off Layoff|Drop in Class|Claimed Last|Unusual Positive).*?ROI.*?([+-]?\d+\.\d+)", block or "")],
+        "trips": min(len(re.findall(r"(?i)(bumped|steadied|blocked|altered course|hung|weakened|off slow|4-6 wide)", " ".join(block.split("\n")[-10:]).lower())),4),
+        "owner_roi": float(m.group(1)) if (m:=re.search(r"(?i)Owner.*?ROI.*?([+-]?\d+\.\d+)", block or "")) else 0
+    }
+    d["bounce"] = any(figs[i] - figs[i+1] > 10 for figs in [figs_per_horse.get(name, []) for name in [name]] for i in range(len(figs)-1)) if "name" in globals() else False
+    return d
+
+def parse_trainer_intent(block: str) -> dict:
+    d = {
+        "class_drop_pct": float(m.group(1)) if (m:=re.search(r"(?i)Class Drop.*?(\d+)%", block)) else 0,
+        "jky_switch": bool(re.search(r"(?i)Jky Change|New Rider", block)),
+        "equip_change": "blink_on" if re.search(r"(?i)Blinkers On", block) else "none",
+        "layoff_works": sum(1 for w in re.findall(r"(?i)Work.*?(\d+f).*?(\d{1,2}:\d{2})", block) if int(w[1].split(":")[0]) <= 48),
+        "ship_from": m.group(1) if (m:=re.search(r"(?i)Ship from\s*(\w{3})", block)) else "",
+        "roi_angles": sum(float(r) for r in re.findall(r"(?i)Trainer ROI.*?([+-]?\d+\.\d+)", block) if float(r) > 0)
+    }
+    return d
 
 ANGLE_LINE_RE = re.compile(
     r'(?mi)^\s*(\d{4}\s+)?(1st\s*time\s*str|Debut\s*MdnSpWt|Maiden\s*Sp\s*Wt|2nd\s*career\s*race|Turf\s*to\s*Dirt|Dirt\s*to\s*Turf|Shipper|Blinkers\s*(?:on|off)|(?:\d+(?:-\d+)?)\s*days?Away|JKYw/\s*Sprints|JKYw/\s*Trn\s*L(?:30|45|60)\b|JKYw/\s*[EPS]|JKYw/\s*NA\s*types)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$'
@@ -1135,6 +1256,10 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     
     df = ratings_df.copy()
 
+    # --- ADD PRIME POWER AND APEX ENHANCEMENT ---
+    df["Prime"] = df["Horse"].map(lambda h: all_angles_per_horse.get(h, {}).get("prime", np.nan))
+    df = apex_enhance(df)
+
     # --- SPEED FIGURE LOGIC ---
     if figs_df.empty or "AvgTop2" not in figs_df.columns:
         # No figures were parsed or dataframe is empty
@@ -1162,6 +1287,89 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     # Apply the final adjustment
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0) # Ensure no NaNs
     df["R"] = (df["R"].astype(float) + df["R_ENHANCE_ADJ"].astype(float)).round(2)
+    
+    return df
+
+# ---------- ML Adjustment (RandomForest) ----------
+def ml_adjust(df: pd.DataFrame, trainer_intent_data: Dict[str, dict]) -> pd.DataFrame:
+    """
+    Applies machine learning adjustment using RandomForest to refine ratings.
+    Incorporates trainer intent features (class drop %, ROI angles) along with
+    existing rating components.
+    
+    Returns df with additional ML_ADJ column added to R rating.
+    """
+    if not SKLEARN_AVAILABLE:
+        st.caption("⚠️ ML adjustment skipped - scikit-learn not available")
+        return df
+    
+    if df is None or df.empty or len(df) < 3:
+        return df
+    
+    df = df.copy()
+    
+    # Build feature matrix
+    features = pd.DataFrame(index=df.index)
+    
+    # Base rating components
+    features["R"] = df.get("R", 0)
+    features["Cclass"] = df.get("Cclass", 0)
+    features["Cstyle"] = df.get("Cstyle", 0)
+    features["Cpost"] = df.get("Cpost", 0)
+    features["Cpace"] = df.get("Cpace", 0)
+    features["Atrack"] = df.get("Atrack", 0)
+    features["Quirin"] = df.get("Quirin", 0).fillna(0)
+    features["LastFig"] = df.get("LastFig", 0).fillna(0)
+    
+    # APEX component
+    features["APEX"] = df.get("APEX", 0).fillna(0)
+    
+    # Add trainer intent features
+    features["Intent_ClassDrop"] = df.index.map(lambda idx: trainer_intent_data.get(df.loc[idx, "Horse"], {}).get("class_drop_pct", 0))
+    features["Intent_ROI"] = df.index.map(lambda idx: trainer_intent_data.get(df.loc[idx, "Horse"], {}).get("roi_angles", 0))
+    
+    # Fill any remaining NaNs
+    features = features.fillna(0)
+    
+    # Create synthetic target (use current R as proxy for training)
+    # In production, you'd train on historical race results
+    y = df["R"].values
+    
+    # Scale features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(features)
+    
+    # Train RandomForest
+    rf = RandomForestRegressor(
+        n_estimators=50,
+        max_depth=5,
+        min_samples_split=2,
+        random_state=42,
+        n_jobs=-1
+    )
+    
+    try:
+        rf.fit(X_scaled, y)
+        predictions = rf.predict(X_scaled)
+        
+        # ML adjustment is the difference between prediction and current rating
+        # Scale it down to avoid over-correction
+        ml_adjustment = (predictions - y) * 0.3  # 30% weight on ML delta
+        
+        df["ML_ADJ"] = ml_adjustment.round(3)
+        df["R"] = (df["R"] + df["ML_ADJ"]).round(2)
+        
+        # Feature importance (top 5)
+        importance = pd.DataFrame({
+            'feature': features.columns,
+            'importance': rf.feature_importances_
+        }).sort_values('importance', ascending=False).head(5)
+        
+        st.caption(f"✅ ML adjustment applied. Top features: {', '.join(importance['feature'].tolist())}")
+        
+    except Exception as e:
+        st.warning(f"⚠️ ML adjustment failed: {e}")
+        df["ML_ADJ"] = 0.0
     
     return df
 
@@ -1524,6 +1732,13 @@ race_type_manual = st.selectbox(
 race_type = race_type_manual or race_type_detected
 race_type_detected = race_type  # lock in constant key
 
+# Define today's par figure based on race type (rough estimates)
+today_par = {
+    "maiden special weight": 75, "maiden claiming": 65, "claiming": 70,
+    "starter allowance": 75, "allowance": 80, "allowance optional claiming": 85,
+    "listed stakes": 90, "graded stakes": 95, "grade 3": 95, "grade 2": 100, "grade 1": 105
+}.get(race_type_detected, 75)
+
 # ===================== A. Race Setup: Scratches, ML & Styles =====================
 
 st.header("A. Race Setup: Scratches, ML & Live Odds, Styles")
@@ -1561,6 +1776,9 @@ running_style_per_horse: Dict[str, dict] = {}
 quickplay_per_horse: Dict[str, dict] = {}
 workout_per_horse: Dict[str, dict] = {}
 prime_power_per_horse: Dict[str, dict] = {}
+equip_lasix_per_horse: Dict[str, Tuple[str, str]] = {}
+all_angles_per_horse: Dict[str, dict] = {}
+trainer_intent_per_horse: Dict[str, dict] = {}
 
 for _post, name, block in split_into_horse_chunks(pp_text):
     if name in df_editor["Horse"].values:
@@ -1572,6 +1790,9 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         workout_per_horse[name] = parse_recent_workout_for_block(block, debug=False)
         prime_power_per_horse[name] = parse_prime_power_for_block(block, debug=False)
         figs_per_horse[name] = parse_speed_figures_for_block(block, debug=False)
+        equip_lasix_per_horse[name] = parse_equip_lasix(block)
+        all_angles_per_horse[name] = parse_all_angles(block)
+        trainer_intent_per_horse[name] = parse_trainer_intent(block)
 
 # Create the figs_df
 figs_data = []
@@ -1674,6 +1895,16 @@ df_final_field['PrimePowerRank'] = df_final_field['Horse'].map(
 )
 
 st.caption(f"✅ Added Prime Power columns: PrimePower, PrimePowerRank to df_final_field")
+
+# Add Equipment and Lasix columns
+df_final_field['Blinkers'] = df_final_field['Horse'].map(
+    lambda h: equip_lasix_per_horse.get(h, ('', ''))[0]
+)
+df_final_field['Lasix'] = df_final_field['Horse'].map(
+    lambda h: equip_lasix_per_horse.get(h, ('', ''))[1]
+)
+
+st.caption(f"✅ Added Equipment/Lasix columns: Blinkers, Lasix to df_final_field")
 
 # Ensure StyleStrength and Style exist
 df_final_field["StyleStrength"] = df_final_field.apply(
@@ -1798,6 +2029,12 @@ for _, r in df_final_field.iterrows():
     # Convert to additive bonus; more reliable (lower scalar) -> bigger bonus
     cclass_add = round(1.00 - base_scalar, 3)
     cclass_add += _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
+    
+    # Equipment & Lasix adjustments
+    blink, lasix = equip_lasix_per_horse.get(name, ("off", "off"))
+    cclass_add += 0.08 if blink == "on" else 0.03 if blink == "off" else 0
+    cclass_add += 0.09 if lasix == "first" else -0.10 if lasix == "off" else -0.04 if lasix == "repeat" else 0
+    
     Cclass_vals.append(cclass_add)
 
 df_final_field["Cclass"] = Cclass_vals
@@ -1946,7 +2183,7 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
     r = ratings_df["R_numeric"].values
     if len(r) == 0: return {}
 
-    p = softmax_from_rating(r) # tau will be pulled from MODEL_CONFIG
+    p = softmax_from_rating(r, tau=0.55)
 
     # Clean up temporary column
     ratings_df.drop(columns=['R_numeric'], inplace=True)
@@ -2002,6 +2239,10 @@ for i, (rbias, pbias) in enumerate(scenarios):
             pedigree_per_horse=pedigree_per_horse,
             figs_df=figs_df # <--- PASS THE REAL FIGS_DF
         )
+        
+        # Apply ML adjustment with trainer intent features
+        ratings_df = ml_adjust(ratings_df, trainer_intent_per_horse)
+        
         fair_probs = fair_probs_from_ratings(ratings_df)
         if 'Horse' in ratings_df.columns:
             ratings_df["Fair %"] = ratings_df["Horse"].map(lambda h: f"{fair_probs.get(h,0)*100:.1f}%")
@@ -2014,19 +2255,38 @@ for i, (rbias, pbias) in enumerate(scenarios):
         disp = ratings_df.sort_values(by="R", ascending=False)
         if "R_ENHANCE_ADJ" in disp.columns:
             disp = disp.drop(columns=["R_ENHANCE_ADJ"])
+        
+        # Add custom display columns
+        disp["Frac1"] = disp["Horse"].map(lambda h: round(np.mean([f[0] for f in all_angles_per_horse.get(h, {}).get("frac",[(99,)])[:3]]),1) if all_angles_per_horse.get(h) else 99)
+        disp["ParBeat"] = disp["Horse"].map(lambda h: max([f-today_par for f in figs_per_horse.get(h,[])[1:4]], default=0))
+        
+        # Add Drift column (odds drift percentage)
+        disp["Drift"] = disp["Horse"].map(lambda h: round(max(0, (str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) - str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "Live Odds"].iloc[0])) / str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0])) * 100, 1) if h in df_final_field["Horse"].values and str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) else 0)
+        
+        # Add Intent column (sum of trainer intent numeric signals)
+        disp["Intent"] = disp["Horse"].map(lambda h: round(sum([v for k,v in trainer_intent_per_horse.get(h, {}).items() if isinstance(v, (int,float))]), 2))
+        
+        # Select and reorder columns for display
+        display_cols = ["#","Horse","Prime","R","Frac1","ParBeat","Drift","Intent","APEX","Fair %","Fair Odds"]
+        # Only include columns that exist
+        display_cols = [c for c in display_cols if c in disp.columns]
+        disp = disp[display_cols]
+        
         st.dataframe(
             disp,
             use_container_width=True, hide_index=True,
             column_config={
+                "#": st.column_config.TextColumn("#", width="small"),
+                "Horse": st.column_config.TextColumn("Horse", width="medium"),
+                "Prime": st.column_config.NumberColumn("Prime", format="%.0f"),
                 "R": st.column_config.NumberColumn("Rating", format="%.2f"),
-                "Cstyle": st.column_config.NumberColumn("C-Style", format="%.2f"),
-                "Cpost": st.column_config.NumberColumn("C-Post", format="%.2f"),
-                "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f"),
-                "Cclass": st.column_config.NumberColumn("C-Class", format="%.2f"),
-                "Atrack": st.column_config.NumberColumn("A-Track", format="%.2f"),
-                "Arace": st.column_config.NumberColumn("A-Race", format="%.2f"),
-                # Format Quirin to show integer or be blank
-                "Quirin": st.column_config.NumberColumn("Quirin", format="%d", help="BRIS Pace Points"),
+                "Frac1": st.column_config.NumberColumn("Frac1", format="%.1f", help="Avg Early Fractional Position (first 3 races)"),
+                "ParBeat": st.column_config.NumberColumn("ParBeat", format="%.0f", help="Best figure vs today's par (races 2-4)"),
+                "Drift": st.column_config.NumberColumn("Drift", format="%.1f", help="Odds drift % (ML to Live - positive = shortening)"),
+                "Intent": st.column_config.NumberColumn("Intent", format="%.2f", help="Trainer intent signal score"),
+                "APEX": st.column_config.NumberColumn("APEX", format="%.3f", help="Advanced handicapping adjustment"),
+                "Fair %": st.column_config.TextColumn("Fair %", width="small"),
+                "Fair Odds": st.column_config.TextColumn("Fair Odds", width="small"),
             }
         )
 
@@ -2177,6 +2437,10 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
          contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
     elif is_underlay:
          contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
+    
+    # Add trainer intent note if strong signals detected
+    if trainer_intent_per_horse.get(top_rated_horse, {}).get("roi_angles", 0) > 2:
+        contender_report += f"\n**Trainer Intent Note:** Strong signals (ROI {trainer_intent_per_horse[top_rated_horse]['roi_angles']:.1f}) indicate win today.\n"
 
     # --- 5. Build Simplified Blueprint Section ---
     blueprint_report = "### Betting Strategy Blueprints (Scale Base Bets to Budget: Max ~$100 Recommended)\n"
