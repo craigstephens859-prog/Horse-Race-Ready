@@ -2506,13 +2506,15 @@ for i, (rbias, pbias) in enumerate(scenarios):
         if "R" in disp.columns:
             st.caption(f"🔍 R sample values: {disp['R'].head(3).tolist()}")
         
-        # Clean up NaN values for display
+        # Clean up NaN values for display - convert to numeric first, then fillna
         if "Prime" in disp.columns:
-            disp["Prime"] = disp["Prime"].fillna(0).astype(int)
+            disp["Prime"] = pd.to_numeric(disp["Prime"], errors='coerce').fillna(0).astype(int)
+        if "R" in disp.columns:
+            disp["R"] = pd.to_numeric(disp["R"], errors='coerce').fillna(0.0).round(2)
         if "APEX" in disp.columns:
-            disp["APEX"] = disp["APEX"].fillna(0.0)
+            disp["APEX"] = pd.to_numeric(disp["APEX"], errors='coerce').fillna(0.0).round(3)
         if "Intent" in disp.columns:
-            disp["Intent"] = disp["Intent"].fillna(0.0)
+            disp["Intent"] = pd.to_numeric(disp["Intent"], errors='coerce').fillna(0.0).round(2)
         
         # Select and reorder columns for display
         display_cols = ["#","Horse","Prime","R","Frac1","ParBeat","Drift","Intent","APEX","Fair %","Fair Odds"]
@@ -2527,10 +2529,6 @@ for i, (rbias, pbias) in enumerate(scenarios):
             column_config={
                 "#": st.column_config.TextColumn("#", width="small"),
                 "Horse": st.column_config.TextColumn("Horse", width="medium"),
-                "R": st.column_config.NumberColumn("Rating", format="%.2f"),
-                "Cstyle": st.column_config.NumberColumn("C-Style", format="%.2f"),
-                "Cpost": st.column_config.NumberColumn("C-Post", format="%.2f"),
-                "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f"),
                 "Prime": st.column_config.NumberColumn("Prime", format="%.0f"),
                 "R": st.column_config.NumberColumn("Rating", format="%.2f"),
                 "Frac1": st.column_config.NumberColumn("Frac1", format="%.1f", help="Avg Early Fractional Position (first 3 races)"),
