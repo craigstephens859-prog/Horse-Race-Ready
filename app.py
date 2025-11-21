@@ -852,7 +852,7 @@ def parse_all_angles(block: str) -> dict:
         "trips": min(len(re.findall(r"(?i)(bumped|steadied|blocked|altered course|hung|weakened|off slow|4-6 wide)", " ".join(block.split("\n")[-10:]).lower())),4),
         "owner_roi": float(m.group(1)) if (m:=re.search(r"(?i)Owner.*?ROI.*?([+-]?\d+\.\d+)", block or "")) else 0
     }
-    d["bounce"] = any(figs[i] - figs[i+1] > 10 for figs in [figs_per_horse.get(name, []) for name in [name]] for i in range(len(figs)-1)) if "name" in globals() else False
+    d["bounce"] = False  # Bounce calculated in apex_enhance where figs_per_horse is available
     return d
 
 def parse_trainer_intent(block: str) -> dict:
