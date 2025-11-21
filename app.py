@@ -1343,16 +1343,14 @@ def ml_adjust(df: pd.DataFrame, trainer_intent_data: Dict[str, dict]) -> pd.Data
     
     # Fill any remaining NaNs
     features = features.fillna(0)
-    
+
     # Create synthetic target (use current R as proxy for training)
     # In production, you'd train on historical race results
-    y = df["R"].values
-    
+    y = df["R"].fillna(df["R"].mean()).values
+
     # Scale features
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(features)
-    
-    # Train RandomForest
+    X_scaled = scaler.fit_transform(features)    # Train RandomForest
     rf = RandomForestRegressor(
         n_estimators=50,
         max_depth=5,
