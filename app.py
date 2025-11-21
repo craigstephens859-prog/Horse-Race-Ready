@@ -660,7 +660,8 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
         adj += 0.05 if "Front Bandages On" in a["equip"] else 0
         adj -= 0.08 if "Lasix Off" in a["equip"] else 0
         figs_list = figs_per_horse.get(h,[])
-        adj += 0.08 if len(figs_list) > 1 and max(figs_list[1:4]) >= today_par + 8 else 0
+        recent_figs = figs_list[1:4] if len(figs_list) > 1 else []
+        adj += 0.08 if recent_figs and max(recent_figs) >= today_par + 8 else 0
         adj += 0.11 if r["Style"] not in ("E","E/P") and np.mean(a["lp"] or [50]) >= avg_lp + 8 else 0
         adj += 0.09 if np.mean([f[0] for f in a["frac"]][:3]) <= best_frac + 2 else 0
         adj += 0.10 if surface_type=="Turf" and a["dam_sire"][0] >= 19 else 0
