@@ -659,8 +659,8 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
         adj += 0.12 if any("Drop in Class" in p for p in a["patterns"]) else 0
         adj += 0.05 if "Front Bandages On" in a["equip"] else 0
         adj -= 0.08 if "Lasix Off" in a["equip"] else 0
-        figs_list = figs_per_horse.get(h,[])
-        recent_figs = figs_list[1:4] if len(figs_list) > 1 else []
+        figs_list = figs_per_horse.get(h,[]) or []
+        recent_figs = figs_list[1:4] if figs_list and len(figs_list) > 1 else []
         adj += 0.08 if recent_figs and max(recent_figs) >= today_par + 8 else 0
         adj += 0.11 if r["Style"] not in ("E","E/P") and np.mean(a["lp"] or [50]) >= avg_lp + 8 else 0
         adj += 0.09 if np.mean([f[0] for f in a["frac"]][:3]) <= best_frac + 2 else 0
@@ -668,7 +668,7 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
         adj += 0.09 if distance_bucket(distance_txt)=="8f+" and a["dam_sire"][1] >= 22 else 0
         adj += min(sum(p for p in a["patterns"] if p>0) * 0.02, 0.12)
         adj += a["trips"] * 0.06 if a["trips"] >= 2 else 0
-        adj += 0.11 if len(figs_list) >= 3 and figs_list[0] > figs_list[1] > figs_list[2] else 0
+        adj += 0.11 if figs_list and len(figs_list) >= 3 and figs_list[0] > figs_list[1] > figs_list[2] else 0
         adj += 0.07 if a["equip"] and "Lasix Off" not in a["equip"] else 0
         adj -= 0.09 if a["bounce"] else 0
         adj += 0.08 if condition_txt in ("muddy","sloppy") and a["sire_mud"] >= 18 else 0
