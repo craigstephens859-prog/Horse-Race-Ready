@@ -667,12 +667,12 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
         
         # Safe LP adjustment
         adj += (np.mean(a.get("lp") or [50]) - avg_lp) * 0.07
-        adj += 0.08 if a["trainer_win"] >= 23 else 0
-        adj += 0.07 if any(j in a["jockey"] for j in ["Irad Ortiz Jr","Flavien Prat","Jose Ortiz","Joel Rosario","John Velazquez","Tyler Gaffalione"]) else 0
-        adj += 0.10 if 45 <= a["layoff"] <= 180 and a["bullets"] >= 3 else 0
-        adj += 0.12 if any("Drop in Class" in p for p in a["patterns"]) else 0
-        adj += 0.05 if "Front Bandages On" in a["equip"] else 0
-        adj -= 0.08 if "Lasix Off" in a["equip"] else 0
+        adj += 0.08 if a.get("trainer_win", 0) >= 23 else 0
+        adj += 0.07 if any(j in a.get("jockey", "") for j in ["Irad Ortiz Jr","Flavien Prat","Jose Ortiz","Joel Rosario","John Velazquez","Tyler Gaffalione"]) else 0
+        adj += 0.10 if 45 <= a.get("layoff", 0) <= 180 and a.get("bullets", 0) >= 3 else 0
+        # Pattern bonuses are already numeric, summed later - skip string check
+        adj += 0.05 if "Front Bandages On" in a.get("equip", "") else 0
+        adj -= 0.08 if "Lasix Off" in a.get("equip", "") else 0
         figs_dict = figs_per_horse.get(h, {})
         figs_list = figs_dict.get('SPD', []) if isinstance(figs_dict, dict) else []
         recent_figs = figs_list[1:4] if figs_list and len(figs_list) > 1 else []
@@ -684,15 +684,18 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
         if horse_fracs:
             horse_avg_frac = np.mean([f[0] for f in horse_fracs[:3]])
             adj += 0.09 if horse_avg_frac <= best_frac + 2 else 0
-        adj += 0.10 if surface_type=="Turf" and a["dam_sire"][0] >= 19 else 0
-        adj += 0.09 if distance_bucket(distance_txt)=="8f+" and a["dam_sire"][1] >= 22 else 0
-        adj += min(sum(p for p in a["patterns"] if p>0) * 0.02, 0.12)
-        adj += a["trips"] * 0.06 if a["trips"] >= 2 else 0
+        dam_sire = a.get("dam_sire", (0, 0))
+        adj += 0.10 if surface_type=="Turf" and dam_sire[0] >= 19 else 0
+        adj += 0.09 if distance_bucket(distance_txt)=="8f+" and dam_sire[1] >= 22 else 0
+        patterns = a.get("patterns", [])
+        adj += min(sum(p for p in patterns if isinstance(p, (int, float)) and p > 0) * 0.02, 0.12)
+        adj += a.get("trips", 0) * 0.06 if a.get("trips", 0) >= 2 else 0
         adj += 0.11 if figs_list and len(figs_list) >= 3 and figs_list[0] > figs_list[1] > figs_list[2] else 0
-        adj += 0.07 if a["equip"] and "Lasix Off" not in a["equip"] else 0
-        adj -= 0.09 if a["bounce"] else 0
-        adj += 0.08 if condition_txt in ("muddy","sloppy") and a["sire_mud"] >= 18 else 0
-        adj += 0.06 if a["owner_roi"] > 0 else 0
+        equip = a.get("equip", "")
+        adj += 0.07 if equip and "Lasix Off" not in equip else 0
+        adj -= 0.09 if a.get("bounce", False) else 0
+        adj += 0.08 if condition_txt in ("muddy","sloppy") and a.get("sire_mud", 0) >= 18 else 0
+        adj += 0.06 if a.get("owner_roi", 0) > 0 else 0
         
         # Trainer Intent Signals
         intent = trainer_intent_per_horse.get(h, {})
