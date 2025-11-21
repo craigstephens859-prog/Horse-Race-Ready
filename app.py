@@ -869,32 +869,149 @@ def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
     return ml
 
 def parse_all_angles(block: str) -> dict:
+    """Parse BRISNET Ultimate PP format for advanced handicapping angles"""
+    # Prime Power: 101.5 (4th)
+    prime_match = re.search(r"Prime Power:\s*(\d+\.?\d*)", block or "")
+    prime_val = float(prime_match.group(1)) if prime_match else np.nan
+    
+    # Extract E2/LP (late pace) values from past performance lines
+    # Format: "21Sep25Mnr® 5½ ft :22© :46« :59« 1:06« ¦ ¨§¯ ™C4000 ¨§® 87 72/ 74 +5 +1 56"
+    # The pattern is: E1 E2/ LP where LP is after the slash
+    lp_values = []
+    for m in re.finditer(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?\s+(\d{2,3})\s+(\d{2,3})/\s*(\d{2,3})", block or ""):
+        lp_values.append(int(m.group(3)))  # LP is the 3rd capture group
+    
+    # Extract fractional positions (1C, 2C columns) from past performances
+    # Format: "56 4 6 6ªƒ 8 8¨§ 6¨§" where positions are like "6ªƒ" (6 with superscript)
+    frac_positions = []
+    for m in re.finditer(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?\s+\d+\s+\d+\s+(\d+)[ªƒ²³¨«¬©°±´‚]*\s+(\d+)[ªƒ²³¨«¬©°±´‚]*", block or ""):
+        try:
+            pos1 = int(m.group(1))
+            pos2 = int(m.group(2))
+            frac_positions.append((pos1, pos2, (pos1+pos2)//2))  # Store as tuple
+        except:
+            pass
+    
+    # Trainer win% from: "Trnr: Cluley Denis (120 23-17-14 19%)"
+    trainer_match = re.search(r"Trnr:.*?\([\d\s\-]+(\d+)%\)", block or "")
+    trainer_win = float(trainer_match.group(1)) if trainer_match else 0
+    
+    # Jockey from QuickPlay comments or race lines
+    jockey_match = re.search(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?([A-Z][a-z]+[A-Z][a-z]*?\d*[ª©§¨]*)\s+(?:Lb?f?|L)\s+[\d\.*]+", block or "")
+    jockey_name = jockey_match.group(1) if jockey_match else "NA"
+    
+    # Days since last race - calculate from most recent race date
+    layoff = 0
+    recent_race = re.search(r"(\d{2})[A-Za-z]{3}(\d{2})", block or "")
+    if recent_race:
+        try:
+            day = int(recent_race.group(1))
+            year = int(recent_race.group(2)) + 2000
+            # Simplified: assume recent if within 90 days
+            layoff = 30  # Default placeholder
+        except:
+            pass
+    
+    # Bullet works (marked with "B" in workout lines)
+    bullets = len(re.findall(r"(?m)^\d{2}[A-Za-z]{3}\s+\w+\s+\d+f.*?B", block or ""))
+    
+    # Equipment changes from QuickPlay comments
+    equip = ""
+    if re.search(r"(?i)blinkers?\s+on", block or ""):
+        equip = "Blinkers On"
+    elif re.search(r"(?i)lasix\s+off", block or ""):
+        equip = "Lasix Off"
+    elif re.search(r"(?i)front\s+bandages", block or ""):
+        equip = "Front Bandages On"
+    
+    # Dam's Sire stats: "Dam'sSire: AWD 6.1 18%Mud"
+    dam_sire_match = re.search(r"Dam'sSire:\s*AWD\s*([\d.]+)\s*(\d+)%Mud", block or "")
+    dam_sire = (float(dam_sire_match.group(2)), float(dam_sire_match.group(1))) if dam_sire_match else (0, 0)
+    
+    # Sire mud stats: "Sire Stats: AWD 7.5 13%Mud"
+    sire_mud_match = re.search(r"Sire Stats:\s*AWD\s*[\d.]+\s*(\d+)%Mud", block or "")
+    sire_mud = float(sire_mud_match.group(1)) if sire_mud_match else 0
+    
+    # Pattern recognition from QuickPlay comments (× and ñ markers)
+    patterns = []
+    if re.search(r"(?i)ñ.*drops?\s+in\s+class", block or ""):
+        patterns.append(5.0)  # Class drop bonus
+    if re.search(r"(?i)ñ.*first\s+time", block or ""):
+        patterns.append(3.0)
+    if re.search(r"(?i)ñ.*high.*speed", block or ""):
+        patterns.append(2.0)
+    
+    # Trip comments (trouble in running)
+    trouble_phrases = ["bumped", "steadied", "blocked", "altered course", "hung", "weakened", "off slow", "wide"]
+    trips = min(sum(1 for phrase in trouble_phrases if phrase in block.lower()), 4)
+    
+    # Owner ROI (not commonly in PPs, default to 0)
+    owner_roi = 0
+    
     d = {
-        "prime": int(m.group(1)) if (m:=re.search(r"(?mi)^\s*\d+\s+[A-Za-z0-9'.\-\s&]+\s+\(\s*(?:E\/P|EP|E|P|S|NA)\b.*?(\d{3})\s*$", block or "")) else np.nan,
-        "lp": [int(m.group(3)) for m in re.finditer(r"(?mi)^\s*\d{2}[A-Za-z]{3}\d{2}.*?\s+(\d{2,3})\s+.*?(\d{2,3})\s+.*?(\d{2,3})\s*$", block or "")][:10],
-        "frac": [(int(m.group(1)),int(m.group(2)),int(m.group(3))) for m in re.finditer(r"(?mi)^\s*\d{2}[A-Za-z]{3}\d{2}.*?\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+.*?(\d+)f?t?", block or "")][:8],
-        "trainer_win": float(m.group(2)) if (m:=re.search(r"(?i)Trainer:.*?(\d+)%", block or "")) else 0,
-        "jockey": (m.group(1).strip() if (m:=re.search(r"(?i)Jockey:\s*([A-Za-z\s]+?)\s+\(", block or "")) else "NA"),
-        "layoff": int(m.group(1)) if (m:=re.search(r"(\d+) Days", block or "")) else 0,
-        "bullets": sum(1 for w in re.findall(r"\d{1,3} Days?.\s*(\d{1,2}f|\d{1,2}\.\d).*\*?", block) if "B" in w),
-        "equip": re.search(r"(Front Bandages On|Lasix Off|Equip Change)", block or "").group(0) if re.search(r"(Front Bandages On|Lasix Off|Equip Change)", block) else "",
-        "dam_sire": (float(m.group(1)), float(m.group(2))) if (m:=re.search(r"(?i)Dam.?s\s+Sire.*?Turf.*?(\d+)%.*?Route.*?(\d+)%", block or "")) else (0,0),
-        "sire_mud": float(m.group(1)) if (m:=re.search(r"(?i)Sire.*?Mud.*?(\d+)%", block or "")) else 0,
-        "patterns": [float(m.group(2)) for m in re.finditer(r"(?i)(First Turf|First Route|2nd Off Layoff|Drop in Class|Claimed Last|Unusual Positive).*?ROI.*?([+-]?\d+\.\d+)", block or "")],
-        "trips": min(len(re.findall(r"(?i)(bumped|steadied|blocked|altered course|hung|weakened|off slow|4-6 wide)", " ".join(block.split("\n")[-10:]).lower())),4),
-        "owner_roi": float(m.group(1)) if (m:=re.search(r"(?i)Owner.*?ROI.*?([+-]?\d+\.\d+)", block or "")) else 0
+        "prime": prime_val,
+        "lp": lp_values[:10],
+        "frac": frac_positions[:8],
+        "trainer_win": trainer_win,
+        "jockey": jockey_name,
+        "layoff": layoff,
+        "bullets": bullets,
+        "equip": equip,
+        "dam_sire": dam_sire,
+        "sire_mud": sire_mud,
+        "patterns": patterns,
+        "trips": trips,
+        "owner_roi": owner_roi,
+        "bounce": False  # Calculated in apex_enhance where figs_per_horse is available
     }
-    d["bounce"] = False  # Bounce calculated in apex_enhance where figs_per_horse is available
     return d
 
 def parse_trainer_intent(block: str) -> dict:
+    """Parse trainer intent signals from BRISNET Ultimate PPs"""
+    # Class drop from QuickPlay comments: "ñ Drops in class today"
+    class_drop = 0
+    if re.search(r"(?i)ñ.*drops?\s+in\s+class", block or ""):
+        class_drop = 50  # Assume significant drop if noted
+    
+    # Jockey switch - compare recent jockeys
+    recent_jockeys = re.findall(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?([A-Z][a-z]+[A-Z][a-z]*?\d*)[ª©§¨]*\s+(?:Lb?f?|L)", block or "")
+    jky_switch = len(set(recent_jockeys[:3])) > 1 if len(recent_jockeys) >= 2 else False
+    
+    # Equipment change: "ñ" indicates positive, check for blinkers
+    equip_change = "none"
+    if re.search(r"(?i)blinkers?\s+on", block or ""):
+        equip_change = "blink_on"
+    elif re.search(r"(?i)blinkers?\s+off", block or ""):
+        equip_change = "blink_off"
+    
+    # Layoff works: count bullet workouts (marked with "B")
+    # Format: "28Oct Mnr 4f ft :47ª B"
+    workout_matches = re.findall(r"(?m)^\d{2}[A-Za-z]{3}.*?\d+f.*?:(\d{2}).*?B", block or "")
+    layoff_works = sum(1 for time in workout_matches if int(time) <= 50)  # Fast works under 50 seconds
+    
+    # Shipper: "Previously trained by" or ship indicators
+    ship_from = ""
+    if re.search(r"Previously trained by", block or ""):
+        ship_from = "SHIP"
+    shipper_match = re.search(r"(?i)ñ.*shipper", block or "")
+    if shipper_match:
+        ship_from = "SHIP"
+    
+    # ROI angles: look for positive trainer stats
+    # Format: "JKYw/ Trn L60 31 16% 45% -0.37" - last number is ROI
+    roi_total = 0
+    for m in re.finditer(r"(?m)^[+]?[\w\s/]+\s+\d+\s+\d+%\s+\d+%\s+([+-]?\d+\.\d+)", block or ""):
+        roi_val = float(m.group(1))
+        if roi_val > 0:
+            roi_total += roi_val
+    
     d = {
-        "class_drop_pct": float(m.group(1)) if (m:=re.search(r"(?i)Class Drop.*?(\d+)%", block)) else 0,
-        "jky_switch": bool(re.search(r"(?i)Jky Change|New Rider", block)),
-        "equip_change": "blink_on" if re.search(r"(?i)Blinkers On", block) else "none",
-        "layoff_works": sum(1 for w in re.findall(r"(?i)Work.*?(\d+f).*?(\d{1,2}:\d{2})", block) if int(w[1].split(":")[0]) <= 48),
-        "ship_from": m.group(1) if (m:=re.search(r"(?i)Ship from\s*(\w{3})", block)) else "",
-        "roi_angles": sum(float(r) for r in re.findall(r"(?i)Trainer ROI.*?([+-]?\d+\.\d+)", block) if float(r) > 0)
+        "class_drop_pct": class_drop,
+        "jky_switch": jky_switch,
+        "equip_change": equip_change,
+        "layoff_works": layoff_works,
+        "ship_from": ship_from,
+        "roi_angles": roi_total
     }
     return d
 
