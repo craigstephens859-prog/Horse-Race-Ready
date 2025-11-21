@@ -2271,7 +2271,7 @@ for i, (rbias, pbias) in enumerate(scenarios):
         
         # Add custom display columns
         disp["Frac1"] = disp["Horse"].map(lambda h: round(np.mean([f[0] for f in all_angles_per_horse.get(h, {}).get("frac",[(99,)])[:3]]),1) if all_angles_per_horse.get(h) else 99)
-        disp["ParBeat"] = disp["Horse"].map(lambda h: max([f-today_par for f in figs_per_horse.get(h,[])[1:4]], default=0))
+        disp["ParBeat"] = disp["Horse"].map(lambda h: max([f-today_par for f in figs_per_horse.get(h, {}).get('SPD', [])[1:4]], default=0))
         
         # Add Drift column (odds drift percentage)
         disp["Drift"] = disp["Horse"].map(lambda h: round(max(0, (str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) - str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "Live Odds"].iloc[0])) / str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0])) * 100, 1) if h in df_final_field["Horse"].values and str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) else 0)
