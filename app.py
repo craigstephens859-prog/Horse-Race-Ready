@@ -641,9 +641,17 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
     if "AvgTop2" not in df.columns:
         df["AvgTop2"] = MODEL_CONFIG['first_timer_fig_default']
     
-    max_prime = df["Prime"].max()
-    avg_lp = np.nanmean([np.mean(a["lp"] or [50]) for a in all_angles_per_horse.values()])
-    best_frac = min([np.mean([f[0] for f in a["frac"]][:3]) for a in all_angles_per_horse.values()], default=99)
+    # Safe calculations with fallbacks if data is missing
+    max_prime = df["Prime"].max() if not df["Prime"].isna().all() else 0
+    if pd.isna(max_prime):
+        max_prime = 0
+    
+    lp_values = [np.mean(a["lp"] or [50]) for a in all_angles_per_horse.values() if a.get("lp")]
+    avg_lp = np.nanmean(lp_values) if lp_values else 50
+    
+    frac_values = [np.mean([f[0] for f in a["frac"]][:3]) for a in all_angles_per_horse.values() if a.get("frac")]
+    best_frac = min(frac_values) if frac_values else 99
+    
     race_avg_avgtop2 = df["AvgTop2"].mean()
     
     for i, r in df.iterrows():
@@ -652,7 +660,13 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
             continue
         a = all_angles_per_horse[h]
         adj = (r["AvgTop2"] - race_avg_avgtop2) * MODEL_CONFIG["speed_fig_weight"]
-        adj += (r["Prime"] - max_prime) * 0.09 + (np.mean(a["lp"] or [50]) - avg_lp) * 0.07
+        
+        # Safe Prime adjustment (handle NaN)
+        prime_val = r["Prime"] if not pd.isna(r["Prime"]) else 0
+        adj += (prime_val - max_prime) * 0.09
+        
+        # Safe LP adjustment
+        adj += (np.mean(a.get("lp") or [50]) - avg_lp) * 0.07
         adj += 0.08 if a["trainer_win"] >= 23 else 0
         adj += 0.07 if any(j in a["jockey"] for j in ["Irad Ortiz Jr","Flavien Prat","Jose Ortiz","Joel Rosario","John Velazquez","Tyler Gaffalione"]) else 0
         adj += 0.10 if 45 <= a["layoff"] <= 180 and a["bullets"] >= 3 else 0
@@ -663,8 +677,13 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
         figs_list = figs_dict.get('SPD', []) if isinstance(figs_dict, dict) else []
         recent_figs = figs_list[1:4] if figs_list and len(figs_list) > 1 else []
         adj += 0.08 if recent_figs and max(recent_figs) >= today_par + 8 else 0
-        adj += 0.11 if r["Style"] not in ("E","E/P") and np.mean(a["lp"] or [50]) >= avg_lp + 8 else 0
-        adj += 0.09 if np.mean([f[0] for f in a["frac"]][:3]) <= best_frac + 2 else 0
+        adj += 0.11 if r["Style"] not in ("E","E/P") and np.mean(a.get("lp") or [50]) >= avg_lp + 8 else 0
+        
+        # Safe frac calculation
+        horse_fracs = a.get("frac", [])
+        if horse_fracs:
+            horse_avg_frac = np.mean([f[0] for f in horse_fracs[:3]])
+            adj += 0.09 if horse_avg_frac <= best_frac + 2 else 0
         adj += 0.10 if surface_type=="Turf" and a["dam_sire"][0] >= 19 else 0
         adj += 0.09 if distance_bucket(distance_txt)=="8f+" and a["dam_sire"][1] >= 22 else 0
         adj += min(sum(p for p in a["patterns"] if p>0) * 0.02, 0.12)
