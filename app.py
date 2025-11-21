@@ -1259,14 +1259,11 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     
     df = ratings_df.copy()
 
-    # --- ADD PRIME POWER AND APEX ENHANCEMENT ---
-    df["Prime"] = df["Horse"].map(lambda h: all_angles_per_horse.get(h, {}).get("prime", np.nan))
-    df = apex_enhance(df)
-
-    # --- SPEED FIGURE LOGIC ---
+    # --- MERGE SPEED FIGURES FIRST ---
     if figs_df.empty or "AvgTop2" not in figs_df.columns:
         # No figures were parsed or dataframe is empty
         st.caption("No speed figures parsed. R_ENHANCE_ADJ set to 0.")
+        df["AvgTop2"] = MODEL_CONFIG['first_timer_fig_default']
         df["R_ENHANCE_ADJ"] = 0.0
     else:
         # 1. Merge the figures into the main ratings dataframe
@@ -1279,15 +1276,18 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
 
         # 3. Define the enhancement (R_ENHANCE_ADJ)
         SPEED_FIG_WEIGHT = MODEL_CONFIG['speed_fig_weight']
-        
+
         df["R_ENHANCE_ADJ"] = (df["AvgTop2"] - race_avg_fig) * SPEED_FIG_WEIGHT
-        
-        # 4. Clean up the temporary column
+
+    # --- ADD PRIME POWER AND APEX ENHANCEMENT (after AvgTop2 is available) ---
+    df["Prime"] = df["Horse"].map(lambda h: all_angles_per_horse.get(h, {}).get("prime", np.nan))
+    df = apex_enhance(df)
+
+    # Clean up the temporary AvgTop2 column if it exists
+    if "AvgTop2" in df.columns:
         df.drop(columns=["AvgTop2"], inplace=True)
 
-    # --- END SPEED FIGURE LOGIC ---
-
-    # Apply the final adjustment
+    # --- END SPEED FIGURE LOGIC ---    # Apply the final adjustment
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0) # Ensure no NaNs
     df["R"] = (df["R"].astype(float) + df["R_ENHANCE_ADJ"].astype(float)).round(2)
     
