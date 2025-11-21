@@ -1418,12 +1418,12 @@ def str_to_decimal_odds(s: str) -> Optional[float]:
 # ---------- Safe market/ML adjust helpers (NaN-proof) ----------
 def _implied_prob_from_str(odds_str: str) -> float:
     dec = str_to_decimal_odds(str(odds_str).strip())
-    if dec is None or dec <= 0:
-        return np.nan
+    if dec is None or dec <= 0: return np.nan
     return 1.0 / dec
 
 def _safe_normalize_prob_map(prob_map: Dict[str, float]) -> Dict[str, float]:
-    keys, vals = list(prob_map.keys()), np.array([max(float(v), 0.0) for v in prob_map.values()], float)
+    keys = list(prob_map.keys())
+    vals = np.array([max(float(v), 0.0) for v in prob_map.values()], dtype=float)
     s = float(vals.sum())
     if s <= 0:
         n = max(len(keys), 1)
@@ -1434,8 +1434,7 @@ def _build_market_table(df_field: pd.DataFrame, fair_probs: Dict[str, float]) ->
     rows = []
     for _, r in df_field.iterrows():
         h = str(r.get("Horse","")).strip()
-        if not h: 
-            continue
+        if not h: continue
         ml_s   = str(r.get("ML","") or "").strip()
         live_s = str(r.get("Live Odds","") or "").strip()
         rows.append({
@@ -1446,9 +1445,8 @@ def _build_market_table(df_field: pd.DataFrame, fair_probs: Dict[str, float]) ->
         })
     return pd.DataFrame(rows)
 
-# race-type driven alpha (more chaotic classes lean slightly more on market)
 def _alpha_from_race_type(race_type: str) -> float:
-    base = base_class_bias.get((race_type or "").strip().lower(), 1.02)  # 0.90..1.15
+    base = base_class_bias.get((race_type or "").strip().lower(), 1.02)  # 0.90..1.15 constants
     alpha = (base - 0.90) / (1.15 - 0.90) * (0.55 - 0.15) + 0.15
     return float(np.clip(alpha, 0.15, 0.55))
 
@@ -1460,10 +1458,8 @@ def adjust_probs_with_market(df_market: pd.DataFrame, race_type: str) -> Dict[st
     for _, row in df_market.iterrows():
         h = row["Horse"]; live_p = row.get("live_prob", np.nan); ml_p = row.get("ml_prob", np.nan)
         obs[h] = live_p if (live_p == live_p) else (ml_p if (ml_p == ml_p) else np.nan)
-    # if nobody has market odds, return normalized fair
-    if all((v != v) for v in obs.values()):
+    if all((v != v) for v in obs.values()):  # all NaN
         return _safe_normalize_prob_map(fair)
-    # fill missing with fair, normalize both, blend, normalize
     obs_filled = {h: (fair[h] if (v != v) else float(v)) for h, v in obs.items()}
     fair_n = _safe_normalize_prob_map(fair)
     obs_n  = _safe_normalize_prob_map(obs_filled)
