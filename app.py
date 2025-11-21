@@ -1427,7 +1427,9 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
 
     # --- ADD PRIME POWER AND APEX ENHANCEMENT (after AvgTop2 is available) ---
     df["Prime"] = df["Horse"].map(lambda h: all_angles_per_horse.get(h, {}).get("prime", np.nan))
+    st.caption(f"🔍 Added Prime column: {df['Prime'].notna().sum()} horses with values, sample={df['Prime'].head(3).tolist()}")
     df = apex_enhance(df)  # apex_enhance already adds APEX to R internally
+    st.caption(f"🔍 After apex_enhance: APEX column exists={('APEX' in df.columns)}, R column sample={df['R'].head(3).tolist()}")
 
     # Clean up the temporary AvgTop2 column if it exists
     if "AvgTop2" in df.columns:
@@ -1999,11 +2001,17 @@ for _post, name, block in split_into_horse_chunks(pp_text):
 st.caption(f"🔍 Parsed all_angles_per_horse for {len(all_angles_per_horse)} horses")
 if all_angles_per_horse:
     sample_horse = list(all_angles_per_horse.keys())[0]
-    st.caption(f"Sample data for {sample_horse}: prime={all_angles_per_horse[sample_horse].get('prime', 'N/A')}")
+    sample_data = all_angles_per_horse[sample_horse]
+    st.caption(f"✓ Sample: {sample_horse} → prime={sample_data.get('prime', 'N/A')}, trainer_win={sample_data.get('trainer_win', 'N/A')}, lp count={len(sample_data.get('lp', []))}")
+else:
+    st.error("❌ all_angles_per_horse is EMPTY - parsing failed!")
+    
 st.caption(f"🔍 Parsed trainer_intent_per_horse for {len(trainer_intent_per_horse)} horses")
 if trainer_intent_per_horse:
     sample_horse = list(trainer_intent_per_horse.keys())[0]
-    st.caption(f"Sample intent for {sample_horse}: {trainer_intent_per_horse[sample_horse]}")
+    st.caption(f"✓ Sample intent: {sample_horse} → {trainer_intent_per_horse[sample_horse]}")
+else:
+    st.error("❌ trainer_intent_per_horse is EMPTY - parsing failed!")
 
 # Create the figs_df
 figs_data = []
@@ -2488,6 +2496,16 @@ for i, (rbias, pbias) in enumerate(scenarios):
         # Add Intent column (sum of trainer intent numeric signals)
         disp["Intent"] = disp["Horse"].map(lambda h: round(sum([v for k,v in trainer_intent_per_horse.get(h, {}).items() if isinstance(v, (int,float))]), 2))
         
+        # Debug: Check what's in disp before cleanup
+        st.caption(f"🔍 Display columns before cleanup: {list(disp.columns)}")
+        st.caption(f"🔍 Prime in disp: {'Prime' in disp.columns}, APEX in disp: {'APEX' in disp.columns}, R in disp: {'R' in disp.columns}")
+        if "Prime" in disp.columns:
+            st.caption(f"🔍 Prime sample values: {disp['Prime'].head(3).tolist()}")
+        if "APEX" in disp.columns:
+            st.caption(f"🔍 APEX sample values: {disp['APEX'].head(3).tolist()}")
+        if "R" in disp.columns:
+            st.caption(f"🔍 R sample values: {disp['R'].head(3).tolist()}")
+        
         # Clean up NaN values for display
         if "Prime" in disp.columns:
             disp["Prime"] = disp["Prime"].fillna(0).astype(int)
@@ -2500,6 +2518,7 @@ for i, (rbias, pbias) in enumerate(scenarios):
         display_cols = ["#","Horse","Prime","R","Frac1","ParBeat","Drift","Intent","APEX","Fair %","Fair Odds"]
         # Only include columns that exist
         display_cols = [c for c in display_cols if c in disp.columns]
+        st.caption(f"🔍 Final display_cols to show: {display_cols}")
         disp = disp[display_cols]
         
         st.dataframe(
