@@ -659,7 +659,8 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
         adj += 0.12 if any("Drop in Class" in p for p in a["patterns"]) else 0
         adj += 0.05 if "Front Bandages On" in a["equip"] else 0
         adj -= 0.08 if "Lasix Off" in a["equip"] else 0
-        figs_list = figs_per_horse.get(h,[]) or []
+        figs_dict = figs_per_horse.get(h, {})
+        figs_list = figs_dict.get('SPD', []) if isinstance(figs_dict, dict) else []
         recent_figs = figs_list[1:4] if figs_list and len(figs_list) > 1 else []
         adj += 0.08 if recent_figs and max(recent_figs) >= today_par + 8 else 0
         adj += 0.11 if r["Style"] not in ("E","E/P") and np.mean(a["lp"] or [50]) >= avg_lp + 8 else 0
