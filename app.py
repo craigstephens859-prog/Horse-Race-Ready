@@ -640,7 +640,10 @@ def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
     avg_lp = np.nanmean([np.mean(a["lp"] or [50]) for a in all_angles_per_horse.values()])
     best_frac = min([np.mean([f[0] for f in a["frac"]][:3]) for a in all_angles_per_horse.values()], default=99)
     for i, r in df.iterrows():
-        h, a = r["Horse"], all_angles_per_horse[h]
+        h = r["Horse"]
+        if h not in all_angles_per_horse:
+            continue
+        a = all_angles_per_horse[h]
         adj = (df["AvgTop2"] - df["AvgTop2"].mean()) * MODEL_CONFIG["speed_fig_weight"]
         adj += (r["Prime"] - max_prime) * 0.09 + (np.mean(a["lp"] or [50]) - avg_lp) * 0.07
         adj += 0.08 if a["trainer_win"] >= 23 else 0
