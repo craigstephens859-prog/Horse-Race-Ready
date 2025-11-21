@@ -2370,13 +2370,8 @@ for i, (rbias, pbias) in enumerate(scenarios):
 # Ensure primary key exists before accessing
 if scenarios:
     primary_key = scenarios[0]
-    if primary_key in all_scenario_ratings:
-        primary_df, primary_probs = all_scenario_ratings[primary_key]
-        st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
-    else:
-        st.error("Primary scenario ratings not found. Check calculations.")
-        primary_df, primary_probs = pd.DataFrame(), {} # Assign defaults
-        st.stop()
+    primary_df, primary_probs = all_scenario_ratings[primary_key]  # this is use_probs now
+    st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
 else:
     st.error("No scenarios generated. Check bias selections.")
     primary_df, primary_probs = pd.DataFrame(), {} # Assign defaults
