@@ -2371,6 +2371,14 @@ for i, (rbias, pbias) in enumerate(scenarios):
         # Add Intent column (sum of trainer intent numeric signals)
         disp["Intent"] = disp["Horse"].map(lambda h: round(sum([v for k,v in trainer_intent_per_horse.get(h, {}).items() if isinstance(v, (int,float))]), 2))
         
+        # Clean up NaN values for display
+        if "Prime" in disp.columns:
+            disp["Prime"] = disp["Prime"].fillna(0).astype(int)
+        if "APEX" in disp.columns:
+            disp["APEX"] = disp["APEX"].fillna(0.0)
+        if "Intent" in disp.columns:
+            disp["Intent"] = disp["Intent"].fillna(0.0)
+        
         # Select and reorder columns for display
         display_cols = ["#","Horse","Prime","R","Frac1","ParBeat","Drift","Intent","APEX","Fair %","Fair Odds"]
         # Only include columns that exist
