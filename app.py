@@ -2636,7 +2636,11 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     # --- 2. A/B/C/D Grouping Logic (Simplified) ---
     A_group, B_group, C_group, D_group = [], [], [], []
     
-    all_horses = primary_df['Horse'].tolist()
+    # FIXED: Sort horses by FINAL BLENDED PROBABILITY (includes live odds), not just R rating
+    # This ensures live odds impact the finish order predictions
+    primary_probs_sorted = sorted(primary_probs.items(), key=lambda x: x[1], reverse=True)
+    all_horses = [h for h, p in primary_probs_sorted]  # Horses ordered by blended probability
+    
     pos_ev_horses = set(df_ol[df_ol["EV per $1"] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
     neg_ev_horses = set(df_ol[df_ol["EV per $1"] < -0.05]['Horse'].tolist()) if not df_ol.empty else set()
     
