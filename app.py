@@ -2493,8 +2493,30 @@ for i, (rbias, pbias) in enumerate(scenarios):
         disp["Frac1"] = disp["Horse"].map(lambda h: round(np.mean([f[0] for f in all_angles_per_horse.get(h, {}).get("frac",[(99,)])[:3]]),1) if all_angles_per_horse.get(h) else 99)
         disp["ParBeat"] = disp["Horse"].map(lambda h: max([f-today_par for f in figs_per_horse.get(h, {}).get('SPD', [])[1:4]], default=0))
         
-        # Add Drift column (odds drift percentage)
-        disp["Drift"] = disp["Horse"].map(lambda h: round(max(0, (str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) - str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "Live Odds"].iloc[0])) / str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0])) * 100, 1) if h in df_final_field["Horse"].values and str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) else 0)
+        # Add Drift column (odds drift percentage: positive = shortening/coming in, negative = drifting out)
+        def calculate_drift(horse_name):
+            if horse_name not in df_final_field["Horse"].values:
+                return 0.0
+            horse_row = df_final_field.loc[df_final_field["Horse"] == horse_name].iloc[0]
+            ml_str = str(horse_row.get("ML", "")).strip()
+            live_str = str(horse_row.get("Live Odds", "")).strip()
+            
+            # If no live odds entered, no drift
+            if not live_str or live_str == ml_str:
+                return 0.0
+            
+            ml_dec = str_to_decimal_odds(ml_str)
+            live_dec = str_to_decimal_odds(live_str)
+            
+            if not ml_dec or ml_dec <= 1 or not live_dec or live_dec <= 1:
+                return 0.0
+            
+            # Drift % = ((ML - Live) / ML) * 100
+            # Positive = odds shortened (more money), Negative = odds drifted (less money)
+            drift_pct = ((ml_dec - live_dec) / ml_dec) * 100
+            return round(drift_pct, 1)
+        
+        disp["Drift"] = disp["Horse"].map(calculate_drift)
         
         # Add Intent column (sum of trainer intent numeric signals)
         disp["Intent"] = disp["Horse"].map(lambda h: round(sum([v for k,v in trainer_intent_per_horse.get(h, {}).items() if isinstance(v, (int,float))]), 2))
