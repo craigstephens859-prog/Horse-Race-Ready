@@ -1394,6 +1394,31 @@ def parse_prime_power_for_block(block: str) -> float:
     m = prime_re.search(block)
     return float(m.group(1)) if m else np.nan
 
+def parse_ep_lp_trip_for_block(block: str) -> Dict:
+    """Parse Early Pace/Late Pace and trip excuse comments from BRISNET PP block"""
+    out = {"avg_lp": np.nan, "excuse_count": 0}
+    
+    # EP/LP: Collect last 3 races' LP values
+    # Format: CR E1/E2 LP from speed figure lines
+    pace_re = re.compile(r'(?mi)(\d+)\s+(\d+)/\s*(\d+)\s+(\d+)')  # CR E1/E2 LP SPD
+    lps = []
+    for m in pace_re.finditer(block):
+        try:
+            lp = int(m.group(3))  # LP is group 3
+            if 40 < lp < 130:
+                lps.append(lp)
+        except (ValueError, IndexError):
+            pass
+    out["avg_lp"] = np.mean(lps[:3]) if lps else np.nan
+    
+    # Trip notes: Count keywords in comments for excuse tracking
+    trip_keywords = ["blocked", "wide", "steadied", "checked", "bumped", "altered course"]
+    comment_text = block.lower()
+    excuse_count = sum(comment_text.count(k) for k in trip_keywords)
+    out["excuse_count"] = min(excuse_count, 3)  # Cap at 3 for last 3 races
+    
+    return out
+
 # ---------- Probability helpers ----------
 def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
     if ratings.size == 0:
@@ -2019,6 +2044,7 @@ df_editor = st.data_editor(df_styles, use_container_width=True, column_config=co
 
 angles_per_horse: Dict[str, pd.DataFrame] = {}
 pedigree_per_horse: Dict[str, dict] = {}
+ep_lp_trip_per_horse: Dict[str, Dict] = {}
 figs_per_horse: Dict[str, dict] = {}  # Changed from List[int] to dict
 jockey_trainer_per_horse: Dict[str, dict] = {}
 jock_train_per_horse: Dict[str, Dict] = {}
@@ -2036,6 +2062,7 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         blocks[name] = block
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
+        ep_lp_trip_per_horse[name] = parse_ep_lp_trip_for_block(block)
         jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
         jock_train_per_horse[name] = parse_jock_train_for_block(block)
         running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
@@ -2440,6 +2467,14 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         
         prime = parse_prime_power_for_block(blocks.get(name, ""))
         prime_bonus = (prime - field_avg_prime) * 0.005 if not np.isnan(prime) and not np.isnan(field_avg_prime) else 0
+
+        # EP/LP/Trip Enhancement Bonus
+        pace_data = ep_lp_trip_per_horse.get(name, {})
+        field_avg_lp = np.nanmean([d.get("avg_lp", np.nan) for d in ep_lp_trip_per_horse.values()])
+        lp_bonus = 0.06 if pace_data.get("avg_lp", 0) > field_avg_lp + 10 and ppi_map.get(name, 0) > 0.5 else 0
+        excuse_bonus = min(pace_data.get("excuse_count", 0) * 0.03, 0.09)
+        pace_enh_bonus = lp_bonus + excuse_bonus
+        cpace += pace_enh_bonus
 
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
