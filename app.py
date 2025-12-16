@@ -188,7 +188,13 @@ MODEL_CONFIG = {
         "ex_max": 6, "ex_min_prob": 0.015,
         "tri_max": 10, "tri_min_prob": 0.008,
         "sup_max": 12, "sup_min_prob": 0.006,
-    }
+    },
+    
+    # --- Jockey & Trainer Intent Bonuses ---
+    "intent_max_bonus": 0.20,
+    "trainer_roi_bonus_per": 0.05,
+    "jock_win_bonus_per": 0.60,
+    "jock_upgrade_bonus_per": 0.04,
 }
 
 # =========================
@@ -1043,6 +1049,37 @@ def parse_pedigree_snips(block: str) -> dict:
     d = re.search(r'(?mi)^\s*Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%', block or "")
     if d:
         out["dam_dpi"] = float(d.group(1))
+    return out
+
+def parse_jock_train_for_block(block: str) -> Dict:
+    """Parse jockey win%, trainer ROI, and situational stats from BRISNET PP block"""
+    out = {"jock_win_pct": np.nan, "jock_roi": np.nan, "trainer_roi": np.nan, "trainer_situational": {}}
+    
+    # Jockey regex: Jky: (starts wins-2nds-3rds .win $ROI)
+    jock_re = re.compile(r'(?mi)Jky:\s*\((\d+)\s*(\d+)-(\d+)-(\d+)\s*\.(\d+)\s*\$\s*([\d.]+)\)')
+    m = jock_re.search(block)
+    if m:
+        out["jock_win_pct"] = float(m.group(5)) / 100
+        out["jock_roi"] = float(m.group(6))
+    
+    # Trainer regex similar
+    train_re = re.compile(r'(?mi)Trn:\s*\((\d+)\s*(\d+)-(\d+)-(\d+)\s*\.(\d+)\s*\$\s*([\d.]+)\)')
+    m = train_re.search(block)
+    if m:
+        out["trainer_roi"] = float(m.group(6))
+    
+    # Situationals: e.g., Shipper 52 15% 35% +0.23
+    sit_re = re.compile(r'(?mi)([A-Za-z]+)\s*(\d+)\s*(\d+)%\s*(\d+)%\s*([+-][\d.]+)')
+    for m in sit_re.finditer(block):
+        cat, starts, win_pct, itm_pct, roi = m.groups()
+        out["trainer_situational"][cat] = {"win_pct": int(win_pct), "roi": float(roi)}
+    
+    # Last race purse for class drop (e.g., Purse $50,000)
+    last_purse_re = re.compile(r'(?mi)Purse\s*\$\s*([\d,]+)')
+    m = last_purse_re.search(block)  # Assume first match is last race
+    last_purse = int(m.group(1).replace(",", "")) if m else np.nan
+    out["last_purse"] = last_purse
+    
     return out
 
 def parse_jockey_trainer_for_block(block: str, debug: bool = False) -> dict:
@@ -1978,6 +2015,7 @@ angles_per_horse: Dict[str, pd.DataFrame] = {}
 pedigree_per_horse: Dict[str, dict] = {}
 figs_per_horse: Dict[str, dict] = {}  # Changed from List[int] to dict
 jockey_trainer_per_horse: Dict[str, dict] = {}
+jock_train_per_horse: Dict[str, Dict] = {}
 running_style_per_horse: Dict[str, dict] = {}
 quickplay_per_horse: Dict[str, dict] = {}
 workout_per_horse: Dict[str, dict] = {}
@@ -1991,6 +2029,7 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
         jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
+        jock_train_per_horse[name] = parse_jock_train_for_block(block)
         running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
         quickplay_per_horse[name] = parse_quickplay_comments_for_block(block, debug=False)
         workout_per_horse[name] = parse_recent_workout_for_block(block, debug=False)
@@ -2368,12 +2407,28 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         cstyle = style_match_score(mapped_bias, style, quirin) # Pass potential NaN
         cpost  = post_bias_score(post_bias_pick, post)
         cpace  = float(ppi_map.get(name, 0.0))
+        
+        # Jockey/Trainer Intent Bonus
+        jt_data = jock_train_per_horse.get(name, {})  # Assume stored like pedigree_per_horse
+        last_purse = jt_data.get("last_purse", np.nan)
+        drop_pct = (purse_val - last_purse) / last_purse if last_purse > 0 else 0
+        drop_bonus = MODEL_CONFIG['class_drop_bonus'] if drop_pct < -0.20 else 0  # Negative for drop
+        
+        jock_bonus = max(0, (jt_data.get("jock_win_pct", 0) - 0.15) * MODEL_CONFIG['jock_win_bonus_per'])
+        trainer_bonus = max(0, (jt_data.get("trainer_roi", 1.0) - 1.0) * MODEL_CONFIG['trainer_roi_bonus_per'])
+        
+        # Jock upgrade: Compare to avg jock_win (compute field avg)
+        field_avg_jock_win = np.nanmean([d.get("jock_win_pct", np.nan) for d in jock_train_per_horse.values()])
+        upgrade_diff = jt_data.get("jock_win_pct", 0) - field_avg_jock_win
+        upgrade_bonus = max(0, upgrade_diff * MODEL_CONFIG['jock_upgrade_bonus_per'])
+        
+        intent_bonus = min(MODEL_CONFIG['intent_max_bonus'], drop_bonus + jock_bonus + trainer_bonus + upgrade_bonus)
 
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
         c_class = float(row.get("Cclass", 0.0))
 
-        arace = c_class + cstyle + cpost + cpace + a_track
+        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus
         R     = arace
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
