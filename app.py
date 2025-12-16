@@ -1388,6 +1388,12 @@ def parse_speed_figures_for_block(block: str, debug: bool = False) -> dict:
     
     return result
 
+def parse_prime_power_for_block(block: str) -> float:
+    """Extract Prime Power bonus from BRISNET PP block"""
+    prime_re = re.compile(r'(?mi)Prime\s*Power:\s*(\d+\.\d+)')
+    m = prime_re.search(block)
+    return float(m.group(1)) if m else np.nan
+
 # ---------- Probability helpers ----------
 def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
     if ratings.size == 0:
@@ -2023,9 +2029,11 @@ prime_power_per_horse: Dict[str, dict] = {}
 equip_lasix_per_horse: Dict[str, Tuple[str, str]] = {}
 all_angles_per_horse: Dict[str, dict] = {}
 trainer_intent_per_horse: Dict[str, dict] = {}
+blocks: Dict[str, str] = {}
 
 for _post, name, block in split_into_horse_chunks(pp_text):
     if name in df_editor["Horse"].values:
+        blocks[name] = block
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
         jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
@@ -2424,11 +2432,20 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         
         intent_bonus = min(MODEL_CONFIG['intent_max_bonus'], drop_bonus + jock_bonus + trainer_bonus + upgrade_bonus)
 
+        # Prime Power Bonus - calculate field average once
+        if _ == 0:
+            all_primes = [parse_prime_power_for_block(blocks.get(row_inner["Horse"], "")) 
+                         for _, row_inner in df_styles.iterrows()]
+            field_avg_prime = np.nanmean([p for p in all_primes if not np.isnan(p)])
+        
+        prime = parse_prime_power_for_block(blocks.get(name, ""))
+        prime_bonus = (prime - field_avg_prime) * 0.005 if not np.isnan(prime) and not np.isnan(field_avg_prime) else 0
+
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
         c_class = float(row.get("Cclass", 0.0))
 
-        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus
+        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus
         R     = arace
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
