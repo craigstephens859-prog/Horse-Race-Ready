@@ -3049,17 +3049,68 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     contender_report += "**Primary Challengers (B-Group):**\n" + format_horse_list(B_group) + "\n"
     contender_report += "* _Logical contenders expected to finish 2nd or 3rd. Use directly underneath A-Group horses._\n"
     
+    # --- 3a. Most Likely Winner Analysis (NEW) ---
     top_rated_horse = all_horses[0]
+    top_prob = primary_probs.get(top_rated_horse, 0)
     is_overlay = top_rated_horse in pos_ev_horses
+    is_underlay = top_rated_horse in neg_ev_horses
     top_ml_str = name_to_ml.get(top_rated_horse, '100')
     top_ml_dec = str_to_decimal_odds(top_ml_str) or 101
-    is_underlay = not is_overlay and (primary_probs.get(top_rated_horse, 0) > (1 / top_ml_dec)) and top_ml_dec < 4 # Define underlay as < 3/1
-
-    if is_overlay:
-         contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
-    elif is_underlay:
-         contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
+    top_live_odds = df_final_field[df_final_field["Horse"] == top_rated_horse]["Live Odds"].values
+    top_live_dec = str_to_decimal_odds(str(top_live_odds[0])) if len(top_live_odds) > 0 and top_live_odds[0] else top_ml_dec
     
+    most_likely_section = f"### 🎯 Most Likely Winner (Model Prediction)\n"
+    most_likely_section += f"**#{name_to_post.get(top_rated_horse, '?')} - {top_rated_horse}**\n\n"
+    most_likely_section += f"* **Model Probability:** {top_prob*100:.1f}% (highest among all runners)\n"
+    most_likely_section += f"* **Morning Line:** {top_ml_str} (dec: {top_ml_dec:.2f})\n"
+    most_likely_section += f"* **Current Live Odds:** {top_live_dec:.2f} (dec)\n"
+    
+    if is_underlay:
+        most_likely_section += f"* **Betting Status:** 🔴 **UNDERLAY** - Odds are shorter than fair value. Use primarily under other horses in exotics; careful on win bets.\n"
+    elif is_overlay:
+        most_likely_section += f"* **Betting Status:** 🟢 **OVERLAY** - Odds are better than fair value. Strong value play; consider win and exacta top.\n"
+    else:
+        most_likely_section += f"* **Betting Status:** 🟡 **FAIR** - Odds approximately match model probability.\n"
+    
+    most_likely_section += f"\n**Why This Horse Wins Most Often (Per Model):**\n"
+    
+    # Build reasoning from top horse's data
+    top_horse_row = primary_df[primary_df["Horse"] == top_rated_horse].iloc[0] if not primary_df[primary_df["Horse"] == top_rated_horse].empty else None
+    if top_horse_row is not None:
+        reasoning = []
+        
+        # Check R rating components
+        if top_horse_row.get("Cclass", 0) > 0:
+            reasoning.append(f"✓ Strong class rating ({top_horse_row['Cclass']:.2f}) - fits field well")
+        
+        if top_horse_row.get("Cstyle", 0) > 0.05:
+            reasoning.append(f"✓ Excellent style match ({top_horse_row['Cstyle']:.2f}) - track bias favors running style")
+        
+        if top_horse_row.get("Cpace", 0) > 0.1:
+            reasoning.append(f"✓ Pace tailwind ({top_horse_row['Cpace']:.2f}) - field setup helps this horse")
+        
+        if not pd.isna(top_horse_row.get("LastFig")) and top_horse_row.get("LastFig", 0) > 80:
+            reasoning.append(f"✓ Strong recent speed figure ({top_horse_row['LastFig']:.0f}) - racing in form")
+        
+        if top_horse_row.get("Atrack", 0) > 0.05:
+            reasoning.append(f"✓ Track bias advantage ({top_horse_row['Atrack']:.2f}) - specific track/distance bias")
+        
+        # Check jockey/trainer data
+        jt_data = jock_train_per_horse.get(top_rated_horse, {})
+        if jt_data.get("jock_win_pct", 0) > 0.20:
+            reasoning.append(f"✓ Elite jockey ({jt_data['jock_win_pct']*100:.0f}% win rate) - top rider")
+        
+        if jt_data.get("trainer_roi", 1.0) > 1.05:
+            reasoning.append(f"✓ Positive trainer ROI ({jt_data['trainer_roi']:.2f}) - trainer adds value")
+        
+        if reasoning:
+            for r in reasoning[:4]:  # Top 4 reasons
+                most_likely_section += f"{r}\n"
+        else:
+            most_likely_section += f"✓ Best overall rating ({primary_df['R'].max():.2f}) among field\n"
+    
+    most_likely_section += f"\n**Confidence Level:** {'HIGH' if top_prob > 0.25 else 'MEDIUM' if top_prob > 0.15 else 'MODERATE'} ({top_prob*100:.0f}% model probability)\n"
+    contender_report += f"\n{most_likely_section}"
     # Add trainer intent note if strong signals detected
     if trainer_intent_per_horse.get(top_rated_horse, {}).get("roi_angles", 0) > 2:
         contender_report += f"\n**Trainer Intent Note:** Strong signals (ROI {trainer_intent_per_horse[top_rated_horse]['roi_angles']:.1f}) indicate win today.\n"
