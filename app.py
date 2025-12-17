@@ -14,6 +14,7 @@
 
 import os, re, json, math
 from typing import Dict, List, Tuple, Optional
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -179,6 +180,9 @@ MODEL_CONFIG = {
     
     # --- Exotics & Strategy ---
     "exotic_bias_weights": (1.30, 1.15, 1.05, 1.03), # (1st, 2nd, 3rd, 4th) Harville bias
+    "positions_to_sim": 5,  # For SH5
+    "top_for_pos": [2, 2, 3, 3, 3],  # 1st:2, 2nd:2, 3rd:3, 4th:3, 5th:3
+    "closer_bias_high_ppi": 0.35,  # Probability boost for closers when PPI > 0.5
     "strategy_confident": { # Placeholders, not used by new strategy builder
         "ex_max": 4, "ex_min_prob": 0.020,
         "tri_max": 6, "tri_min_prob": 0.010,
@@ -195,6 +199,11 @@ MODEL_CONFIG = {
     "trainer_roi_bonus_per": 0.05,
     "jock_win_bonus_per": 0.60,
     "jock_upgrade_bonus_per": 0.04,
+    
+    # --- Dynamic Exotic Probabilities ---
+    "positions_to_sim": 5,  # For SH5
+    "top_for_pos": [2, 2, 3, 3, 3],  # 1st:2, 2nd:2, 3rd:3, 4th:3, 5th:3
+    "closer_bias_high_ppi": 0.35,  # Probability of boosting closer in high-PPI scenarios
 }
 
 # =========================
@@ -2582,6 +2591,83 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
     return {h: p[i] for i, h in enumerate(ratings_df["Horse"].values)}
 
 
+def dynamic_exotic_probs(win_probs: Dict[str, float], ppi_val: float, df_styles: pd.DataFrame,
+                         positions: int = 5, sims: int = 20000) -> List[List[str]]:
+    """
+    Simulate exotic race outcomes with common-sense closer bias in high-PPI scenarios.
+    Returns list of simulated outcomes (each outcome is a list of horses in finish order).
+    """
+    horses = list(win_probs.keys())
+    probs = np.array(list(win_probs.values()))
+    style_map = dict(zip(df_styles["Horse"], df_styles["Style"]))  # For closer bias
+    outcomes = []
+    
+    for _ in range(sims):
+        idx = np.random.choice(range(len(horses)), positions, replace=False, p=probs / probs.sum())
+        outcome = [horses[i] for i in idx]
+        
+        # Common-sense bias: In high PPI (>0.5), boost closers (P/S) probability for 3rd/4th/5th
+        if ppi_val > 0.5:
+            closer_horses = [h for h in outcome if style_map.get(h, '') in ["P", "S"]]
+            if closer_horses and np.random.rand() < MODEL_CONFIG['closer_bias_high_ppi']:
+                # Randomly promote a closer to 3rd-5th if in top 2
+                closer = np.random.choice(closer_horses)
+                curr_pos = outcome.index(closer)
+                if curr_pos < 2:
+                    target_pos = np.random.choice([2, 3, 4])
+                    outcome[curr_pos], outcome[target_pos] = outcome[target_pos], outcome[curr_pos]
+        
+        outcomes.append(outcome)
+    
+    return outcomes
+
+
+def extract_probable_positions(outcomes: List[List[str]]) -> Dict[str, List[Tuple[str, int]]]:
+    """
+    Extract most probable horses for each position from simulated outcomes.
+    Returns dict with keys "Pos1", "Pos2", etc., each containing top N horses by frequency.
+    """
+    pos_counters = [Counter([o[i] for o in outcomes]) for i in range(MODEL_CONFIG['positions_to_sim'])]
+    probables = {}
+    
+    for pos in range(1, MODEL_CONFIG['positions_to_sim'] + 1):
+        top_n = MODEL_CONFIG['top_for_pos'][pos-1]
+        probables[f"Pos{pos}"] = pos_counters[pos-1].most_common(top_n)
+    
+    return probables
+
+
+def generate_bet_outcomes(probables: Dict[str, List[Tuple[str, int]]]) -> str:
+    """
+    Generate human-readable betting recommendations from probable positions.
+    Covers Win, Exacta, Trifecta, Superfecta, and Super High 5.
+    """
+    report = "### Most Probable Finishing Outcomes (Common-Sense Bets)\n"
+    
+    # Win: Top 2 for 1st (straight bets, key underlays)
+    top1 = [h for h, _ in probables["Pos1"]]
+    report += f"**Win (1st Place):** Most likely 2 winners: {top1[0]} (underlay if short odds - key it), {top1[1] if len(top1)>1 else 'None'} (value overlay bet).\n"
+    
+    # Exacta: Top 2 1st / Top 2 2nd (straight + box)
+    top2 = [h for h, _ in probables["Pos2"]]
+    report += f"**Exacta (1st-2nd):** Wheel {top1[0]}/{top2[0]},{top2[1]} or box top 2 1st/2nd ({'/'.join(top1 + top2)}).\n"
+    
+    # Trifecta: Add Top 3 3rd (wheels + part-box)
+    top3 = [h for h, _ in probables["Pos3"]]
+    report += f"**Trifecta (1st-3rd):** Wheel {top1[0]}/{top2[0]},{top2[1]}/{top3[0]},{top3[1]},{top3[2]} (key underlay on top, spread overlays underneath).\n"
+    
+    # Superfecta: Add Top 3 4th
+    top4 = [h for h, _ in probables["Pos4"]]
+    report += f"**Superfecta (1st-4th):** Part-wheel {top1[0]}/{top2[0]},{top2[1]}/{top3[0]},{top3[1]},{top3[2]}/{top4[0]},{top4[1]},{top4[2]} (common-sense: Tight on top if underlay dominant).\n"
+    
+    # SH5: Add Top 3 5th (wide wheel for value bombs)
+    top5 = [h for h, _ in probables["Pos5"]] if "Pos5" in probables else []
+    if top5:
+        report += f"**Super High 5 (1st-5th):** Wheel {top1[0]}/{top2[0]},{top2[1]}/{top3[0]},{top3[1]},{top3[2]}/{top4[0]},{top4[1]},{top4[2]}/{top5[0]},{top5[1]},{top5[2]} (spread wide underneath for overlays in meltdowns).\n"
+    
+    return report
+
+
 # Build scenarios
 scenarios = [(s, p) for s in running_style_biases for p in post_biases]
 tabs = st.tabs([f"S: {s} | P: {p}" for s,p in scenarios])
@@ -2994,6 +3080,12 @@ if st.button("Analyze This Race", type="primary", key="analyze_button"):
             strategy_report_md = build_betting_strategy(
                 primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
             )
+            
+            # --- 2a. NEW: Generate Dynamic Exotic Probabilities ---
+            exotic_outcomes = dynamic_exotic_probs(primary_probs, ppi_val, primary_df, sims=MODEL_CONFIG['exotic_sims'])
+            probables = extract_probable_positions(exotic_outcomes)
+            bet_outcomes_report = generate_bet_outcomes(probables)
+            strategy_report_md += f"\n{bet_outcomes_report}"
 
             # --- 3. Update the LLM Prompt ---
             prompt = f"""
