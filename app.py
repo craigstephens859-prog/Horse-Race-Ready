@@ -1816,21 +1816,35 @@ def parse_pedigree_spi(block: str) -> dict:
     try:
         # Look for SPI (Sire Production Index) - typically decimal 0.3-0.7 range
         # Format variations:
-        # "Sire: {name} SPI .36"
+        # "Sire: {name} SPI .36"  (.36 format without leading 0)
         # "Sire Production Index: 0.36"
-        # "SPI .36"
-        spi_match = re.search(r'(?mi)(?:Sire[^:]*:|SPI)\s*\.?(\d\.\d+|\d+\.\d+)', block)
+        # "SPI .36" or "SPI 0.36"
+        # Pattern: SPI followed by optional space, then decimal (with or without leading 0)
+        spi_match = re.search(r'(?mi)SPI\s+[.\d]+(\d)', block)
+        if not spi_match:
+            # Try alternate: just "SPI" followed by a decimal number
+            spi_match = re.search(r'(?mi)SPI\s+(\.\d+|\d+\.\d+)', block)
         if spi_match:
-            spi_text = spi_match.group(1)
-            # Handle cases like ".36" -> 0.36 or "0.36"
-            spi_val = float(spi_text) if '.' in spi_text else float(spi_text) / 100.0
+            spi_text = spi_match.group(1) if spi_match.lastindex == 1 and '.' not in str(spi_match.group(1)) else spi_match.group(0).split()[-1]
+            if not '.' in str(spi_text):
+                # Re-extract just the number part
+                num_match = re.search(r'(\.\d+|\d+\.\d+)', spi_match.group(0))
+                spi_text = num_match.group(1) if num_match else spi_text
+            # Convert to float, handle ".36" format
+            if spi_text.startswith('.'):
+                spi_val = float('0' + spi_text)
+            else:
+                spi_val = float(spi_text)
             out["spi"] = spi_val
         
         # Dam-Sire SPI (production index of dam's sire)
-        dam_sire_match = re.search(r'(?mi)Dam[\s-]*Sire.*?SPI\s*\.?(\d\.\d+|\d+\.\d+)', block)
+        dam_sire_match = re.search(r'(?mi)Dam[\s-]*Sire.*?SPI\s+(\.\d+|\d+\.\d+)', block)
         if dam_sire_match:
             dam_sire_text = dam_sire_match.group(1)
-            dam_sire_val = float(dam_sire_text) if '.' in dam_sire_text else float(dam_sire_text) / 100.0
+            if dam_sire_text.startswith('.'):
+                dam_sire_val = float('0' + dam_sire_text)
+            else:
+                dam_sire_val = float(dam_sire_text)
             out["dam_sire_spi"] = dam_sire_val
     except:
         pass
@@ -1849,31 +1863,34 @@ def parse_pedigree_surface_stats(block: str) -> dict:
         return out
     
     try:
-        # Extract Sire % statistics (Mud, Turf)
-        # Format: "Mud 23%" "Turf 19%"
-        sire_section = re.search(r'(?mi)Sire[^D]*?(?=Dam|$)', block)
-        if sire_section:
-            section_text = sire_section.group(0)
-            
-            # Sire Mud %
-            mud_match = re.search(r'(?mi)Mud\s+(\d+)%', section_text)
-            if mud_match:
-                out["sire_mud_pct"] = float(mud_match.group(1))
-            
-            # Sire Turf %
-            turf_match = re.search(r'(?mi)Turf\s+(\d+)%', section_text)
-            if turf_match:
-                out["sire_turf_pct"] = float(turf_match.group(1))
+        # Look for surface percentages anywhere in the block
+        # First, find all "Mud XX%" and "Turf XX%" patterns
+        mud_matches = list(re.finditer(r'(?mi)Mud\s+(\d+)%', block))
+        turf_matches = list(re.finditer(r'(?mi)Turf\s+(\d+)%', block))
         
-        # Extract Dam-Sire % statistics (primarily Mud)
-        dam_sire_section = re.search(r'(?mi)Dam[\s-]*Sire[^\\n]*', block)
-        if dam_sire_section:
-            ds_text = dam_sire_section.group(0)
+        # Check if Dam-Sire section exists
+        if 'dam' in block.lower() and 'sire' in block.lower():
+            dam_sire_pos = block.lower().find('dam')
             
-            # Dam-Sire Mud %
-            ds_mud_match = re.search(r'(?mi)Mud\s+(\d+)%', ds_text)
-            if ds_mud_match:
-                out["dam_sire_mud_pct"] = float(ds_mud_match.group(1))
+            # Find which mud % comes before dam-sire line (= Sire Mud)
+            for m in mud_matches:
+                if m.start() < dam_sire_pos:
+                    out["sire_mud_pct"] = float(m.group(1))
+                    break
+            
+            # Find which mud % comes after dam-sire (= Dam-Sire Mud)
+            for m in mud_matches:
+                if m.start() > dam_sire_pos:
+                    out["dam_sire_mud_pct"] = float(m.group(1))
+                    break
+        else:
+            # No dam-sire section, all percentages are for sire
+            if mud_matches:
+                out["sire_mud_pct"] = float(mud_matches[0].group(1))
+        
+        # Turf is usually associated with sire, not dam-sire as often
+        if turf_matches:
+            out["sire_turf_pct"] = float(turf_matches[0].group(1))
     except:
         pass
     
