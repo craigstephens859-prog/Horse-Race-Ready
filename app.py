@@ -233,6 +233,30 @@ MODEL_CONFIG = {
     "positions_to_sim": 5,  # For SH5
     "top_for_pos": [2, 2, 3, 3, 3],  # 1st:2, 2nd:2, 3rd:3, 4th:3, 5th:3
     "closer_bias_high_ppi": 0.35,  # Probability of boosting closer in high-PPI scenarios
+    
+    # --- TIER 1: BRISNET Pedigree Ratings (NEW) ---
+    "bris_ped_fast_bonus": 0.06,  # Fast track specialist
+    "bris_ped_off_bonus": 0.05,  # Off-track specialist (mud/sloppy)
+    "bris_ped_distance_bonus": 0.07,  # Distance specialist
+    "bris_ped_turf_bonus": 0.06,  # Turf specialist
+    "bris_ped_rating_threshold": 85,  # Bonus applied if rating >= threshold
+    
+    # --- TIER 1: Dam Production Index Bonus (NEW) ---
+    "dpi_bonus_threshold": 1.5,  # Apply bonus if DPI > 1.5 (dam produces above-average earners)
+    "dpi_bonus": 0.05,  # Bonus for high DPI
+    
+    # --- TIER 1: Surface-Specific Record Penalty (NEW) ---
+    "surface_mismatch_off_penalty": -0.06,  # Penalize poor off-track record on mud
+    "surface_mismatch_dirt_penalty": -0.05,  # Penalize poor dirt record on dirt
+    "surface_specialist_threshold_good": 0.40,  # Strong record threshold
+    "surface_specialist_threshold_poor": 0.20,  # Poor record threshold
+    
+    # --- PART 2 ENHANCEMENT: CR/RR Performance Ratio (NEW) ---
+    "cr_rr_outperform_threshold": 0.95,  # Ratio >= 0.95 = performing close to field RR
+    "cr_rr_excellent_threshold": 1.00,   # Ratio >= 1.00 = performing above field
+    "cr_rr_outperform_bonus": 0.06,      # Bonus if ratio >= 0.95
+    "cr_rr_excellent_bonus": 0.10,       # Bonus if ratio >= 1.00
+    "cr_rr_consistency_bonus": 0.04,     # Bonus for consistent CR performances
 }
 
 # =========================
@@ -1432,6 +1456,44 @@ def parse_prime_power_for_block(block: str) -> float:
     m = prime_re.search(block)
     return float(m.group(1)) if m else np.nan
 
+def parse_cr_rr_history(figs_dict: dict) -> dict:
+    """
+    Calculate CR/RR performance metrics from parsed speed figures.
+    Returns dict with: avg_cr, avg_rr, cr_rr_ratio, consistency_score
+    """
+    out = {"avg_cr": np.nan, "avg_rr": np.nan, "cr_rr_ratio": np.nan, "consistency": 0.0}
+    
+    try:
+        cr_list = figs_dict.get("CR", [])
+        rr_list = figs_dict.get("RR", [])
+        
+        if len(cr_list) > 0 and len(rr_list) > 0:
+            # Average CR and RR (most recent 5 races)
+            avg_cr = np.mean(cr_list[:5]) if len(cr_list) >= 1 else np.nan
+            avg_rr = np.mean(rr_list[:5]) if len(rr_list) >= 1 else np.nan
+            
+            out["avg_cr"] = avg_cr
+            out["avg_rr"] = avg_rr
+            
+            # CR/RR ratio: how much does horse outperform the field?
+            # Ratio > 1.0 means horse performs better than field quality
+            # Ratio >= 0.95 = very good (performing close to or above field RR)
+            if pd.notna(avg_rr) and avg_rr > 0:
+                cr_rr_ratio = avg_cr / avg_rr
+                out["cr_rr_ratio"] = cr_rr_ratio
+            
+            # Consistency score: Do CR performances vary widely or stay consistent?
+            # Low std dev = reliable performer
+            if len(cr_list) >= 3:
+                cr_std = np.std(cr_list[:5])
+                # Normalize to 0-1 scale (lower std = higher consistency)
+                consistency = max(0.0, 1.0 - (cr_std / 20.0))  # 20 point std dev = 0 consistency
+                out["consistency"] = consistency
+    except:
+        pass
+    
+    return out
+
 def parse_ep_lp_trip_for_block(block: str) -> Dict:
     """Parse Early Pace/Late Pace and trip excuse comments from BRISNET PP block"""
     out = {"avg_lp": np.nan, "excuse_count": 0}
@@ -1484,6 +1546,81 @@ def parse_expanded_ped_work_layoff(block: str) -> Dict:
     m = lay_re.search(block or "")
     if m:
         out["days_off"] = int(m.group(1))
+    
+    return out
+
+def parse_bris_pedigree_ratings(block: str) -> dict:
+    """
+    Extract BRISNET Pedigree Ratings (Fast/Off/Distance/Turf) from PP block.
+    Format: "Pedigree: Fast 89, Off 84, Distance 92, Turf 88"
+    Returns dict with keys: fast_ped, off_ped, distance_ped, turf_ped
+    """
+    out = {"fast_ped": np.nan, "off_ped": np.nan, "distance_ped": np.nan, "turf_ped": np.nan}
+    
+    if not block:
+        return out
+    
+    # Parse BRISNET pedigree ratings: Fast, Off, Distance, Turf
+    # Format variations:
+    # "Pedigree: Fast 89, Off 84, Distance 92, Turf 88"
+    # "Fast Ped 89  Off Ped 84  Dist Ped 92  Turf Ped 88"
+    
+    fast_match = re.search(r'(?mi)(?:Fast\s+(?:Ped)?|Pedigree:?\s*Fast)\s*(\d+)', block)
+    if fast_match:
+        out["fast_ped"] = float(fast_match.group(1))
+    
+    off_match = re.search(r'(?mi)(?:Off\s+(?:Ped)?|Off\s+Surface)\s*(\d+)', block)
+    if off_match:
+        out["off_ped"] = float(off_match.group(1))
+    
+    dist_match = re.search(r'(?mi)(?:Distance\s+(?:Ped)?|Dist(?:ance)?\s+Ped)\s*(\d+)', block)
+    if dist_match:
+        out["distance_ped"] = float(dist_match.group(1))
+    
+    turf_match = re.search(r'(?mi)(?:Turf\s+(?:Ped)?|Turf\s+Pedigree)\s*(\d+)', block)
+    if turf_match:
+        out["turf_ped"] = float(turf_match.group(1))
+    
+    return out
+
+def parse_surface_specific_record(block: str) -> dict:
+    """
+    Extract surface-specific record (dirt/turf/off-track) from PP history.
+    Returns dict with keys: dirt_record, turf_record, off_track_record (each as dict with 'wins', 'itmr', 'starts')
+    """
+    out = {
+        "dirt_record": {"wins": 0, "itmr": 0, "starts": 0, "win_pct": 0.0},
+        "turf_record": {"wins": 0, "itmr": 0, "starts": 0, "win_pct": 0.0},
+        "off_track_record": {"wins": 0, "itmr": 0, "starts": 0, "win_pct": 0.0},
+    }
+    
+    if not block:
+        return out
+    
+    try:
+        # Parse surface records from summary lines (typical BRISNET format)
+        # Format: "On Dirt: 5 wins-8 2nd-4 3rd (23 starts) or 22% Win, 57% ITM"
+        # Look for surface-specific lines with win/ITM/starts info
+        
+        dirt_match = re.search(r'(?mi)(?:on\s+)?dirt:?\s*(\d+)\s+(?:wins?|w)\s*-?\s*(\d+)\s+(?:2nds?|2)\s*-?\s*(\d+)\s+(?:3rds?|3)\s*\((\d+)\s+(?:starts?|st)\)', block)
+        if dirt_match:
+            wins, seconds, thirds, starts = map(int, dirt_match.groups())
+            itmr = wins + seconds + thirds
+            out["dirt_record"] = {"wins": wins, "itmr": itmr, "starts": starts, "win_pct": wins/starts if starts > 0 else 0.0}
+        
+        turf_match = re.search(r'(?mi)(?:on\s+)?turf:?\s*(\d+)\s+(?:wins?|w)\s*-?\s*(\d+)\s+(?:2nds?|2)\s*-?\s*(\d+)\s+(?:3rds?|3)\s*\((\d+)\s+(?:starts?|st)\)', block)
+        if turf_match:
+            wins, seconds, thirds, starts = map(int, turf_match.groups())
+            itmr = wins + seconds + thirds
+            out["turf_record"] = {"wins": wins, "itmr": itmr, "starts": starts, "win_pct": wins/starts if starts > 0 else 0.0}
+        
+        off_match = re.search(r'(?mi)(?:on\s+)?(?:off-?track|muddy|sloppy):?\s*(\d+)\s+(?:wins?|w)\s*-?\s*(\d+)\s+(?:2nds?|2)\s*-?\s*(\d+)\s+(?:3rds?|3)\s*\((\d+)\s+(?:starts?|st)\)', block)
+        if off_match:
+            wins, seconds, thirds, starts = map(int, off_match.groups())
+            itmr = wins + seconds + thirds
+            out["off_track_record"] = {"wins": wins, "itmr": itmr, "starts": starts, "win_pct": wins/starts if starts > 0 else 0.0}
+    except:
+        pass
     
     return out
 
@@ -2194,6 +2331,9 @@ prime_power_per_horse: Dict[str, dict] = {}
 equip_lasix_per_horse: Dict[str, Tuple[str, str]] = {}
 all_angles_per_horse: Dict[str, dict] = {}
 trainer_intent_per_horse: Dict[str, dict] = {}
+bris_ped_ratings_per_horse: Dict[str, dict] = {}  # NEW: BRISNET Pedigree Ratings
+surface_record_per_horse: Dict[str, dict] = {}  # NEW: Surface-specific records
+cr_rr_per_horse: Dict[str, dict] = {}  # NEW: CR/RR performance ratio history
 blocks: Dict[str, str] = {}
 
 for _post, name, block in split_into_horse_chunks(pp_text):
@@ -2203,6 +2343,8 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         pedigree_per_horse[name] = parse_pedigree_snips(block)
         ep_lp_trip_per_horse[name] = parse_ep_lp_trip_for_block(block)
         expanded_ped_per_horse[name] = parse_expanded_ped_work_layoff(block)
+        bris_ped_ratings_per_horse[name] = parse_bris_pedigree_ratings(block)  # NEW
+        surface_record_per_horse[name] = parse_surface_specific_record(block)  # NEW
         jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
         jock_train_per_horse[name] = parse_jock_train_for_block(block)
         running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
@@ -2210,6 +2352,7 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         workout_per_horse[name] = parse_recent_workout_for_block(block, debug=False)
         prime_power_per_horse[name] = parse_prime_power_for_block(block, debug=False)
         figs_per_horse[name] = parse_speed_figures_for_block(block, debug=False)
+        cr_rr_per_horse[name] = parse_cr_rr_history(figs_per_horse[name])  # NEW: Parse CR/RR metrics
         equip_lasix_per_horse[name] = parse_equip_lasix(block)
         all_angles_per_horse[name] = parse_all_angles(block)
         trainer_intent_per_horse[name] = parse_trainer_intent(block)
@@ -2687,12 +2830,86 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         
         # Sum all new bonuses
         new_features_bonus = trend_bonus + distance_bonus + bounce_penalty + class_trans_penalty + equip_penalty
+        
+        # === TIER 1: BRISNET PEDIGREE RATINGS (NEW) ===
+        bris_ped_bonus = 0.0
+        bris_ped = bris_ped_ratings_per_horse.get(name, {})
+        
+        # Apply bonus if condition matches horse's pedigree strength
+        if surface_type.lower() == "dirt" and pd.notna(bris_ped.get("fast_ped")):
+            if bris_ped["fast_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
+                bris_ped_bonus += MODEL_CONFIG['bris_ped_fast_bonus']
+        
+        if surface_type.lower() == "turf" and pd.notna(bris_ped.get("turf_ped")):
+            if bris_ped["turf_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
+                bris_ped_bonus += MODEL_CONFIG['bris_ped_turf_bonus']
+        
+        if condition_txt.lower() in ("muddy", "sloppy", "heavy") and pd.notna(bris_ped.get("off_ped")):
+            if bris_ped["off_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
+                bris_ped_bonus += MODEL_CONFIG['bris_ped_off_bonus']
+        
+        # Distance specialist bonus (applies to any race)
+        if pd.notna(bris_ped.get("distance_ped")):
+            if bris_ped["distance_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
+                bris_ped_bonus += MODEL_CONFIG['bris_ped_distance_bonus']
+        
+        # === TIER 1: DAM PRODUCTION INDEX BONUS (NEW) ===
+        dpi_bonus = 0.0
+        ped_data = pedigree_per_horse.get(name, {})
+        if pd.notna(ped_data.get("dam_dpi")):
+            if ped_data["dam_dpi"] >= MODEL_CONFIG['dpi_bonus_threshold']:
+                dpi_bonus = MODEL_CONFIG['dpi_bonus']
+        
+        # === TIER 1: SURFACE-SPECIFIC RECORD PENALTY (NEW) ===
+        surface_record_penalty = 0.0
+        surf_record = surface_record_per_horse.get(name, {})
+        
+        # Penalize if moving to surface where horse has poor record but good record elsewhere
+        if surface_type.lower() == "dirt":
+            dirt_rec = surf_record.get("dirt_record", {})
+            off_rec = surf_record.get("off_track_record", {})
+            
+            # If dirt record is poor (<20%) but off-track record is good (>40%), penalize
+            if dirt_rec.get("win_pct", 0) < MODEL_CONFIG['surface_specialist_threshold_poor'] and \
+               off_rec.get("win_pct", 0) > MODEL_CONFIG['surface_specialist_threshold_good']:
+                surface_record_penalty = MODEL_CONFIG['surface_mismatch_dirt_penalty']
+        
+        elif surface_type.lower() == "turf":
+            turf_rec = surf_record.get("turf_record", {})
+            dirt_rec = surf_record.get("dirt_record", {})
+            
+            # If turf record is poor but dirt record is good, apply penalty (less likely on turf)
+            if turf_rec.get("win_pct", 0) < MODEL_CONFIG['surface_specialist_threshold_poor'] and \
+               dirt_rec.get("win_pct", 0) > MODEL_CONFIG['surface_specialist_threshold_good']:
+                surface_record_penalty = MODEL_CONFIG['surface_mismatch_dirt_penalty']
+        
+        # === PART 2 ENHANCEMENT: CR/RR PERFORMANCE RATIO BONUS (NEW) ===
+        cr_rr_bonus = 0.0
+        cr_rr_data = cr_rr_per_horse.get(name, {})
+        cr_rr_ratio = cr_rr_data.get("cr_rr_ratio", np.nan)
+        consistency = cr_rr_data.get("consistency", 0.0)
+        
+        # Bonus if horse consistently performs close to or above field quality
+        if pd.notna(cr_rr_ratio):
+            if cr_rr_ratio >= MODEL_CONFIG['cr_rr_excellent_threshold']:
+                # Horse performing above field quality (CR >= RR)
+                cr_rr_bonus += MODEL_CONFIG['cr_rr_excellent_bonus']
+            elif cr_rr_ratio >= MODEL_CONFIG['cr_rr_outperform_threshold']:
+                # Horse performing close to field quality
+                cr_rr_bonus += MODEL_CONFIG['cr_rr_outperform_bonus']
+        
+        # Additional bonus for consistent performances
+        if consistency > 0.7:  # High consistency
+            cr_rr_bonus += MODEL_CONFIG['cr_rr_consistency_bonus']
+        
+        # Combine all three Tier 1 bonuses + CR/RR bonus
+        tier1_bonus = bris_ped_bonus + dpi_bonus + surface_record_penalty + cr_rr_bonus
 
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
         c_class = float(row.get("Cclass", 0.0))
 
-        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus + new_features_bonus
+        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus + new_features_bonus + tier1_bonus
         R     = arace
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
