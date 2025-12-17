@@ -1053,8 +1053,10 @@ def split_into_horse_chunks(pp_text: str) -> List[tuple]:
         end = matches[i+1].start() if i+1 < len(matches) else len(pp_text)
         post = m.group(1).strip()
         name = m.group(2).strip()
+        style = m.group(3) if m.group(3) else "NA"
+        quirin = m.group(4).strip() if m.group(4) else "0"
         block = pp_text[start:end]
-        chunks.append((post, name, block))
+        chunks.append((post, name, style, quirin, block))
     return chunks
 
 def parse_equip_lasix(block: str) -> Tuple[str, str]:
@@ -1104,7 +1106,7 @@ _ODDS_TOKEN = r"(\d+\s*/\s*\d+|\d+\s*-\s*\d+|[+-]?\d+(?:\.\d+)?)"
 
 def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
     ml = {}
-    blocks = {name: block for _, name, block in split_into_horse_chunks(pp_text)}
+    blocks = {name: block for _, name, _, _, block in split_into_horse_chunks(pp_text)}
     for name, block in blocks.items():
         if name in ml: continue
         m_start = re.search(rf"(?mi)^\s*{_ODDS_TOKEN}", block or "")
@@ -2714,7 +2716,7 @@ awd_analysis_per_horse: Dict[str, dict] = {}  # NEW: Average Winning Distance an
 track_bias_impact_per_horse: Dict[str, dict] = {}  # NEW: Track Bias Impact Values
 blocks: Dict[str, str] = {}
 
-for _post, name, block in split_into_horse_chunks(pp_text):
+for _post, name, style, quirin, block in split_into_horse_chunks(pp_text):
     if name in df_editor["Horse"].values:
         blocks[name] = block
         angles_per_horse[name] = parse_angles_for_block(block)
@@ -2729,7 +2731,7 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         track_bias_impact_per_horse[name] = parse_track_bias_impact_values(block)  # NEW: Impact Values
         jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
         jock_train_per_horse[name] = parse_jock_train_for_block(block)
-        running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
+        running_style_per_horse[name] = {'running_style': _normalize_style(style)}
         quickplay_per_horse[name] = parse_quickplay_comments_for_block(block, debug=False)
         workout_per_horse[name] = parse_recent_workout_for_block(block, debug=False)
         prime_power_per_horse[name] = parse_prime_power_for_block(block)
@@ -3121,6 +3123,11 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
     # Derive per-horse pace tailwind from PPI
     ppi_map = compute_ppi(df_styles).get("by_horse", {})
 
+    # Pre-calculate field average prime power before loop
+    all_primes = [parse_prime_power_for_block(blocks.get(row["Horse"], "")).get('prime_power') 
+                  for _, row in df_styles.iterrows()]
+    field_avg_prime = np.nanmean([p for p in all_primes if p is not None and not np.isnan(p)])
+
     rows = []
     mapped_bias = _style_bias_label_from_choice(running_style_bias)
     for _, row in df_styles.iterrows():
@@ -3149,14 +3156,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         
         intent_bonus = min(MODEL_CONFIG['intent_max_bonus'], drop_bonus + jock_bonus + trainer_bonus + upgrade_bonus)
 
-        # Prime Power Bonus - calculate field average once
-        if _ == 0:
-            all_primes = [parse_prime_power_for_block(blocks.get(row_inner["Horse"], "")) 
-                         for _, row_inner in df_styles.iterrows()]
-            field_avg_prime = np.nanmean([p for p in all_primes if not np.isnan(p)])
-        
-        prime = parse_prime_power_for_block(blocks.get(name, ""))
-        prime_bonus = (prime - field_avg_prime) * 0.005 if not np.isnan(prime) and not np.isnan(field_avg_prime) else 0
+        # Prime Power Bonus (field average calculated before loop)
+        prime_dict = parse_prime_power_for_block(blocks.get(name, ""))
+        prime = prime_dict.get('prime_power') if prime_dict else None
+        prime_bonus = (prime - field_avg_prime) * 0.005 if prime is not None and field_avg_prime is not None and not np.isnan(prime) and not np.isnan(field_avg_prime) else 0
 
         # EP/LP/Trip Enhancement Bonus
         pace_data = ep_lp_trip_per_horse.get(name, {})
