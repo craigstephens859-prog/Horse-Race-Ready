@@ -19,7 +19,15 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import streamlit as st
-from itertools import product
+from itertools import product, permutations
+
+# PuLP for ticket optimization
+try:
+    import pulp
+    PULP_AVAILABLE = True
+except ImportError:
+    PULP_AVAILABLE = False
+    st.warning("⚠️ PuLP not installed. Ticket optimization disabled. Install with: pip install pulp")
 
 # ML imports (optional - graceful fallback if not installed)
 try:
@@ -2664,6 +2672,94 @@ def generate_bet_outcomes(probables: Dict[str, List[Tuple[str, int]]]) -> str:
     top5 = [h for h, _ in probables["Pos5"]] if "Pos5" in probables else []
     if top5:
         report += f"**Super High 5 (1st-5th):** Wheel {top1[0]}/{top2[0]},{top2[1]}/{top3[0]},{top3[1]},{top3[2]}/{top4[0]},{top4[1]},{top4[2]}/{top5[0]},{top5[1]},{top5[2]} (spread wide underneath for overlays in meltdowns).\n"
+    
+    return report
+
+
+def optimize_tickets(outcomes: List[List[str]], probables: Dict[str, List[Tuple[str, int]]],
+                     offered_odds: Dict[str, float], budget: float = 100.0, base_bet: float = 0.10) -> str:
+    """
+    Optimize exotic tickets using PuLP to maximize EV within budget.
+    Focuses on high-probability permutations with key underlay bonuses.
+    """
+    if not PULP_AVAILABLE:
+        return "⚠️ Ticket optimization disabled (PuLP not installed)."
+    
+    # Extract top horses for each position
+    top1_h = [h for h, _ in probables["Pos1"]]
+    top2_h = [h for h, _ in probables["Pos2"]]
+    top3_h = [h for h, _ in probables["Pos3"]]
+    top4_h = [h for h, _ in probables["Pos4"]]
+    top5_h = [h for h, _ in probables["Pos5"]] if "Pos5" in probables else []
+    
+    # Generate candidate supers/SH5 (limit to top combos to avoid explosion)
+    candidate_perms = []
+    try:
+        for p1 in permutations(top1_h + top2_h, 1):  # Top-heavy
+            for p2 in permutations(top2_h + top3_h, 1):
+                for p3 in permutations(top3_h + top4_h, 1):
+                    for p4 in permutations(top4_h + top5_h, 1):
+                        perm = list(p1 + p2 + p3 + p4)
+                        if len(set(perm)) == 4:  # Unique
+                            candidate_perms.append(tuple(perm))
+        
+        if top5_h and len(candidate_perms) > 0:
+            # Extend to SH5, but sample to keep feasible
+            candidate_perms = [p + (np.random.choice(top5_h),) for p in candidate_perms[:100]]  # Cap for PuLP
+    except Exception as e:
+        return f"⚠️ Error generating permutations: {e}"
+    
+    if not candidate_perms:
+        return "⚠️ No candidate permutations generated."
+    
+    # Count frequency of perms in simulations
+    perm_len = len(candidate_perms[0]) if candidate_perms else 4
+    perm_freq = Counter(tuple(o[:perm_len]) for o in outcomes)
+    total_sims = len(outcomes)
+    
+    # Fair payouts based on simulation frequency
+    fair_payouts = {perm: (total_sims / freq) * 2 if freq > 0 else float('inf') 
+                    for perm, freq in perm_freq.items() if perm in candidate_perms}
+    
+    # EV calculation: Rough estimate using offered odds on top horse
+    ev_map = {}
+    for perm in candidate_perms:
+        top_horse_odds = offered_odds.get(perm[0], 5.0)  # Default 4-1
+        prob = perm_freq.get(perm, 1) / total_sims if total_sims > 0 else 0
+        ev = prob * (top_horse_odds - 1) - (1 - prob) if prob > 0 else -1
+        ev_map[perm] = max(ev, 0)  # Positive only
+    
+    # PuLP optimization: Max sum EV s.t. cost <= budget, prefer underlay-top
+    try:
+        prob = pulp.LpProblem("TicketOpt", pulp.LpMaximize)
+        x = pulp.LpVariable.dicts("select", candidate_perms, cat='Binary')
+        
+        # Objective: EV + bonus for underlay tops (odds < 3.0)
+        prob += pulp.lpSum([
+            x[p] * (ev_map.get(p, 0) + (0.1 if offered_odds.get(p[0], 10) < 3.0 else 0))
+            for p in candidate_perms
+        ])
+        
+        # Constraint: Total cost <= budget
+        prob += pulp.lpSum([x[p] * base_bet for p in candidate_perms]) <= budget
+        
+        prob.solve(pulp.PULP_CBC_CMD(msg=0))
+        
+        selected = [p for p in candidate_perms if x[p].value() and x[p].value() > 0.5]
+    except Exception as e:
+        return f"⚠️ PuLP optimization error: {e}"
+    
+    # Build report
+    report = f"**🎯 Optimized Tickets (${budget:.2f} budget, {len(selected)} combos - EV-focused, key underlays on top):**\n"
+    if not selected:
+        report += "No profitable combos found within budget constraints.\n"
+        return report
+    
+    for p in sorted(selected, key=lambda pp: ev_map.get(pp, 0), reverse=True)[:10]:  # Top 10 by EV
+        fair_payout = fair_payouts.get(p, 0)
+        ev_val = ev_map.get(p, 0)
+        perm_str = '/'.join(p)
+        report += f"* `{perm_str}` (Fair Payout: ${fair_payout:.2f}, Est EV: ${ev_val:.2f})\n"
     
     return report
 
