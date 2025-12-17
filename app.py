@@ -3051,6 +3051,13 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 * **Small Fields (<=6):** Focus on Win/Exacta/Trifecta as complex exotics pay less.
 * **Play SH5** mainly on mandatory payout days or when you have a very strong opinion & budget allows.
 """
+    
+    # --- 7. Generate Dynamic Exotic Probabilities ---
+    exotic_outcomes = dynamic_exotic_probs(primary_probs, ppi_val, primary_df, sims=MODEL_CONFIG['exotic_sims'])
+    probables = extract_probable_positions(exotic_outcomes)
+    bet_outcomes_report = generate_bet_outcomes(probables)
+    final_report += f"\n{bet_outcomes_report}"
+    
     return final_report
 
 
@@ -3080,12 +3087,6 @@ if st.button("Analyze This Race", type="primary", key="analyze_button"):
             strategy_report_md = build_betting_strategy(
                 primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
             )
-            
-            # --- 2a. NEW: Generate Dynamic Exotic Probabilities ---
-            exotic_outcomes = dynamic_exotic_probs(primary_probs, ppi_val, primary_df, sims=MODEL_CONFIG['exotic_sims'])
-            probables = extract_probable_positions(exotic_outcomes)
-            bet_outcomes_report = generate_bet_outcomes(probables)
-            strategy_report_md += f"\n{bet_outcomes_report}"
 
             # --- 3. Update the LLM Prompt ---
             prompt = f"""
