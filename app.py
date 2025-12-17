@@ -257,6 +257,27 @@ MODEL_CONFIG = {
     "cr_rr_outperform_bonus": 0.06,      # Bonus if ratio >= 0.95
     "cr_rr_excellent_bonus": 0.10,       # Bonus if ratio >= 1.00
     "cr_rr_consistency_bonus": 0.04,     # Bonus for consistent CR performances
+    
+    # --- TIER 2: PEDIGREE SPI (Sire Production Index) ---
+    "spi_strong_threshold": 1.0,         # SPI >= 1.0 = strong sire
+    "spi_strong_bonus": 0.06,            # Bonus for strong sire
+    "spi_weak_threshold": 0.5,           # SPI <= 0.5 = weak sire
+    "spi_weak_penalty": -0.05,           # Penalty for weak sire
+    
+    # --- TIER 2: SURFACE SPECIALTY STATISTICS (Sire %Mud, %Turf) ---
+    "mud_specialist_threshold": 25,      # Sire %Mud >= 25% = specialist
+    "mud_specialist_bonus": 0.08,        # Bonus for mud specialist
+    "mud_moderate_threshold": 15,        # Sire %Mud >= 15% = moderate
+    "mud_moderate_bonus": 0.04,          # Bonus for moderate mud record
+    "turf_specialist_threshold": 30,     # Sire %Turf >= 30% = specialist
+    "turf_specialist_bonus": 0.08,       # Bonus for turf specialist
+    "turf_moderate_threshold": 20,       # Sire %Turf >= 20% = moderate
+    "turf_moderate_bonus": 0.04,         # Bonus for moderate turf record
+    
+    # --- TIER 2: AWD (Average Winning Distance) MISMATCH PENALTIES ---
+    "awd_large_mismatch_penalty": -0.08,     # 2.0f+ mismatch
+    "awd_moderate_mismatch_penalty": -0.04,  # 1.0-2.0f mismatch
+    "awd_small_mismatch_penalty": -0.02,     # 0.5-1.0f mismatch
 }
 
 # =========================
@@ -810,7 +831,54 @@ def _style_norm(style: str) -> str:
     return "E/P" if s in ("EP", "E/P") else s
 
 def _get_track_bias_delta(track_name: str, surface_type: str, distance_txt: str,
-                          style: str, post_str: str) -> float:
+                          style: str, post_str: str,
+                          impact_values: Optional[dict] = None) -> float:
+    """
+    Calculate track bias delta using Impact Values if available, otherwise fall back to generic profiles.
+    
+    Args:
+        track_name: Name of the racetrack
+        surface_type: Dirt/Turf/Synthetic
+        distance_txt: Race distance (e.g., "6 Furlongs")
+        style: Running style (E, E/P, P, S)
+        post_str: Post position as string
+        impact_values: Dict with structure {'running_style': {...}, 'post_position': {...}}
+    
+    Returns:
+        float: Track bias delta bonus/penalty clipped to [-1.0, 1.0]
+    """
+    
+    # PRIORITY 1: Use Impact Values if provided and present in data
+    if impact_values and isinstance(impact_values, dict):
+        impact_values_data = impact_values.get('running_style', {})
+        post_impact_data = impact_values.get('post_position', {})
+        
+        # Try to extract Impact Values
+        s_norm = _style_norm(style)
+        rs_impact = impact_values_data.get(s_norm, None)
+        
+        post_bucket = _post_bucket(post_str)
+        post_impact = post_impact_data.get(post_bucket, None)
+        
+        # If we have at least one Impact Value, use them (convert from percentage to bonus)
+        # Impact Value 1.41 means +41% edge -> convert to +0.41 bonus
+        if rs_impact is not None or post_impact is not None:
+            rs_delta = 0.0
+            post_delta = 0.0
+            
+            # Running Style Impact: 1.30 means +30% edge = +0.30 bonus
+            if rs_impact is not None:
+                rs_delta = float(rs_impact - 1.0) if rs_impact > 0 else 0.0
+            
+            # Post Position Impact: 1.41 means +41% edge = +0.41 bonus
+            if post_impact is not None:
+                post_delta = float(post_impact - 1.0) if post_impact > 0 else 0.0
+            
+            # Use Impact Values (data-driven)
+            combined_delta = rs_delta + post_delta
+            return float(np.clip(combined_delta, -1.0, 1.0))
+    
+    # FALLBACK: Use generic TRACK_BIAS_PROFILES if Impact Values not available
     canon = _canonical_track(track_name)
     surf  = (surface_type or "Dirt").strip().title()
     buck  = distance_bucket(distance_txt)  # ≤6f / 6.5–7f / 8f+
@@ -823,6 +891,115 @@ def _get_track_bias_delta(track_name: str, surface_type: str, distance_txt: str,
     runstyle_delta = float((cfg.get("runstyle", {}) or {}).get(s_norm, 0.0))
     post_delta     = float((cfg.get("post", {}) or {}).get(_post_bucket(post_str), 0.0))
     return float(np.clip(runstyle_delta + post_delta, -1.0, 1.0))
+
+def calculate_spi_bonus(spi: float, dam_sire_spi: float) -> float:
+    """
+    Calculate bonus/penalty based on Sire Production Index (SPI).
+    SPI < 1.0 = weak sire, SPI > 1.0 = strong sire
+    Typical range: 0.3-0.7 (mostly weak to moderate)
+    
+    Returns: bonus/penalty float
+    """
+    bonus = 0.0
+    
+    # Sire SPI bonus/penalty
+    if pd.notna(spi):
+        if spi >= MODEL_CONFIG.get('spi_strong_threshold', 1.0):
+            bonus += MODEL_CONFIG.get('spi_strong_bonus', 0.06)
+        elif spi <= MODEL_CONFIG.get('spi_weak_threshold', 0.5):
+            bonus += MODEL_CONFIG.get('spi_weak_penalty', -0.05)
+    
+    # Dam-Sire SPI (lesser impact, typically worth 50% of sire impact)
+    if pd.notna(dam_sire_spi):
+        if dam_sire_spi >= MODEL_CONFIG.get('spi_strong_threshold', 1.0):
+            bonus += MODEL_CONFIG.get('spi_strong_bonus', 0.06) * 0.5
+        elif dam_sire_spi <= MODEL_CONFIG.get('spi_weak_threshold', 0.5):
+            bonus += MODEL_CONFIG.get('spi_weak_penalty', -0.05) * 0.5
+    
+    return float(np.clip(bonus, -0.12, 0.12))
+
+def calculate_surface_specialty_bonus(sire_mud_pct: float, sire_turf_pct: float, 
+                                     dam_sire_mud_pct: float, race_condition: str,
+                                     race_surface: str) -> float:
+    """
+    Calculate bonus based on sire surface specialty statistics.
+    High %Mud on off-track races, high %Turf on turf races.
+    
+    Returns: bonus/penalty float
+    """
+    bonus = 0.0
+    
+    # Off-track/Muddy condition bonuses
+    if race_condition.lower() in ("muddy", "sloppy", "heavy", "wet-fast"):
+        if pd.notna(sire_mud_pct):
+            if sire_mud_pct >= MODEL_CONFIG.get('mud_specialist_threshold', 25):
+                bonus += MODEL_CONFIG.get('mud_specialist_bonus', 0.08)
+            elif sire_mud_pct >= MODEL_CONFIG.get('mud_moderate_threshold', 15):
+                bonus += MODEL_CONFIG.get('mud_moderate_bonus', 0.04)
+        
+        if pd.notna(dam_sire_mud_pct):
+            if dam_sire_mud_pct >= MODEL_CONFIG.get('mud_specialist_threshold', 25):
+                bonus += MODEL_CONFIG.get('mud_specialist_bonus', 0.08) * 0.3
+    
+    # Turf condition bonus
+    if race_surface.lower() == "turf" and pd.notna(sire_turf_pct):
+        if sire_turf_pct >= MODEL_CONFIG.get('turf_specialist_threshold', 30):
+            bonus += MODEL_CONFIG.get('turf_specialist_bonus', 0.08)
+        elif sire_turf_pct >= MODEL_CONFIG.get('turf_moderate_threshold', 20):
+            bonus += MODEL_CONFIG.get('turf_moderate_bonus', 0.04)
+    
+    return float(np.clip(bonus, -0.12, 0.12))
+
+def calculate_awd_mismatch_penalty(sire_awd: float, dam_sire_awd: float, 
+                                   race_distance: str) -> float:
+    """
+    Calculate penalty for Average Winning Distance (AWD) mismatch.
+    Horse with shorter AWD may struggle at longer distances and vice versa.
+    
+    Example: Race is 5.5f, but Sire AWD is 7.5f = 2.0f mismatch = significant penalty
+    
+    Returns: penalty float (typically negative)
+    """
+    penalty = 0.0
+    
+    try:
+        # Parse race distance in furlongs
+        race_dist_match = re.search(r'(\d+\.?\d*)\s*(?:Furlongs?|f)?', str(race_distance))
+        if not race_dist_match:
+            return 0.0
+        
+        race_dist_f = float(race_dist_match.group(1))
+        
+        # Sire AWD mismatch
+        if pd.notna(sire_awd):
+            awd_diff = abs(race_dist_f - sire_awd)
+            
+            # Penalty scales with mismatch magnitude
+            # 0.5f mismatch = small penalty (-0.02)
+            # 1.0f mismatch = moderate penalty (-0.04)
+            # 2.0f+ mismatch = large penalty (-0.08)
+            if awd_diff >= 2.0:
+                penalty += MODEL_CONFIG.get('awd_large_mismatch_penalty', -0.08)
+            elif awd_diff >= 1.0:
+                penalty += MODEL_CONFIG.get('awd_moderate_mismatch_penalty', -0.04)
+            elif awd_diff >= 0.5:
+                penalty += MODEL_CONFIG.get('awd_small_mismatch_penalty', -0.02)
+        
+        # Dam-Sire AWD (lesser weight, typically 30% of sire impact)
+        if pd.notna(dam_sire_awd):
+            ds_awd_diff = abs(race_dist_f - dam_sire_awd)
+            
+            if ds_awd_diff >= 2.0:
+                penalty += MODEL_CONFIG.get('awd_large_mismatch_penalty', -0.08) * 0.3
+            elif ds_awd_diff >= 1.0:
+                penalty += MODEL_CONFIG.get('awd_moderate_mismatch_penalty', -0.04) * 0.3
+            elif ds_awd_diff >= 0.5:
+                penalty += MODEL_CONFIG.get('awd_small_mismatch_penalty', -0.02) * 0.3
+    except:
+        pass
+    
+    return float(np.clip(penalty, -0.15, 0.0))
+
 
 # ===================== Core Helpers =====================
 
@@ -1624,6 +1801,192 @@ def parse_surface_specific_record(block: str) -> dict:
     
     return out
 
+def parse_pedigree_spi(block: str) -> dict:
+    """
+    Extract Sire Production Index (SPI) from pedigree section.
+    Format: "Sire: {SireNameHere} {SPI_value}"
+    Example: "Sire: Way of Appeal SPI .36"
+    Returns dict with key 'spi' containing float value or NaN
+    """
+    out = {"spi": np.nan, "dam_sire_spi": np.nan}
+    
+    if not block:
+        return out
+    
+    try:
+        # Look for SPI (Sire Production Index) - typically decimal 0.3-0.7 range
+        # Format variations:
+        # "Sire: {name} SPI .36"
+        # "Sire Production Index: 0.36"
+        # "SPI .36"
+        spi_match = re.search(r'(?mi)(?:Sire[^:]*:|SPI)\s*\.?(\d\.\d+|\d+\.\d+)', block)
+        if spi_match:
+            spi_text = spi_match.group(1)
+            # Handle cases like ".36" -> 0.36 or "0.36"
+            spi_val = float(spi_text) if '.' in spi_text else float(spi_text) / 100.0
+            out["spi"] = spi_val
+        
+        # Dam-Sire SPI (production index of dam's sire)
+        dam_sire_match = re.search(r'(?mi)Dam[\s-]*Sire.*?SPI\s*\.?(\d\.\d+|\d+\.\d+)', block)
+        if dam_sire_match:
+            dam_sire_text = dam_sire_match.group(1)
+            dam_sire_val = float(dam_sire_text) if '.' in dam_sire_text else float(dam_sire_text) / 100.0
+            out["dam_sire_spi"] = dam_sire_val
+    except:
+        pass
+    
+    return out
+
+def parse_pedigree_surface_stats(block: str) -> dict:
+    """
+    Extract Sire surface specialty statistics (%Mud, %Turf, Dam-Sire %Mud, etc.)
+    Format: "Sire: {name} Mud 23% Turf 19%"
+    Returns dict with keys: sire_mud_pct, sire_turf_pct, dam_sire_mud_pct
+    """
+    out = {"sire_mud_pct": np.nan, "sire_turf_pct": np.nan, "dam_sire_mud_pct": np.nan}
+    
+    if not block:
+        return out
+    
+    try:
+        # Extract Sire % statistics (Mud, Turf)
+        # Format: "Mud 23%" "Turf 19%"
+        sire_section = re.search(r'(?mi)Sire[^D]*?(?=Dam|$)', block)
+        if sire_section:
+            section_text = sire_section.group(0)
+            
+            # Sire Mud %
+            mud_match = re.search(r'(?mi)Mud\s+(\d+)%', section_text)
+            if mud_match:
+                out["sire_mud_pct"] = float(mud_match.group(1))
+            
+            # Sire Turf %
+            turf_match = re.search(r'(?mi)Turf\s+(\d+)%', section_text)
+            if turf_match:
+                out["sire_turf_pct"] = float(turf_match.group(1))
+        
+        # Extract Dam-Sire % statistics (primarily Mud)
+        dam_sire_section = re.search(r'(?mi)Dam[\s-]*Sire[^\\n]*', block)
+        if dam_sire_section:
+            ds_text = dam_sire_section.group(0)
+            
+            # Dam-Sire Mud %
+            ds_mud_match = re.search(r'(?mi)Mud\s+(\d+)%', ds_text)
+            if ds_mud_match:
+                out["dam_sire_mud_pct"] = float(ds_mud_match.group(1))
+    except:
+        pass
+    
+    return out
+
+def parse_awd_analysis(block: str) -> dict:
+    """
+    Extract Sire and Dam-Sire Average Winning Distance (AWD) from pedigree section.
+    Format: "Sire: {name} AWD 6.2f"
+    Returns dict with keys: sire_awd, dam_sire_awd (both in furlongs as float)
+    """
+    out = {"sire_awd": np.nan, "dam_sire_awd": np.nan}
+    
+    if not block:
+        return out
+    
+    try:
+        # Extract Sire AWD (Average Winning Distance)
+        # Format: "AWD 6.2f" or "AWD 7.5f"
+        sire_section = re.search(r'(?mi)Sire[^D]*?(?=Dam|$)', block)
+        if sire_section:
+            section_text = sire_section.group(0)
+            awd_match = re.search(r'(?mi)AWD\s+(\d+\.?\d*)f', section_text)
+            if awd_match:
+                out["sire_awd"] = float(awd_match.group(1))
+        
+        # Extract Dam-Sire AWD
+        dam_sire_section = re.search(r'(?mi)Dam[\s-]*Sire[^\\n]*', block)
+        if dam_sire_section:
+            ds_text = dam_sire_section.group(0)
+            ds_awd_match = re.search(r'(?mi)AWD\s+(\d+\.?\d*)f', ds_text)
+            if ds_awd_match:
+                out["dam_sire_awd"] = float(ds_awd_match.group(1))
+    except:
+        pass
+    
+    return out
+
+def parse_track_bias_impact_values(block: str) -> dict:
+    """
+    Extract Track Bias Impact Values from the Track Bias section.
+    Format: "Running Style Impact: E 1.30, E/P 1.20, P 0.95, S 0.80"
+    Format: "Post Position Impact: Rail 1.41, 1-3 1.10, 4-7 1.05, 8+ 0.95"
+    Returns dict with structure:
+    {
+        'running_style': {'E': 1.30, 'E/P': 1.20, 'P': 0.95, 'S': 0.80},
+        'post_position': {'rail': 1.41, 'inner': 1.10, 'mid': 1.05, 'outside': 0.95}
+    }
+    """
+    out = {
+        'running_style': {'E': np.nan, 'E/P': np.nan, 'P': np.nan, 'S': np.nan},
+        'post_position': {'rail': np.nan, 'inner': np.nan, 'mid': np.nan, 'outside': np.nan}
+    }
+    
+    if not block:
+        return out
+    
+    try:
+        # Extract Running Style Impact Values
+        # Pattern: "E 1.30" or "E/P 1.20" etc (as part of line like "E 1.30, E/P 1.20, P 0.95, S 0.80")
+        rs_section = re.search(r'(?mi)Running\s+Style.*?Impact', block)
+        if rs_section:
+            # Look for values after the section header
+            section_end = block.find('\n', rs_section.end())
+            if section_end == -1:
+                section_end = len(block)
+            section_text = block[rs_section.end():section_end]
+            
+            e_match = re.search(r'(?mi)\bE\s+(\d\.?\d*)', section_text)
+            if e_match:
+                out['running_style']['E'] = float(e_match.group(1))
+            
+            ep_match = re.search(r'(?mi)E/P\s+(\d\.?\d*)', section_text)
+            if ep_match:
+                out['running_style']['E/P'] = float(ep_match.group(1))
+            
+            p_match = re.search(r'(?mi)\bP\s+(\d\.?\d*)', section_text)
+            if p_match:
+                out['running_style']['P'] = float(p_match.group(1))
+            
+            s_match = re.search(r'(?mi)\bS\s+(\d\.?\d*)', section_text)
+            if s_match:
+                out['running_style']['S'] = float(s_match.group(1))
+        
+        # Extract Post Position Impact Values
+        # Pattern: "Rail 1.41" or "1-3 1.10" or "4-7 1.05" or "8+ 0.95"
+        pp_section = re.search(r'(?mi)Post.*?Position.*?Impact', block)
+        if pp_section:
+            section_end = block.find('\n', pp_section.end())
+            if section_end == -1:
+                section_end = len(block)
+            section_text = block[pp_section.end():section_end]
+            
+            rail_match = re.search(r'(?mi)Rail\s+(\d\.?\d*)', section_text)
+            if rail_match:
+                out['post_position']['rail'] = float(rail_match.group(1))
+            
+            inner_match = re.search(r'(?mi)(?:1-3|Inner)\s+(\d\.?\d*)', section_text)
+            if inner_match:
+                out['post_position']['inner'] = float(inner_match.group(1))
+            
+            mid_match = re.search(r'(?mi)(?:4-7|Mid)\s+(\d\.?\d*)', section_text)
+            if mid_match:
+                out['post_position']['mid'] = float(mid_match.group(1))
+            
+            outside_match = re.search(r'(?mi)(?:8\+|Outside)\s+(\d\.?\d*)', section_text)
+            if outside_match:
+                out['post_position']['outside'] = float(outside_match.group(1))
+    except:
+        pass
+    
+    return out
+
 # ---------- Probability helpers ----------
 def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
     if ratings.size == 0:
@@ -2334,6 +2697,10 @@ trainer_intent_per_horse: Dict[str, dict] = {}
 bris_ped_ratings_per_horse: Dict[str, dict] = {}  # NEW: BRISNET Pedigree Ratings
 surface_record_per_horse: Dict[str, dict] = {}  # NEW: Surface-specific records
 cr_rr_per_horse: Dict[str, dict] = {}  # NEW: CR/RR performance ratio history
+pedigree_spi_per_horse: Dict[str, dict] = {}  # NEW: Sire Production Index
+pedigree_surface_stats_per_horse: Dict[str, dict] = {}  # NEW: Sire surface specialty stats
+awd_analysis_per_horse: Dict[str, dict] = {}  # NEW: Average Winning Distance analysis
+track_bias_impact_per_horse: Dict[str, dict] = {}  # NEW: Track Bias Impact Values
 blocks: Dict[str, str] = {}
 
 for _post, name, block in split_into_horse_chunks(pp_text):
@@ -2345,6 +2712,10 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         expanded_ped_per_horse[name] = parse_expanded_ped_work_layoff(block)
         bris_ped_ratings_per_horse[name] = parse_bris_pedigree_ratings(block)  # NEW
         surface_record_per_horse[name] = parse_surface_specific_record(block)  # NEW
+        pedigree_spi_per_horse[name] = parse_pedigree_spi(block)  # NEW: SPI
+        pedigree_surface_stats_per_horse[name] = parse_pedigree_surface_stats(block)  # NEW: Mud/Turf %
+        awd_analysis_per_horse[name] = parse_awd_analysis(block)  # NEW: AWD
+        track_bias_impact_per_horse[name] = parse_track_bias_impact_values(block)  # NEW: Impact Values
         jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
         jock_train_per_horse[name] = parse_jock_train_for_block(block)
         running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
@@ -2905,11 +3276,49 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         # Combine all three Tier 1 bonuses + CR/RR bonus
         tier1_bonus = bris_ped_bonus + dpi_bonus + surface_record_penalty + cr_rr_bonus
 
-        a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
+        # === NEW TIER 2: PEDIGREE ENHANCEMENTS (SPI, Surface Stats, AWD) ===
+        
+        # 1. Sire Production Index (SPI) Bonus/Penalty
+        spi_bonus = 0.0
+        spi_data = pedigree_spi_per_horse.get(name, {})
+        if pd.notna(spi_data.get("spi")) or pd.notna(spi_data.get("dam_sire_spi")):
+            spi_bonus = calculate_spi_bonus(spi_data.get("spi"), spi_data.get("dam_sire_spi"))
+        
+        # 2. Surface Specialty Statistics Bonus (Sire %Mud, %Turf)
+        surface_stats_bonus = 0.0
+        surf_stats = pedigree_surface_stats_per_horse.get(name, {})
+        if any(pd.notna(v) for v in [surf_stats.get("sire_mud_pct"), surf_stats.get("sire_turf_pct"), 
+                                       surf_stats.get("dam_sire_mud_pct")]):
+            surface_stats_bonus = calculate_surface_specialty_bonus(
+                surf_stats.get("sire_mud_pct"),
+                surf_stats.get("sire_turf_pct"),
+                surf_stats.get("dam_sire_mud_pct"),
+                condition_txt,
+                surface_type
+            )
+        
+        # 3. Average Winning Distance (AWD) Mismatch Penalty
+        awd_penalty = 0.0
+        awd_data = awd_analysis_per_horse.get(name, {})
+        if pd.notna(awd_data.get("sire_awd")) or pd.notna(awd_data.get("dam_sire_awd")):
+            awd_penalty = calculate_awd_mismatch_penalty(
+                awd_data.get("sire_awd"),
+                awd_data.get("dam_sire_awd"),
+                distance_txt
+            )
+        
+        # Sum Tier 2 bonuses
+        tier2_bonus = spi_bonus + surface_stats_bonus + awd_penalty
+
+        # === TRACK BIAS WITH IMPACT VALUES (CRITICAL FIX) ===
+        # Pass Impact Values to _get_track_bias_delta for data-driven calculation
+        impact_values = track_bias_impact_per_horse.get(name, {})
+        a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post,
+                                       impact_values=impact_values)
 
         c_class = float(row.get("Cclass", 0.0))
 
-        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus + new_features_bonus + tier1_bonus
+        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus + new_features_bonus + tier1_bonus + tier2_bonus
         R     = arace
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
