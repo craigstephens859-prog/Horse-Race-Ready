@@ -1419,6 +1419,36 @@ def parse_ep_lp_trip_for_block(block: str) -> Dict:
     
     return out
 
+def parse_expanded_ped_work_layoff(block: str) -> Dict:
+    """Extract surface win%, bullet workouts, and layoff days from PP block"""
+    out = {"turf_win_pct": np.nan, "mud_win_pct": np.nan, "bullet_count": 0, "days_off": np.nan}
+    
+    # Pedigree surface: Turf|Wet|Fast (rating) starts wins-2nds-3rds $earnings
+    surf_re = re.compile(r'(?mi)(Turf|Wet|Fast)\s*\((\d+)\)\s*(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*\$\s*([\d,]+)')
+    for m in surf_re.finditer(block or ""):
+        try:
+            surf, rating, starts, wins = m.group(1), m.group(2), m.group(3), m.group(4)
+            if int(starts) > 0:
+                win_pct = int(wins) / int(starts)
+                if surf == "Turf":
+                    out["turf_win_pct"] = win_pct
+                elif surf in ("Wet", "Fast"):
+                    out["mud_win_pct"] = win_pct
+        except:
+            pass
+    
+    # Workouts: Count bullet workouts (marked with "B" in workout lines)
+    work_re = re.compile(r'(?mi)^\d{2}[A-Za-z]{3}\d{2}.*?\s+B(?:g)?\s')
+    out["bullet_count"] = len(work_re.findall(block or ""))
+    
+    # Layoff: Days since last race via angle line format or "days Away"
+    lay_re = re.compile(r'(?mi)(\d+)\s*days?\s*Away')
+    m = lay_re.search(block or "")
+    if m:
+        out["days_off"] = int(m.group(1))
+    
+    return out
+
 # ---------- Probability helpers ----------
 def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
     if ratings.size == 0:
@@ -2045,6 +2075,7 @@ df_editor = st.data_editor(df_styles, use_container_width=True, column_config=co
 angles_per_horse: Dict[str, pd.DataFrame] = {}
 pedigree_per_horse: Dict[str, dict] = {}
 ep_lp_trip_per_horse: Dict[str, Dict] = {}
+expanded_ped_per_horse: Dict[str, Dict] = {}
 figs_per_horse: Dict[str, dict] = {}  # Changed from List[int] to dict
 jockey_trainer_per_horse: Dict[str, dict] = {}
 jock_train_per_horse: Dict[str, Dict] = {}
@@ -2063,6 +2094,7 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
         ep_lp_trip_per_horse[name] = parse_ep_lp_trip_for_block(block)
+        expanded_ped_per_horse[name] = parse_expanded_ped_work_layoff(block)
         jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
         jock_train_per_horse[name] = parse_jock_train_for_block(block)
         running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
@@ -2296,6 +2328,31 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
     if race_cond in {"muddy","sloppy","heavy"} and awd_mean == awd_mean: # Check if not NaN
         if race_bucket != "≤6f" and awd_mean >= 7.5:
             tweak += MODEL_CONFIG['angle_off_track_route_bonus']
+
+    # 4) Expanded pedigree/work/layoff
+    exp_ped = expanded_ped_per_horse.get(name, {})
+    jt_data = jock_train_per_horse.get(name, {})
+    
+    # Turf surface bonus
+    if race_surface.lower() == "turf" and pd.notna(exp_ped.get("turf_win_pct")):
+        if exp_ped.get("turf_win_pct", 0) > 0.15:
+            tweak += MODEL_CONFIG['ped_dist_bonus']
+    
+    # Mud/sloppy bonus
+    if race_cond in {"muddy", "sloppy"} and pd.notna(exp_ped.get("mud_win_pct")):
+        if exp_ped.get("mud_win_pct", 0) > 0.15:
+            tweak += MODEL_CONFIG['ped_dist_bonus']
+    
+    # Bullet workout bonus
+    work_bonus = min(exp_ped.get("bullet_count", 0) * 0.03, 0.09)
+    tweak += work_bonus
+    
+    # Layoff + trainer situational bonus (45-90 days ideal)
+    days_off = exp_ped.get("days_off", np.nan)
+    if pd.notna(days_off) and 45 <= days_off <= 90:
+        trainer_lay_data = jt_data.get("trainer_situational", {}).get("Layoff", {})
+        if trainer_lay_data.get("win_pct", 0) > 18:
+            tweak += 0.04
 
     return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
 
