@@ -2953,7 +2953,8 @@ st.dataframe(
 
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame, 
                            strategy_profile: str, name_to_post: Dict[str, str],
-                           name_to_ml: Dict[str, str], field_size: int, ppi_val: float) -> str:
+                           name_to_ml: Dict[str, str], field_size: int, ppi_val: float,
+                           offered_odds_map: Optional[Dict[str, float]] = None) -> str:
     """
     Builds a clearer, simplified betting strategy report using A/B/C/D grouping, 
     minimum base bet examples, field size logic, and specific bet types (straight/box).
@@ -3154,6 +3155,11 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     bet_outcomes_report = generate_bet_outcomes(probables)
     final_report += f"\n{bet_outcomes_report}"
     
+    # --- 8. Generate Optimized Exotic Tickets ---
+    if offered_odds_map:
+        ticket_report = optimize_tickets(exotic_outcomes, probables, offered_odds_map)
+        final_report += f"\n### Optimized Exotic Tickets\n{ticket_report}\n* **Common Sense:** Hammer underlays (low odds, high prob) on top for exacta/tri; spread overlays (value) for super/SH5 bombs.\n"
+    
     return final_report
 
 
@@ -3178,10 +3184,21 @@ if st.button("Analyze This Race", type="primary", key="analyze_button"):
             overlay_pos = df_ol[df_ol["EV per $1"] > 0] if not df_ol.empty else pd.DataFrame()
             overlay_table_md = (overlay_pos[['Horse','Fair %','Fair (AM)','Board (dec)','EV per $1']].to_markdown(index=False)
                                 if not overlay_pos.empty else "None.")
+            
+            # Build offered odds map from live odds or morning line
+            offered_odds_map = {}
+            for _, row in primary_df.iterrows():
+                h = str(row.get("Horse", ""))
+                if h:
+                    live_odds_str = str(df_final_field[df_final_field["Horse"] == h]["Live Odds"].values[0] if not df_final_field[df_final_field["Horse"] == h].empty else "")
+                    ml_odds_str = name_to_ml.get(h, "")
+                    odds_str = live_odds_str if live_odds_str and live_odds_str != "" else ml_odds_str
+                    dec_odds = str_to_decimal_odds(odds_str) if odds_str else 5.0
+                    offered_odds_map[h] = dec_odds if dec_odds else 5.0
 
             # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
             strategy_report_md = build_betting_strategy(
-                primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
+                primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val, offered_odds_map
             )
 
             # --- 3. Update the LLM Prompt ---
