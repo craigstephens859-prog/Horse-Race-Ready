@@ -1627,12 +1627,6 @@ def parse_speed_figures_for_block(block: str, debug: bool = False) -> dict:
     
     return result
 
-def parse_prime_power_for_block(block: str) -> float:
-    """Extract Prime Power bonus from BRISNET PP block"""
-    prime_re = re.compile(r'(?mi)Prime\s*Power:\s*(\d+\.\d+)')
-    m = prime_re.search(block)
-    return float(m.group(1)) if m else np.nan
-
 def parse_cr_rr_history(figs_dict: dict) -> dict:
     """
     Calculate CR/RR performance metrics from parsed speed figures.
