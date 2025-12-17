@@ -2738,7 +2738,7 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         running_style_per_horse[name] = parse_running_style_for_block(block, debug=False)
         quickplay_per_horse[name] = parse_quickplay_comments_for_block(block, debug=False)
         workout_per_horse[name] = parse_recent_workout_for_block(block, debug=False)
-        prime_power_per_horse[name] = parse_prime_power_for_block(block, debug=False)
+        prime_power_per_horse[name] = parse_prime_power_for_block(block)
         figs_per_horse[name] = parse_speed_figures_for_block(block, debug=False)
         cr_rr_per_horse[name] = parse_cr_rr_history(figs_per_horse[name])  # NEW: Parse CR/RR metrics
         equip_lasix_per_horse[name] = parse_equip_lasix(block)
