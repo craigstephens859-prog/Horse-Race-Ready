@@ -278,6 +278,9 @@ MODEL_CONFIG = {
     "awd_large_mismatch_penalty": -0.08,     # 2.0f+ mismatch
     "awd_moderate_mismatch_penalty": -0.04,  # 1.0-2.0f mismatch
     "awd_small_mismatch_penalty": -0.02,     # 0.5-1.0f mismatch
+    
+    # --- EXOTIC SIMULATIONS ---
+    "exotic_sims": 20000,  # Number of simulations for dynamic exotic probabilities
 }
 
 # =========================
@@ -3979,7 +3982,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 """
     
     # --- 7. Generate Dynamic Exotic Probabilities ---
-    exotic_outcomes = dynamic_exotic_probs(primary_probs, ppi_val, primary_df, sims=MODEL_CONFIG['exotic_sims'])
+    exotic_outcomes = dynamic_exotic_probs(primary_probs, ppi_val, primary_df, positions=5, sims=MODEL_CONFIG.get('exotic_sims', 20000))
     probables = extract_probable_positions(exotic_outcomes)
     bet_outcomes_report = generate_bet_outcomes(probables)
     final_report += f"\n{bet_outcomes_report}"
