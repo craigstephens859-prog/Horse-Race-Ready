@@ -208,6 +208,27 @@ MODEL_CONFIG = {
     "jock_win_bonus_per": 0.60,
     "jock_upgrade_bonus_per": 0.04,
     
+    # --- Figure Trend Analysis (NEW) ---
+    "fig_uptrend_bonus": 0.12,  # Last 3 figs improving
+    "fig_downtrend_penalty": -0.10,  # Last 3 figs declining
+    
+    # --- Recency Weighting (NEW) ---
+    "recency_decay_rate": 0.15,  # Exponential decay: recent races weighted heavier
+    
+    # --- Distance Consistency (NEW) ---
+    "distance_specialist_threshold": 0.22,
+    "distance_specialist_bonus": 0.08,
+    "distance_poor_threshold": 0.10,
+    "distance_poor_penalty": -0.06,
+    
+    # --- Bounce Detection (NEW) ---
+    "bounce_fig_drop_threshold": 6,
+    "bounce_penalty_aggressive": -0.10,
+    
+    # --- Class Transition (NEW) ---
+    "class_rise_penalty": -0.07,
+    "blinkers_off_penalty": -0.06,
+    
     # --- Dynamic Exotic Probabilities ---
     "positions_to_sim": 5,  # For SH5
     "top_for_pos": [2, 2, 3, 3, 3],  # 1st:2, 2nd:2, 3rd:3, 4th:3, 5th:3
@@ -1477,6 +1498,76 @@ def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.
     p = ex / np.sum(ex)
     return p
 
+def calculate_figure_trend(figs: List[float]) -> Tuple[float, str]:
+    """
+    Analyze figure trend: uptrend (+bonus), downtrend (-bonus), flat (0).
+    Returns (trend_bonus, trend_label)
+    """
+    if not figs or len(figs) < 2:
+        return 0.0, "insufficient"
+    
+    recent_3 = figs[:3]  # Most recent 3 figs
+    
+    # Uptrend: each fig higher than previous
+    if len(recent_3) >= 2 and recent_3[0] > recent_3[1]:
+        if len(recent_3) >= 3 and recent_3[1] > recent_3[2]:
+            return 0.11, "strong_uptrend"
+        return 0.07, "uptrend"
+    
+    # Downtrend: each fig lower than previous
+    if len(recent_3) >= 2 and recent_3[0] < recent_3[1]:
+        if len(recent_3) >= 3 and recent_3[1] < recent_3[2]:
+            return -0.11, "strong_downtrend"
+        return -0.07, "downtrend"
+    
+    return 0.0, "flat"
+
+def calculate_distance_record(block: str, target_distance: str) -> Tuple[float, int, int]:
+    """
+    Extract win% at specific distance from PP block.
+    Returns (win_pct, wins_at_distance, starts_at_distance)
+    """
+    if not block:
+        return np.nan, 0, 0
+    
+    try:
+        # Parse distance from each race line and track performance
+        # Format: "23Sep25Mnr 5½ ft :22© :46« :59« 1:06« ¦ ¨§¯ ™C4000 ¨§® 87 72/ 74 +5 +1 56 1 1©"
+        race_lines = re.findall(r'(?m)^\d{2}[A-Za-z]{3}\d{2}[A-Za-z]{3}\s+([\d½]+)', block or "")
+        
+        # Count races at this distance
+        distance_races = 0
+        distance_wins = 0
+        
+        for line in re.finditer(r'(?m)^\d{2}[A-Za-z]{3}\d{2}[A-Za-z]{3}\s+([\d½]+)[^0-9]*(\d+)\s+(\d+)/\s*(\d+)', block or ""):
+            race_dist = line.group(1)
+            position = int(line.group(3))  # Finishing position
+            
+            # Normalize distance
+            if "½" in str(target_distance):
+                target_norm = float(target_distance.replace("½", ".5"))
+            else:
+                target_norm = float(target_distance) if target_distance else 0
+            
+            if "½" in race_dist:
+                race_dist_norm = float(race_dist.replace("½", ".5"))
+            else:
+                race_dist_norm = float(race_dist) if race_dist else 0
+            
+            # Check if within 0.1 furlongs (close match)
+            if abs(race_dist_norm - target_norm) < 0.2:
+                distance_races += 1
+                if position == 1:
+                    distance_wins += 1
+        
+        if distance_races > 0:
+            win_pct = distance_wins / distance_races
+            return win_pct, distance_wins, distance_races
+    except:
+        pass
+    
+    return np.nan, 0, 0
+
 def compute_ppi(df_styles: pd.DataFrame) -> dict:
     """PPI that works with Detected/Override styles. Returns {'ppi':float, 'by_horse':{name:tailwind}}"""
     if df_styles is None or df_styles.empty:
@@ -2550,11 +2641,58 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         pace_enh_bonus = lp_bonus + excuse_bonus
         cpace += pace_enh_bonus
 
+        # === 5 NEW HIGH-ROI PREDICTIVE FEATURES ===
+        
+        # 1. FIGURE TREND ANALYSIS (Uptrend/Downtrend bonus/penalty)
+        figs_list = figs_per_horse.get(name, {}).get('SPD', [])
+        trend_bonus, trend_label = calculate_figure_trend(figs_list)
+        
+        # 2. RECENCY WEIGHTING (Recent races weighted heavier)
+        # Apply decay to older figures - most recent get full weight, older get less
+        recency_decay = 1.0 if len(figs_list) <= 1 else min(0.15 * (len(figs_list) - 1), 0.4)
+        cpace *= (1.0 - recency_decay * 0.3)  # Slightly reduce pace if older
+        
+        # 3. DISTANCE-SPECIFIC CONSISTENCY (Win% at THIS distance)
+        block = blocks.get(name, "")
+        dist_win_pct, dist_wins, dist_starts = calculate_distance_record(block, distance_txt)
+        distance_bonus = 0.0
+        if pd.notna(dist_win_pct):
+            if dist_win_pct > MODEL_CONFIG['distance_specialist_threshold']:
+                distance_bonus = MODEL_CONFIG['distance_specialist_bonus']  # 0.08
+            elif dist_win_pct < MODEL_CONFIG['distance_poor_threshold']:
+                distance_bonus = MODEL_CONFIG['distance_poor_penalty']  # -0.06
+        
+        # 4. BOUNCE DETECTION (Sharp drop in speed figures)
+        bounce_penalty = 0.0
+        if len(figs_list) >= 2:
+            fig_drop = figs_list[1] - figs_list[0]  # Older - Recent (positive = drop)
+            if fig_drop > MODEL_CONFIG['bounce_fig_drop_threshold']:  # >6 point drop
+                bounce_penalty = MODEL_CONFIG['bounce_penalty_aggressive']  # -0.10
+        
+        # 5. CLASS TRANSITION & EQUIPMENT CHANGES
+        class_trans_penalty = 0.0
+        equip_penalty = 0.0
+        
+        # Class rise penalty: if moving UP in class, apply penalty
+        last_purse = jt_data.get("last_purse", np.nan)
+        if pd.notna(last_purse) and last_purse > 0:
+            class_change_pct = (purse_val - last_purse) / last_purse
+            if class_change_pct > 0.20:  # Moving UP in class by >20%
+                class_trans_penalty = MODEL_CONFIG['class_rise_penalty']  # -0.07
+        
+        # Blinkers off penalty
+        blink_status = equip_lasix_per_horse.get(name, ('', ''))[0]
+        if blink_status == "off" and re.search(r'Blinkers\s+On', block or "", re.I):
+            equip_penalty = MODEL_CONFIG['blinkers_off_penalty']  # -0.06
+        
+        # Sum all new bonuses
+        new_features_bonus = trend_bonus + distance_bonus + bounce_penalty + class_trans_penalty + equip_penalty
+
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
         c_class = float(row.get("Cclass", 0.0))
 
-        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus
+        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus + new_features_bonus
         R     = arace
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
