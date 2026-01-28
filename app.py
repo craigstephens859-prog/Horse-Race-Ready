@@ -2823,13 +2823,15 @@ else:
     st.error("⚠️ Historical Data System Not Available")
     
     # Add debug info
-    with st.expander("🔍 Debug Information"):
+    with st.expander("🔍 Debug Information", expanded=True):
         st.code(f"HISTORICAL_DATA_AVAILABLE = {HISTORICAL_DATA_AVAILABLE}")
         
         # Show the actual import error if it exists
         if HISTORICAL_IMPORT_ERROR:
             st.error("**Import Error Details:**")
             st.code(HISTORICAL_IMPORT_ERROR)
+        else:
+            st.warning("No error details captured. Attempting direct import test...")
         
         st.write("Testing direct import...")
         try:
@@ -2839,16 +2841,31 @@ else:
                 del sys.modules['historical_data_builder']
             if 'integrate_real_data' in sys.modules:
                 del sys.modules['integrate_real_data']
+            if 'ml_quant_engine_v2' in sys.modules:
+                del sys.modules['ml_quant_engine_v2']
             
+            st.write("Step 1: Importing historical_data_builder...")
             from historical_data_builder import HistoricalDataBuilder
+            st.success("✅ historical_data_builder imported")
+            
+            st.write("Step 2: Importing integrate_real_data...")
             from integrate_real_data import convert_to_ml_format
+            st.success("✅ integrate_real_data imported")
+            
             st.success("✅ Direct import test PASSED - Modules can be imported!")
-            st.warning("Issue: Module imports work but HISTORICAL_DATA_AVAILABLE is cached as False")
-            st.info("**Solution:** Click the Force Reload App button below")
+            st.warning("Issue: Module imports work but HISTORICAL_DATA_AVAILABLE is cached")
+            st.info("**Solution:** Wait for new Render deployment (scipy/xgboost added)")
         except Exception as e:
-            st.error(f"❌ Direct import test FAILED: {e}")
+            st.error(f"❌ Direct import test FAILED: {type(e).__name__}: {e}")
             import traceback
-            st.code(traceback.format_exc())
+            error_details = traceback.format_exc()
+            st.code(error_details)
+            
+            # Check for specific missing dependencies
+            if "scipy" in str(e).lower():
+                st.error("🔍 Missing: scipy - Deploy commit 355814a to fix")
+            if "xgboost" in str(e).lower() or "xgb" in str(e).lower():
+                st.error("🔍 Missing: xgboost - Deploy commit 355814a to fix")
     
     st.info("""
     **Troubleshooting Steps:**
