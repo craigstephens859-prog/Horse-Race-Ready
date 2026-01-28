@@ -293,6 +293,52 @@ class RaceDatabase:
             'brier_score': brier or 0,
             'samples_for_training': total
         }
+    
+    def get_race_summary(self) -> Dict:
+        """Get summary statistics about stored races."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM races")
+        total_races = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM horses")
+        total_horses = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            'total_races': total_races or 0,
+            'total_horses': total_horses or 0
+        }
+    
+    def get_races(self, limit: int = 20) -> List[Dict]:
+        """Get recent races with details."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, track, date, race_number, distance, surface, created_at
+            FROM races
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'id': row[0],
+                'track': row[1],
+                'date': row[2],
+                'race_number': row[3],
+                'distance': row[4],
+                'surface': row[5],
+                'created_at': row[6]
+            }
+            for row in rows
+        ]
 
 # ===================== Neural Network Models =====================
 
