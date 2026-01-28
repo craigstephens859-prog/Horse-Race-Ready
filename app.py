@@ -2222,24 +2222,34 @@ if ML_AVAILABLE:
                     if st.button("💾 Save Race Results"):
                         try:
                             # Save race
-                            race_id = db.save_race(
-                                track=result_track,
-                                date=result_date.strftime('%Y-%m-%d'),
-                                race_number=result_race_num,
-                                distance=result_distance,
-                                surface=result_surface
-                            )
+                            race_data = {
+                                'track': result_track,
+                                'date': result_date.strftime('%Y-%m-%d'),
+                                'race_number': result_race_num,
+                                'distance': result_distance,
+                                'surface': result_surface,
+                                'condition': 'unknown',
+                                'race_type': 'unknown',
+                                'purse': 0,
+                                'field_size': len(horses) if horses else 0
+                            }
+                            race_id = db.save_race(race_data)
                             
-                            # Save horses
+                            # Save horses with predictions
+                            horses_data = []
                             for horse in horses:
-                                db.save_horse(
-                                    race_id=race_id,
-                                    name=horse,
-                                    post_position=horses.index(horse) + 1,
-                                    final_odds=final_odds[horse],
-                                    finish_position=finish_positions[horse],
-                                    won=(horse == winner)
-                                )
+                                horses_data.append({
+                                    'horse_name': horse,
+                                    'post_position': horses.index(horse) + 1,
+                                    'final_odds': final_odds[horse],
+                                    'predicted_win_prob': 1.0 / final_odds[horse] if final_odds[horse] > 0 else 0.0,
+                                    'rating_total': 0.0
+                                })
+                            db.save_horse_predictions(race_id, horses_data)
+                            
+                            # Update with actual results
+                            results = [(horse, finish_positions[horse]) for horse in horses]
+                            db.update_race_results(race_id, results)
                             
                             st.success(f"✅ Results saved! Race ID: {race_id}")
                         except Exception as e:
