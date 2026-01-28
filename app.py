@@ -1255,6 +1255,7 @@ race_type_manual = st.selectbox(
 )
 race_type = race_type_manual or race_type_detected
 race_type_detected = race_type  # lock in constant key
+st.session_state['race_type'] = race_type_detected  # Store for Classic Report
 
 # ===================== A. Race Setup: Scratches, ML & Styles =====================
 
@@ -1329,6 +1330,7 @@ if "#" not in df_final_field.columns:
 ppi_results = compute_ppi(df_final_field)
 ppi_val = ppi_results.get("ppi", 0.0)
 ppi_map_by_horse = ppi_results.get("by_horse", {})
+st.session_state['ppi_val'] = ppi_val  # Store for Classic Report
 
 # ===================== Class build per horse (angles+pedigree in background) =====================
 
@@ -1880,6 +1882,7 @@ for _, r in df_final_field.iterrows():
 
 # Overlay table vs fair line
 df_ol = overlay_table(fair_probs=primary_probs, offered=offered_odds_map)
+st.session_state['df_ol'] = df_ol  # Store for Classic Report
 st.dataframe(
     df_ol,
     use_container_width=True, hide_index=True,
@@ -2093,11 +2096,21 @@ else:
         with st.spinner("Handicapping Race..."):
             try:
                 # Retrieve from session state
-                primary_df = st.session_state['primary_df']
-                primary_probs = st.session_state['primary_probs']
+                primary_df = st.session_state.get('primary_df')
+                primary_probs = st.session_state.get('primary_probs')
+                df_final_field = st.session_state.get('df_final_field')
+                df_ol = st.session_state.get('df_ol', pd.DataFrame())
+                strategy_profile = st.session_state.get('strategy_profile', 'Balanced')
+                ppi_val = st.session_state.get('ppi_val', 0.0)
+                track_name = st.session_state.get('track_name', '')
+                surface_type = st.session_state.get('surface_type', 'Dirt')
+                condition_txt = st.session_state.get('condition_txt', '')
+                distance_txt = st.session_state.get('distance_txt', '')
+                race_type_detected = st.session_state.get('race_type', '')
+                purse_val = st.session_state.get('purse_val', 0)
                 
                 # --- 1. Build Data for Strategy & Prompt ---
-                if primary_df.empty or not all(col in primary_df.columns for col in ['Horse', 'R', 'Fair %', 'Fair Odds']):
+                if primary_df is None or primary_df.empty or not all(col in primary_df.columns for col in ['Horse', 'R', 'Fair %', 'Fair Odds']):
                     st.error("Primary ratings data is incomplete for report generation.")
                     st.stop()
 
