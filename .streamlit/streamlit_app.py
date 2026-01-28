@@ -14,7 +14,6 @@ try:
     ML_AVAILABLE = True
 except ImportError:
     ML_AVAILABLE = False
-    st.warning("⚠️ ML Engine not available. Install requirements: `pip install torch` or `pip install scikit-learn`")
 
 # ===================== Page / Model Settings =====================
 
