@@ -1134,6 +1134,266 @@ def calculate_final_rating(race_type,
     final_score = base_bias * surface_modifier * distance_modifier * condition_modifier
     return round(final_score, 4)
 
+# ===================== Form Cycle & Recency Analysis =====================
+
+def parse_recent_races_detailed(block: str) -> List[dict]:
+    """
+    Extract detailed recent race history with dates, finishes, beaten lengths.
+    Returns list of dicts with date, finish, beaten_lengths, days_ago
+    """
+    races = []
+    # Pattern: date, finish position, beaten lengths
+    # Example: "23Dec23 Aqu 3rd 2¼"
+    pattern = r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+.*?(\d+)(?:st|nd|rd|th)\s*(\d+)?'
+    
+    today = datetime.now()
+    
+    for match in re.finditer(pattern, block):
+        date_str = match.group(1)
+        finish = match.group(2)
+        
+        try:
+            # Parse date
+            race_date = datetime.strptime(date_str, '%d%b%y')
+            days_ago = (today - race_date).days
+            
+            races.append({
+                'date': race_date,
+                'days_ago': days_ago,
+                'finish': int(finish) if finish.isdigit() else 99
+            })
+        except:
+            pass
+    
+    return sorted(races, key=lambda x: x['days_ago'])[:6]  # Last 6 races, most recent first
+
+def calculate_layoff_factor(days_since_last: int) -> float:
+    """
+    Layoff impact on performance.
+    Returns: adjustment factor (-2.0 to +0.5)
+    """
+    if days_since_last <= 14:  # Racing frequently (good)
+        return 0.5
+    elif days_since_last <= 30:  # Fresh, ideal
+        return 0.3
+    elif days_since_last <= 45:  # Standard rest
+        return 0.0
+    elif days_since_last <= 60:  # Slight concern
+        return -0.3
+    elif days_since_last <= 90:  # Moderate layoff
+        return -0.8
+    elif days_since_last <= 180:  # Long layoff
+        return -1.5
+    else:  # Extended absence
+        return -2.0
+
+def calculate_form_trend(recent_finishes: List[int]) -> float:
+    """
+    Analyze finish positions for improvement/decline trend.
+    Returns: trend factor (-1.5 to +1.5)
+    """
+    if len(recent_finishes) < 2:
+        return 0.0
+    
+    # Weight recent races more heavily: [0.4, 0.3, 0.2, 0.1]
+    weights = [0.4, 0.3, 0.2, 0.1][:len(recent_finishes)]
+    
+    # Calculate weighted average of recent finishes
+    weighted_avg = sum(f * w for f, w in zip(recent_finishes, weights)) / sum(weights)
+    
+    # Check for improvement pattern (finishes getting better = lower numbers)
+    if len(recent_finishes) >= 3:
+        recent_3 = recent_finishes[:3]
+        if recent_3[0] < recent_3[1] < recent_3[2]:  # Improving (3rd, 4th, 5th → getting better)
+            return 1.5  # Strong improvement
+        elif recent_3[0] > recent_3[1] > recent_3[2]:  # Declining
+            return -1.2  # Declining form
+    
+    # Weighted average scoring
+    if weighted_avg <= 1.5:  # Consistently winning/placing
+        return 1.2
+    elif weighted_avg <= 3.0:  # In the money regularly
+        return 0.8
+    elif weighted_avg <= 5.0:  # Mid-pack
+        return 0.0
+    elif weighted_avg <= 7.0:  # Back half
+        return -0.5
+    else:  # Consistently poor
+        return -1.0
+
+def parse_workout_data(block: str) -> dict:
+    """
+    Extract recent workout information.
+    Returns dict with best_time, num_works, recency
+    """
+    workouts = {
+        'best_time': None,
+        'num_recent': 0,
+        'days_since_last': 999
+    }
+    
+    # Pattern for workouts: "4f :48.2" or "5f 1:00.4"
+    pattern = r'(\d)f\s+:?(\d+)[:\.](\d+)'
+    
+    times = []
+    for match in re.finditer(pattern, block):
+        distance = int(match.group(1))
+        seconds = int(match.group(2))
+        fraction = int(match.group(3))
+        
+        # Normalize to 4f equivalent for comparison
+        total_seconds = seconds + (fraction / 100.0)
+        normalized_time = total_seconds * (4.0 / distance) if distance > 0 else 999
+        
+        times.append(normalized_time)
+        workouts['num_recent'] += 1
+    
+    if times:
+        workouts['best_time'] = min(times)
+    
+    return workouts
+
+def evaluate_first_time_starter(
+    pedigree: dict,
+    angles_df: pd.DataFrame,
+    workout_data: dict,
+    horse_block: str
+) -> float:
+    """
+    Comprehensive first-time starter evaluation.
+    Returns: debut rating from -2.0 to +3.5
+    """
+    debut_rating = 0.0
+    
+    # 1. PEDIGREE QUALITY (weight: heavy for debuts)
+    sire_spi = pedigree.get('sire_spi')
+    damsire_spi = pedigree.get('damsire_spi')
+    
+    # SPI analysis
+    for spi in [sire_spi, damsire_spi]:
+        if pd.notna(spi):
+            spi_val = float(spi)
+            if spi_val >= 115:  # Elite sire
+                debut_rating += 0.8
+            elif spi_val >= 105:  # Very good
+                debut_rating += 0.5
+            elif spi_val >= 95:  # Above average
+                debut_rating += 0.2
+            elif spi_val < 85:  # Below average
+                debut_rating -= 0.3
+    
+    # First-time winner percentage (sire/damsire)
+    sire_1st = pedigree.get('sire_1st')
+    damsire_1st = pedigree.get('damsire_1st')
+    
+    for pct in [sire_1st, damsire_1st]:
+        if pd.notna(pct):
+            pct_val = float(pct)
+            if pct_val >= 18:  # Excellent debut sire
+                debut_rating += 0.6
+            elif pct_val >= 14:  # Good
+                debut_rating += 0.3
+            elif pct_val >= 10:  # Average
+                debut_rating += 0.1
+            elif pct_val < 7:  # Poor
+                debut_rating -= 0.2
+    
+    # 2. WORKOUT PATTERN
+    if workout_data['num_recent'] >= 3:  # Well-prepared
+        debut_rating += 0.4
+        
+        if workout_data['best_time'] is not None:
+            # Fast workouts indicate readiness
+            if workout_data['best_time'] < 48.0:  # Blazing 4f equivalent
+                debut_rating += 0.6
+            elif workout_data['best_time'] < 49.5:  # Very good
+                debut_rating += 0.3
+            elif workout_data['best_time'] < 51.0:  # Solid
+                debut_rating += 0.1
+    elif workout_data['num_recent'] < 2:  # Underprepared
+        debut_rating -= 0.5
+    
+    # 3. TRAINER DEBUT ANGLES
+    if angles_df is not None and not angles_df.empty:
+        angle_text = ' '.join(angles_df['Category'].astype(str)).lower()
+        
+        if '1st time str' in angle_text or 'debut' in angle_text:
+            debut_rating += 0.5  # Trainer pattern recognition
+        
+        if 'maiden sp wt' in angle_text or 'maiden special weight' in angle_text:
+            debut_rating += 0.3  # MSW debut angle
+        
+        # High ROI trainer debut pattern
+        if angles_df is not None and 'ROI' in angles_df.columns:
+            debut_angles = angles_df[angles_df['Category'].str.contains('debut|1st time', case=False, na=False)]
+            if not debut_angles.empty:
+                avg_roi = debut_angles['ROI'].mean()
+                if avg_roi > 1.5:  # Strong positive ROI
+                    debut_rating += 0.8
+                elif avg_roi > 1.0:
+                    debut_rating += 0.4
+    
+    # 4. RACE TYPE CONTEXT
+    if 'maiden special weight' in horse_block.lower():
+        debut_rating += 0.2  # MSW is better spot than MCL for debuts
+    elif 'maiden claiming' in horse_block.lower():
+        debut_rating -= 0.3  # MCL debut is tougher
+    
+    return float(np.clip(debut_rating, -2.0, 3.5))
+
+def calculate_form_cycle_rating(
+    horse_block: str,
+    pedigree: dict,
+    angles_df: pd.DataFrame
+) -> float:
+    """
+    Comprehensive form cycle rating considering:
+    1. Layoff analysis
+    2. Recent form trend
+    3. First-time starter special evaluation
+    
+    Returns: Form rating from -3.0 to +3.0
+    """
+    
+    # Check if first-time starter (no race history)
+    recent_races = parse_recent_races_detailed(horse_block)
+    
+    if len(recent_races) == 0:
+        # FIRST-TIME STARTER - use comprehensive debut evaluation
+        workout_data = parse_workout_data(horse_block)
+        return evaluate_first_time_starter(pedigree, angles_df, workout_data, horse_block)
+    
+    # EXPERIENCED HORSE - analyze form cycle
+    form_rating = 0.0
+    
+    # 1. Layoff factor
+    days_since_last = recent_races[0]['days_ago'] if recent_races else 999
+    layoff_adj = calculate_layoff_factor(days_since_last)
+    form_rating += layoff_adj
+    
+    # 2. Form trend
+    recent_finishes = [r['finish'] for r in recent_races]
+    trend_adj = calculate_form_trend(recent_finishes)
+    form_rating += trend_adj
+    
+    # 3. Consistency bonus (regularly competitive)
+    if len(recent_finishes) >= 4:
+        top_3_finishes = sum(1 for f in recent_finishes[:4] if f <= 3)
+        if top_3_finishes >= 3:  # 3 of last 4 in top 3
+            form_rating += 0.8
+        elif top_3_finishes >= 2:  # 2 of last 4
+            form_rating += 0.4
+    
+    # 4. Recent win bonus
+    if recent_finishes and recent_finishes[0] == 1:  # Last race winner
+        form_rating += 0.6
+        
+        # Wire-to-wire or repeat win pattern
+        if len(recent_finishes) >= 2 and recent_finishes[1] == 1:
+            form_rating += 0.4  # Back-to-back wins
+    
+    return float(np.clip(form_rating, -3.0, 3.0))
+
 # ===================== Class Rating Calculator (Comprehensive) =====================
 
 def parse_recent_class_levels(block: str) -> List[dict]:
@@ -1567,18 +1827,19 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
 
     return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
 
-# Build Cclass using comprehensive class rating
+# Build Cclass and Cform using comprehensive analysis
 race_surface = surface_type
 race_cond = condition_txt
 race_bucket = distance_bucket(distance_txt)
 
 Cclass_vals = []
+Cform_vals = []
 for _, r in df_final_field.iterrows():
     name = r["Horse"]
     ped  = pedigree_per_horse.get(name, {}) or {}
     ang  = angles_per_horse.get(name)
     
-    # Get horse's PP block for class analysis
+    # Get horse's PP block for analysis
     horse_block = ""
     for _, h_name, block in split_into_horse_chunks(pp_text):
         if h_name == name:
@@ -1594,13 +1855,22 @@ for _, r in df_final_field.iterrows():
         angles_df=ang if ang is not None else pd.DataFrame()
     )
     
-    # Add pedigree/angle tweaks on top
+    # Add pedigree/angle tweaks on top of class
     tweak = _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
-    
     cclass_total = comprehensive_class + tweak
+    
+    # Calculate form cycle rating (includes first-time starter evaluation)
+    form_rating = calculate_form_cycle_rating(
+        horse_block=horse_block,
+        pedigree=ped,
+        angles_df=ang if ang is not None else pd.DataFrame()
+    )
+    
     Cclass_vals.append(round(cclass_total, 3))
+    Cform_vals.append(round(form_rating, 3))
 
 df_final_field["Cclass"] = Cclass_vals
+df_final_field["Cform"] = Cform_vals
 
 # ===================== B. Bias-Adjusted Ratings =====================
 
@@ -1827,18 +2097,21 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                          pp_text: str = "",
                          figs_df: pd.DataFrame = None) -> pd.DataFrame:
     """
-    Reads 'Cclass' from df_styles (pre-built), adds Cstyle/Cpost/Cpace/Cspeed (+Atrack),
+    Reads 'Cclass' and 'Cform' from df_styles (pre-built), adds Cstyle/Cpost/Cpace/Cspeed (+Atrack),
     plus Tier 2 bonuses (Impact Values, SPI, Surface Stats, AWD),
     sums to Arace and R. Returns rating table.
     """
-    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace", "Cspeed", "Cclass", "Atrack", "Arace", "R"]
+    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace", "Cspeed", "Cclass", "Cform", "Atrack", "Arace", "R"]
     if df_styles is None or df_styles.empty:
         return pd.DataFrame(columns=cols)
 
-    # Ensure class column present
+    # Ensure class and form columns present
     if "Cclass" not in df_styles.columns:
         df_styles = df_styles.copy()
         df_styles["Cclass"] = 0.0 # Default Cclass if missing
+    if "Cform" not in df_styles.columns:
+        df_styles = df_styles.copy()
+        df_styles["Cform"] = 0.0 # Default Cform if missing
 
     # Derive per-horse pace tailwind from PPI
     ppi_map = compute_ppi(df_styles).get("by_horse", {})
@@ -1874,8 +2147,9 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
-        # Get pre-computed Cclass from df_styles (calculated in Section A)
+        # Get pre-computed Cclass and Cform from df_styles (calculated in Section A)
         c_class = float(row.get("Cclass", 0.0))
+        c_form = float(row.get("Cform", 0.0))
         
         # ======================== Tier 2 Bonuses ========================
         tier2_bonus = 0.0
@@ -1906,9 +2180,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         
         # ======================== End Tier 2 Bonuses ========================
 
-        # Apply component weights: Class×2.5, Speed×2.0, Pace×1.5, Style×1.2, Post×0.8
+        # Apply component weights: Class×2.5, Form×1.8, Speed×2.0, Pace×1.5, Style×1.2, Post×0.8
         weighted_components = (
             c_class * 2.5 +
+            c_form * 1.8 +
             cspeed * 2.0 +
             cpace * 1.5 +
             cstyle * 1.2 +
@@ -1923,8 +2198,8 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         rows.append({
             "#": post, "Post": post, "Horse": name, "Style": style, "Quirin": quirin_display,
             "Cstyle": round(cstyle, 2), "Cpost": round(cpost, 2), "Cpace": round(cpace, 2),
-            "Cspeed": round(cspeed, 2), "Cclass": round(c_class, 2), "Atrack": round(a_track, 2), 
-            "Arace": round(arace, 2), "R": round(R, 2)
+            "Cspeed": round(cspeed, 2), "Cclass": round(c_class, 2), "Cform": round(c_form, 2),
+            "Atrack": round(a_track, 2), "Arace": round(arace, 2), "R": round(R, 2)
         })
     out = pd.DataFrame(rows, columns=cols)
     return out.sort_values(by="R", ascending=False)
@@ -2022,6 +2297,7 @@ for i, (rbias, pbias) in enumerate(scenarios):
                 "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f"),
                 "Cspeed": st.column_config.NumberColumn("C-Speed", format="%.2f"),
                 "Cclass": st.column_config.NumberColumn("C-Class", format="%.2f"),
+                "Cform": st.column_config.NumberColumn("C-Form", format="%.2f", help="Form cycle: layoff, trend, consistency"),
                 "Atrack": st.column_config.NumberColumn("A-Track", format="%.2f"),
                 "Arace": st.column_config.NumberColumn("A-Race", format="%.2f"),
                 # Format Quirin to show integer or be blank
