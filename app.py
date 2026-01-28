@@ -891,6 +891,22 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
 
     # --- END SPEED FIGURE LOGIC ---
 
+    # --- ANGLES BONUS LOGIC ---
+    # Add bonus for horses with positive angles
+    ANGLE_BONUS = 0.10  # Bonus per positive angle
+    df["AngleBonus"] = 0.0
+    for horse, angles_df in angles_per_horse.items():
+        if angles_df is not None and not angles_df.empty:
+            # Count positive angles (rows in the dataframe)
+            num_angles = len(angles_df)
+            if num_angles > 0:
+                bonus = num_angles * ANGLE_BONUS
+                df.loc[df["Horse"] == horse, "AngleBonus"] = bonus
+    
+    df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"] + df["AngleBonus"]
+    df.drop(columns=["AngleBonus"], inplace=True)
+    # --- END ANGLES LOGIC ---
+
     # Apply the final adjustment
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0) # Ensure no NaNs
     df["R"] = (df["R"].astype(float) + df["R_ENHANCE_ADJ"].astype(float)).round(2)
@@ -1666,13 +1682,14 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                          ppi_value: float = 0.0, # ppi_value arg seems unused, ppi_map is recalculated
                          pedigree_per_horse: Optional[Dict[str,dict]] = None,
                          track_name: str = "",
-                         pp_text: str = "") -> pd.DataFrame:
+                         pp_text: str = "",
+                         figs_df: pd.DataFrame = None) -> pd.DataFrame:
     """
-    Reads 'Cclass' from df_styles (pre-built), adds Cstyle/Cpost/Cpace (+Atrack),
+    Reads 'Cclass' from df_styles (pre-built), adds Cstyle/Cpost/Cpace/Cspeed (+Atrack),
     plus Tier 2 bonuses (Impact Values, SPI, Surface Stats, AWD),
     sums to Arace and R. Returns rating table.
     """
-    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace", "Cclass", "Atrack", "Arace", "R"]
+    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace", "Cspeed", "Cclass", "Atrack", "Arace", "R"]
     if df_styles is None or df_styles.empty:
         return pd.DataFrame(columns=cols)
 
@@ -1690,6 +1707,16 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
     surface_stats = parse_pedigree_surface_stats(pp_text) if pp_text else {}
     awd_analysis = parse_awd_analysis(pp_text) if pp_text else {}
 
+    # Calculate speed component from figs_df
+    speed_map = {}
+    if figs_df is not None and not figs_df.empty and "AvgTop2" in figs_df.columns:
+        race_avg_fig = figs_df["AvgTop2"].mean()
+        for _, fig_row in figs_df.iterrows():
+            horse_name = fig_row["Horse"]
+            horse_fig = fig_row["AvgTop2"]
+            # Normalize to race average: positive means faster than average
+            speed_map[horse_name] = (horse_fig - race_avg_fig) * MODEL_CONFIG['speed_fig_weight']
+    
     rows = []
     mapped_bias = _style_bias_label_from_choice(running_style_bias)
     for _, row in df_styles.iterrows():
@@ -1701,6 +1728,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         cstyle = style_match_score(mapped_bias, style, quirin) # Pass potential NaN
         cpost  = post_bias_score(post_bias_pick, post)
         cpace  = float(ppi_map.get(name, 0.0))
+        cspeed = float(speed_map.get(name, 0.0))  # Speed component from figures
 
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
@@ -1735,7 +1763,15 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         
         # ======================== End Tier 2 Bonuses ========================
 
-        arace = c_class + cstyle + cpost + cpace + a_track + tier2_bonus
+        # Apply component weights: Class×2.5, Speed×2.0, Pace×1.5, Style×1.2, Post×0.8
+        weighted_components = (
+            c_class * 2.5 +
+            cspeed * 2.0 +
+            cpace * 1.5 +
+            cstyle * 1.2 +
+            cpost * 0.8
+        )
+        arace = weighted_components + a_track + tier2_bonus
         R     = arace
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
@@ -1744,7 +1780,8 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         rows.append({
             "#": post, "Post": post, "Horse": name, "Style": style, "Quirin": quirin_display,
             "Cstyle": round(cstyle, 2), "Cpost": round(cpost, 2), "Cpace": round(cpace, 2),
-            "Cclass": round(c_class, 2), "Atrack": round(a_track, 2), "Arace": round(arace, 2), "R": round(R, 2)
+            "Cspeed": round(cspeed, 2), "Cclass": round(c_class, 2), "Atrack": round(a_track, 2), 
+            "Arace": round(arace, 2), "R": round(R, 2)
         })
     out = pd.DataFrame(rows, columns=cols)
     return out.sort_values(by="R", ascending=False)
@@ -1804,7 +1841,8 @@ for i, (rbias, pbias) in enumerate(scenarios):
             # ppi_value=ppi_val, # Removed as it's recalculated inside
             pedigree_per_horse=pedigree_per_horse,
             track_name=track_name,
-            pp_text=pp_text
+            pp_text=pp_text,
+            figs_df=figs_df  # Pass speed figures
         )
         ratings_df = apply_enhancements_and_figs(
             ratings_df=ratings_df,
@@ -1839,6 +1877,7 @@ for i, (rbias, pbias) in enumerate(scenarios):
                 "Cstyle": st.column_config.NumberColumn("C-Style", format="%.2f"),
                 "Cpost": st.column_config.NumberColumn("C-Post", format="%.2f"),
                 "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f"),
+                "Cspeed": st.column_config.NumberColumn("C-Speed", format="%.2f"),
                 "Cclass": st.column_config.NumberColumn("C-Class", format="%.2f"),
                 "Atrack": st.column_config.NumberColumn("A-Track", format="%.2f"),
                 "Arace": st.column_config.NumberColumn("A-Race", format="%.2f"),
