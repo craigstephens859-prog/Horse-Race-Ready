@@ -1,0 +1,33 @@
+# Core Dependencies (existing)
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# ML Engine Dependencies (Phase 2)
+# Option 1: PyTorch (recommended for GPU support)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Option 2: Scikit-learn (CPU-only, lighter weight)
+# Uncomment if you prefer sklearn over torch
+# scikit-learn>=1.3.0
+
+# Database
+# sqlite3 is built into Python, no install needed
+
+# Optional: For better performance
+# numba>=0.57.0  # JIT compilation for NumPy
+
+# Installation Instructions:
+# 
+# For PyTorch (recommended):
+#   pip install -r requirements-ml.txt
+#
+# For CPU-only version (lighter):
+#   pip install streamlit pandas numpy scikit-learn
+#
+# For M1/M2 Mac users:
+#   pip install torch torchvision
+#
+# Note: If torch installation fails, system will automatically
+# fall back to scikit-learn. Both work fine for this application.
