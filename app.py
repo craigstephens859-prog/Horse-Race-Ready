@@ -14,6 +14,7 @@
 
 import os
 import re
+import math
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 from itertools import product
@@ -957,14 +958,14 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
 
 # ---------- Odds helpers ----------
 def fair_to_american(p: float) -> float:
-    if p <= 0: return float("in")
+    if p <= 0: return math.inf
     if p >= 1: return 0.0
     dec = 1.0/p
     return round((dec-1)*100,0) if dec>=2 else round(-100/(dec-1),0)
 
 def fair_to_american_str(p: float) -> str:
     v = fair_to_american(p)
-    if v == float("in"): return "N/A"
+    if math.isinf(v): return "N/A"
     return f"+{int(v)}" if v > 0 else f"{int(v)}"
 
 def str_to_decimal_odds(s: str) -> Optional[float]:
