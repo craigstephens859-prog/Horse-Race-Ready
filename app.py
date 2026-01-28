@@ -2241,6 +2241,30 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
 
 # ===================== E. ML System & Results Tracking =====================
 
+# Helper function to convert odds to decimal (defined outside ML block)
+def convert_to_decimal_odds(odds_str):
+    """Convert fractional (5/2) or American (+150) odds to decimal"""
+    if not odds_str or odds_str.strip() == '':
+        return 5.0
+    odds_str = str(odds_str).strip()
+    try:
+        # Fractional odds (e.g., "5/2", "9/1")
+        if '/' in odds_str:
+            num, den = odds_str.split('/')
+            return round(float(num) / float(den) + 1.0, 2)
+        # American odds (e.g., "+150", "-200")
+        elif '+' in odds_str or (odds_str.startswith('-') and len(odds_str) > 1):
+            american = float(odds_str)
+            if american > 0:
+                return round(american / 100.0 + 1.0, 2)
+            else:
+                return round(100.0 / abs(american) + 1.0, 2)
+        # Already decimal (e.g., "3.5")
+        else:
+            return round(float(odds_str), 2)
+    except:
+        return 5.0
+
 st.header("E. ML System & Results Tracking")
 
 if ML_AVAILABLE:
@@ -2250,30 +2274,6 @@ if ML_AVAILABLE:
         calibrator = MLCalibrator(db_path)
         
         tab_results, tab_history, tab_train, tab_predict = st.tabs(["📝 Enter Results", "📊 Race History", "🤖 Train Model", "🎯 Get Predictions"])
-        
-        # Helper function to convert odds to decimal
-        def convert_to_decimal_odds(odds_str):
-            """Convert fractional (5/2) or American (+150) odds to decimal"""
-            if not odds_str or odds_str.strip() == '':
-                return 5.0
-            odds_str = str(odds_str).strip()
-            try:
-                # Fractional odds (e.g., "5/2", "9/1")
-                if '/' in odds_str:
-                    num, den = odds_str.split('/')
-                    return round(float(num) / float(den) + 1.0, 2)
-                # American odds (e.g., "+150", "-200")
-                elif '+' in odds_str or (odds_str.startswith('-') and len(odds_str) > 1):
-                    american = float(odds_str)
-                    if american > 0:
-                        return round(american / 100.0 + 1.0, 2)
-                    else:
-                        return round(100.0 / abs(american) + 1.0, 2)
-                # Already decimal (e.g., "3.5")
-                else:
-                    return round(float(odds_str), 2)
-            except:
-                return 5.0
         
         # Tab 1: Enter Race Results
         with tab_results:
