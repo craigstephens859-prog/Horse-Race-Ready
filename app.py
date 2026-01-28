@@ -1847,6 +1847,11 @@ if scenarios:
     primary_key = scenarios[0]
     if primary_key in all_scenario_ratings:
         primary_df, primary_probs = all_scenario_ratings[primary_key]
+        
+        # Store in session state for button access
+        st.session_state['primary_df'] = primary_df
+        st.session_state['primary_probs'] = primary_probs
+        
         st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
     else:
         st.error("Primary scenario ratings not found. Check calculations.")
@@ -2078,12 +2083,16 @@ st.header("D. Classic Report")
 # Only show button if race has been parsed
 if not st.session_state.get("parsed", False):
     st.warning("⚠️ Please parse a race first in Section A before analyzing.")
-elif 'primary_df' not in locals() or 'primary_probs' not in locals():
+elif 'primary_df' not in st.session_state or 'primary_probs' not in st.session_state:
     st.error("❌ Rating data not available. Please ensure Section C completed successfully.")
 else:
     if st.button("Analyze This Race", type="primary", key="analyze_button"):
         with st.spinner("Handicapping Race..."):
             try:
+                # Retrieve from session state
+                primary_df = st.session_state['primary_df']
+                primary_probs = st.session_state['primary_probs']
+                
                 # --- 1. Build Data for Strategy & Prompt ---
                 if primary_df.empty or not all(col in primary_df.columns for col in ['Horse', 'R', 'Fair %', 'Fair Odds']):
                     st.error("Primary ratings data is incomplete for report generation.")
