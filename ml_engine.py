@@ -318,7 +318,7 @@ class RaceDatabase:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT id, track, date, race_number, distance, surface, created_at
+            SELECT race_id, track, date, surface, distance, created_at
             FROM races
             ORDER BY created_at DESC
             LIMIT ?
@@ -329,13 +329,12 @@ class RaceDatabase:
         
         return [
             {
-                'id': row[0],
+                'race_id': row[0],
                 'track': row[1],
                 'date': row[2],
-                'race_number': row[3],
+                'surface': row[3],
                 'distance': row[4],
-                'surface': row[5],
-                'created_at': row[6]
+                'created_at': row[5]
             }
             for row in rows
         ]
