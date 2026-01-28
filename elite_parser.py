@@ -13,7 +13,7 @@ Features:
 """
 
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from datetime import datetime
 

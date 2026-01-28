@@ -7,7 +7,7 @@ OPTIMIZED HORSE_ANGLES8.PY - WITH CRITICAL FIXES
 """
 
 from __future__ import annotations
-from typing import Dict, Any, Optional
+from typing import Dict, List, Tuple, Any, Optional
 
 import pandas as pd
 import numpy as np

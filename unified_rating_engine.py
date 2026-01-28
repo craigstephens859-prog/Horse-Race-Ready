@@ -2,7 +2,7 @@
 # Gold-Standard Integration: Parsing → 8 Angles → Comprehensive Rating → Softmax
 # Target: 90%+ winner accuracy through unified mathematical framework
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 import pandas as pd
@@ -16,7 +16,7 @@ except ImportError:
 
 # Import optimized components
 from horse_angles8 import compute_eight_angles
-from elite_parser import EliteBRISNETParser
+from elite_parser import EliteBRISNETParser, HorseData
 
 @dataclass
 class RatingComponents:
