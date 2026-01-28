@@ -2085,30 +2085,30 @@ else:
         with st.spinner("Handicapping Race..."):
             try:
                 # --- 1. Build Data for Strategy & Prompt ---
-            if primary_df.empty or not all(col in primary_df.columns for col in ['Horse', 'R', 'Fair %', 'Fair Odds']):
-                st.error("Primary ratings data is incomplete for report generation.")
-                st.stop()
+                if primary_df.empty or not all(col in primary_df.columns for col in ['Horse', 'R', 'Fair %', 'Fair Odds']):
+                    st.error("Primary ratings data is incomplete for report generation.")
+                    st.stop()
 
-            primary_sorted = primary_df.sort_values(by="R", ascending=False)
-            name_to_post = pd.Series(df_final_field["Post"].values,
-                                     index=df_final_field["Horse"]).to_dict()
-            name_to_ml = pd.Series(df_final_field["ML"].values, 
-                                   index=df_final_field["Horse"]).to_dict()
-            field_size = len(primary_df)
-            
-            top_table = primary_sorted[['Horse','R','Fair %','Fair Odds']].head(5).to_markdown(index=False)
+                primary_sorted = primary_df.sort_values(by="R", ascending=False)
+                name_to_post = pd.Series(df_final_field["Post"].values,
+                                         index=df_final_field["Horse"]).to_dict()
+                name_to_ml = pd.Series(df_final_field["ML"].values, 
+                                       index=df_final_field["Horse"]).to_dict()
+                field_size = len(primary_df)
+                
+                top_table = primary_sorted[['Horse','R','Fair %','Fair Odds']].head(5).to_markdown(index=False)
 
-            overlay_pos = df_ol[df_ol["EV per $1"] > 0] if not df_ol.empty else pd.DataFrame()
-            overlay_table_md = (overlay_pos[['Horse','Fair %','Fair (AM)','Board (dec)','EV per $1']].to_markdown(index=False)
-                                if not overlay_pos.empty else "None.")
+                overlay_pos = df_ol[df_ol["EV per $1"] > 0] if not df_ol.empty else pd.DataFrame()
+                overlay_table_md = (overlay_pos[['Horse','Fair %','Fair (AM)','Board (dec)','EV per $1']].to_markdown(index=False)
+                                    if not overlay_pos.empty else "None.")
 
-            # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
-            strategy_report_md = build_betting_strategy(
-                primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
-            )
+                # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
+                strategy_report_md = build_betting_strategy(
+                    primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
+                )
 
-            # --- 3. Update the LLM Prompt ---
-            prompt = f"""
+                # --- 3. Update the LLM Prompt ---
+                prompt = f"""
 Act as a professional horse racing analyst writing a clear, concise, and actionable betting report suitable for handicappers of all levels.
 
 --- RACE CONTEXT ---
@@ -2144,36 +2144,36 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
     - Include the final **Bankroll & Strategy Notes**.
 - **Tone:** Be informative, direct, and easy to understand. Avoid overly complex jargon. Use horse names and post numbers (#) frequently.
 """
-            report = call_openai_messages(messages=[{"role":"user","content":prompt}])
-            st.markdown(report)
+                report = call_openai_messages(messages=[{"role":"user","content":prompt}])
+                st.markdown(report)
 
-            # ---- Save to disk (optional) ----
-            report_str = report if isinstance(report, str) else str(report)
-            with open("analysis.txt","w", encoding="utf-8", errors="replace") as f:
-                f.write(report_str)
+                # ---- Save to disk (optional) ----
+                report_str = report if isinstance(report, str) else str(report)
+                with open("analysis.txt","w", encoding="utf-8", errors="replace") as f:
+                    f.write(report_str)
 
-            if isinstance(df_ol, pd.DataFrame):
-                df_ol.to_csv("overlays.csv", index=False, encoding="utf-8-sig")
-            else:
-                pd.DataFrame().to_csv("overlays.csv", index=False, encoding="utf-8-sig")
+                if isinstance(df_ol, pd.DataFrame):
+                    df_ol.to_csv("overlays.csv", index=False, encoding="utf-8-sig")
+                else:
+                    pd.DataFrame().to_csv("overlays.csv", index=False, encoding="utf-8-sig")
 
-            # --- Create a tickets.txt from the strategy report ---
-            with open("tickets.txt","w", encoding="utf-8", errors="replace") as f:
-                f.write(strategy_report_md) # Save the raw strategy markdown
-            tickets_bytes = strategy_report_md.encode("utf-8")
+                # --- Create a tickets.txt from the strategy report ---
+                with open("tickets.txt","w", encoding="utf-8", errors="replace") as f:
+                    f.write(strategy_report_md) # Save the raw strategy markdown
+                tickets_bytes = strategy_report_md.encode("utf-8")
 
-            # ---- Download buttons (browser) ----
-            analysis_bytes = report_str.encode("utf-8")
-            overlays_bytes = df_ol.to_csv(index=False).encode("utf-8-sig") if isinstance(df_ol, pd.DataFrame) else b""
+                # ---- Download buttons (browser) ----
+                analysis_bytes = report_str.encode("utf-8")
+                overlays_bytes = df_ol.to_csv(index=False).encode("utf-8-sig") if isinstance(df_ol, pd.DataFrame) else b""
 
-            st.download_button("⬇️ Download Full Analysis (.txt)", data=analysis_bytes, file_name="analysis.txt", mime="text/plain")
-            st.download_button("⬇️ Download Overlays (CSV)", data=overlays_bytes, file_name="overlays.csv", mime="text/csv")
-            st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain") # Renamed for clarity
+                st.download_button("⬇️ Download Full Analysis (.txt)", data=analysis_bytes, file_name="analysis.txt", mime="text/plain")
+                st.download_button("⬇️ Download Overlays (CSV)", data=overlays_bytes, file_name="overlays.csv", mime="text/csv")
+                st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain") # Renamed for clarity
 
-        except Exception as e:
-            st.error(f"Error generating report: {e}")
-            import traceback
-            st.error(traceback.format_exc())
+            except Exception as e:
+                st.error(f"Error generating report: {e}")
+                import traceback
+                st.error(traceback.format_exc())
 
 # ===================== E. ML System & Results Tracking =====================
 
