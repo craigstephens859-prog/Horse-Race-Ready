@@ -2,11 +2,21 @@
 # Gold-Standard Integration: Parsing → 8 Angles → Comprehensive Rating → Softmax
 # Target: 90%+ winner accuracy through unified mathematical framework
 
+import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 import pandas as pd
 import numpy as np
+
+# Configure logging
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 try:
     import torch
@@ -102,37 +112,37 @@ class UnifiedRatingEngine:
         """
 
         # STEP 1: PARSE PP TEXT
-        print("[STEP 1] Parsing PP text...")
+        logger.info("STEP 1: Parsing PP text")
         horses = self.parser.parse_full_pp(pp_text)
 
         if not horses:
-            raise ValueError("[ERROR] No horses could be parsed from PP text")
+            raise ValueError("No horses could be parsed from PP text")
 
-        print(f"[OK] Parsed {len(horses)} horses")
+        logger.info(f"Successfully parsed {len(horses)} horses")
 
         # Validate parsing quality
         validation = self.parser.validate_parsed_data(horses)
         self.last_validation = validation
 
         if validation['overall_confidence'] < 0.7:
-            print(f"⚠️ WARNING: Low parsing confidence ({validation['overall_confidence']:.1%})")
+            logger.warning(f"Low parsing confidence: {validation['overall_confidence']:.1%}")
 
         # STEP 2: CONVERT TO DATAFRAME FOR ANGLE CALCULATION
-        print("\n📊 STEP 2: Extracting features for angle calculation...")
+        logger.debug("STEP 2: Extracting features for angle calculation")
         df = self._horses_to_dataframe(horses)
 
         # STEP 3: CALCULATE 8 NORMALIZED ANGLES
-        print("🎯 STEP 3: Computing 8-angle system...")
+        logger.debug("STEP 3: Computing 8-angle system")
         if len(df) > 0:
             angles_df = compute_eight_angles(df, use_weights=True, debug=False)
             # Merge angles back into main dataframe
             df = df.join(angles_df)
         else:
-            print("⚠️ No data for angle calculation")
+            logger.warning("No data available for angle calculation")
             df['Angles_Total'] = 0.0
 
         # STEP 4: CALCULATE COMPREHENSIVE RATINGS
-        print("⚙️ STEP 4: Calculating comprehensive ratings...")
+        logger.debug("STEP 4: Calculating comprehensive ratings")
         rows = []
 
         for name, horse in horses.items():
@@ -182,7 +192,7 @@ class UnifiedRatingEngine:
         results_df = pd.DataFrame(rows)
 
         # STEP 5: APPLY SOFTMAX FOR PROBABILITIES
-        print("🎲 STEP 5: Computing win probabilities...")
+        logger.debug("STEP 5: Computing win probabilities")
         results_df = self._apply_softmax(results_df)
 
         # STEP 6: CALCULATE FAIR ODDS & VALUE
@@ -193,8 +203,8 @@ class UnifiedRatingEngine:
         results_df = results_df.sort_values('Probability', ascending=False).reset_index(drop=True)
         results_df['Predicted_Finish'] = results_df.index + 1
 
-        print("\n[OK] PREDICTION COMPLETE")
-        print(f"Top selection: {results_df.iloc[0]['Horse']} ({results_df.iloc[0]['Probability']:.1%})")
+        logger.info("Prediction complete")
+        logger.info(f"Top selection: {results_df.iloc[0]['Horse']} ({results_df.iloc[0]['Probability']:.1%})")
 
         return results_df
 
@@ -678,7 +688,8 @@ class UnifiedRatingEngine:
 
 if __name__ == "__main__":
     # Test with sample race
-    print("Testing Unified Rating Engine...\n")
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Testing Unified Rating Engine")
 
     sample_pp = """Race 2 Mountaineer 'Mdn 16.5k 5½ Furlongs 3&up, F & M Wednesday, August 20, 2025
 
@@ -704,12 +715,10 @@ Prime Power: 101.5 (4th)
             condition_txt="fast"
         )
 
-        print("\n" + "="*80)
-        print("PREDICTION RESULTS")
-        print("="*80)
-        print(results[['Horse', 'Post', 'Rating', 'Probability', 'Fair_Odds', 'Parse_Confidence']].to_string(index=False))
+        logger.info("="*80)
+        logger.info("PREDICTION RESULTS")
+        logger.info("="*80)
+        logger.info("\n" + results[['Horse', 'Post', 'Rating', 'Probability', 'Fair_Odds', 'Parse_Confidence']].to_string(index=False))
 
     except Exception as e:
-        print(f"❌ Test failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Test failed: {e}", exc_info=True)

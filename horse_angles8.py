@@ -7,10 +7,20 @@ OPTIMIZED HORSE_ANGLES8.PY - WITH CRITICAL FIXES
 """
 
 from __future__ import annotations
+import logging
 from typing import Dict, List, Tuple, Any, Optional
 
 import pandas as pd
 import numpy as np
+
+# Configure logging
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 # Angle importance weights (empirically derived)
 ANGLE_WEIGHTS = {
@@ -443,25 +453,25 @@ def validate_angle_calculation(df: pd.DataFrame, verbose: bool = True) -> Dict[s
     }
 
     if verbose:
-        print(f"\n{'='*60}")
-        print("ANGLE CALCULATION VALIDATION")
-        print(f"{'='*60}")
-        print(f"Horses Processed: {report['horses_processed']}")
-        print(f"Angles Calculated: {report['angles_calculated']}")
-        print(f"Valid: {'✅ YES' if report['valid'] else '❌ NO'}")
+        logger.info("="*60)
+        logger.info("ANGLE CALCULATION VALIDATION")
+        logger.info("="*60)
+        logger.info(f"Horses Processed: {report['horses_processed']}")
+        logger.info(f"Angles Calculated: {report['angles_calculated']}")
+        logger.info(f"Valid: {'✅ YES' if report['valid'] else '❌ NO'}")
 
         if issues:
-            print("\n🚨 CRITICAL ISSUES:")
+            logger.error("CRITICAL ISSUES:")
             for issue in issues:
-                print(f"   - {issue}")
+                logger.error(f"   - {issue}")
 
         if warnings:
-            print("\n⚠️ WARNINGS:")
+            logger.warning("WARNINGS:")
             for warning in warnings:
-                print(f"   - {warning}")
+                logger.warning(f"   - {warning}")
 
         if not issues and not warnings:
-            print("\n✅ All validations passed!")
+            logger.info("All validations passed!")
 
     return report
 
@@ -470,10 +480,11 @@ def validate_angle_calculation(df: pd.DataFrame, verbose: bool = True) -> Dict[s
 
 if __name__ == "__main__":
     # Test with sample data
-    print("Testing optimized angle calculation with critical fixes...\n")
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Testing optimized angle calculation with critical fixes")
 
     # Test Case 1: Normal data
-    print("Test 1: Normal varied data")
+    logger.info("Test 1: Normal varied data")
     df_normal = pd.DataFrame({
         'Post': [1, 3, 5, 7, 9],
         'LastFig': [85, 92, 88, 95, 80],
@@ -482,10 +493,10 @@ if __name__ == "__main__":
         'DaysSince': [14, 30, 45, 7, 60]
     })
     angles_normal = compute_eight_angles(df_normal)
-    print(f"✅ Normal data: {len(angles_normal)} horses, Total range: [{angles_normal['Angles_Total'].min():.2f}, {angles_normal['Angles_Total'].max():.2f}]")
+    logger.info(f"Normal data: {len(angles_normal)} horses, Total range: [{angles_normal['Angles_Total'].min():.2f}, {angles_normal['Angles_Total'].max():.2f}]")
 
     # Test Case 2: CRITICAL - Zero range (all same value)
-    print("\nTest 2: CRITICAL - Zero range (all horses same post)")
+    logger.info("Test 2: CRITICAL - Zero range (all horses same post)")
     df_zero_range = pd.DataFrame({
         'Post': [5, 5, 5, 5, 5],  # ALL SAME
         'LastFig': [85, 85, 85, 85, 85],  # ALL SAME
@@ -494,20 +505,23 @@ if __name__ == "__main__":
     angles_zero = compute_eight_angles(df_zero_range)
     has_nan = angles_zero.isnull().any().any()
     has_inf = np.isinf(angles_zero.select_dtypes(include=[np.number])).any().any()
-    print(f"{'❌ FAILED' if has_nan or has_inf else '✅ PASSED'}: NaN={has_nan}, Inf={has_inf}")
-    print(f"   Post_Angle values: {angles_zero['Post_Angle'].unique()}")
+    if has_nan or has_inf:
+        logger.error(f"FAILED: NaN={has_nan}, Inf={has_inf}")
+    else:
+        logger.info(f"PASSED: NaN={has_nan}, Inf={has_inf}")
+    logger.debug(f"Post_Angle values: {angles_zero['Post_Angle'].unique()}")
 
     # Test Case 3: Outliers
-    print("\nTest 3: Outlier protection")
+    logger.info("Test 3: Outlier protection")
     df_outliers = pd.DataFrame({
         'Post': [2, 3, 4, 5, 15],  # 15 is extreme outlier
         'LastFig': [85, 87, 86, 88, 150],  # 150 is outlier
     })
     angles_outliers, debug_df = compute_eight_angles(df_outliers, debug=True)
-    print(f"✅ Outliers handled: Speed range {debug_df['Raw_Speed'].min()}-{debug_df['Raw_Speed'].max()} → normalized {angles_outliers['EarlySpeed_Angle'].min():.3f}-{angles_outliers['EarlySpeed_Angle'].max():.3f}")
+    logger.info(f"Outliers handled: Speed range {debug_df['Raw_Speed'].min()}-{debug_df['Raw_Speed'].max()} → normalized {angles_outliers['EarlySpeed_Angle'].min():.3f}-{angles_outliers['EarlySpeed_Angle'].max():.3f}")
 
     # Full validation
-    print(f"\n{'='*60}")
+    logger.info("="*60)
     validate_angle_calculation(df_normal, verbose=True)
 
-    print("\n✅ All critical fixes validated!")
+    logger.info("All critical fixes validated!")

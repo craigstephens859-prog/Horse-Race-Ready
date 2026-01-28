@@ -13,12 +13,22 @@ Features:
 """
 
 import re
+import logging
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
 import pandas as pd
 import numpy as np
+
+# Configure logging
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 # ===================== DATA MODELS =====================
 
@@ -1150,31 +1160,32 @@ Sire Stats: AWD 115.2 18% FTS 22% 108.5 spi
     parser = EliteBRISNETParser()
     horses = parser.parse_full_pp(sample_pp)
 
-    print("="*80)
-    print("PARSED HORSES:")
-    print("="*80)
+    logging.basicConfig(level=logging.INFO)
+    logger.info("="*80)
+    logger.info("PARSED HORSES:")
+    logger.info("="*80)
 
     for name, horse in horses.items():
-        print(f"\n🐎 {name}")
-        print(f"   Post: {horse.post}")
-        print(f"   Style: {horse.pace_style} (Quirin {horse.quirin_points}, {horse.style_strength})")
-        print(f"   ML Odds: {horse.ml_odds} → {horse.ml_odds_decimal}")
-        print(f"   Jockey: {horse.jockey} ({horse.jockey_win_pct:.1%})")
-        print(f"   Trainer: {horse.trainer} ({horse.trainer_win_pct:.1%})")
-        print(f"   Speed Figs: {horse.speed_figures} (Avg Top2: {horse.avg_top2})")
-        print(f"   Angles: {horse.angle_count}")
-        print(f"   Confidence: {horse.parsing_confidence:.1%}")
+        logger.info(f"\n🐎 {name}")
+        logger.info(f"   Post: {horse.post}")
+        logger.info(f"   Style: {horse.pace_style} (Quirin {horse.quirin_points}, {horse.style_strength})")
+        logger.info(f"   ML Odds: {horse.ml_odds} → {horse.ml_odds_decimal}")
+        logger.info(f"   Jockey: {horse.jockey} ({horse.jockey_win_pct:.1%})")
+        logger.info(f"   Trainer: {horse.trainer} ({horse.trainer_win_pct:.1%})")
+        logger.info(f"   Speed Figs: {horse.speed_figures} (Avg Top2: {horse.avg_top2})")
+        logger.info(f"   Angles: {horse.angle_count}")
+        logger.info(f"   Confidence: {horse.parsing_confidence:.1%}")
         if horse.warnings:
-            print(f"   ⚠️ Warnings: {', '.join(horse.warnings)}")
+            logger.warning(f"   Warnings: {', '.join(horse.warnings)}")
 
     # Validation report
     validation = parser.validate_parsed_data(horses)
-    print(f"\n{'='*80}")
-    print("VALIDATION REPORT:")
-    print(f"{'='*80}")
-    print(f"Overall Confidence: {validation['overall_confidence']:.1%}")
-    print(f"Horses Parsed: {validation['horses_parsed']}")
-    print(f"Issues Found: {len(validation['issues'])}")
+    logger.info(f"\n{'='*80}")
+    logger.info("VALIDATION REPORT:")
+    logger.info(f"{'='*80}")
+    logger.info(f"Overall Confidence: {validation['overall_confidence']:.1%}")
+    logger.info(f"Horses Parsed: {validation['horses_parsed']}")
+    logger.info(f"Issues Found: {len(validation['issues'])}")
     if validation['critical_issues']:
         print("\n🚨 CRITICAL ISSUES:")
         for issue in validation['critical_issues']:
