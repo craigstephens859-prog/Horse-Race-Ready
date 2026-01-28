@@ -854,7 +854,7 @@ def compute_ppi(df_styles: pd.DataFrame) -> dict:
             by_horse[nm] = 0.0
     return {"ppi": round(ppi_val,3), "by_horse": by_horse}
 
-def_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: Dict[str,float],
+def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: Dict[str,float],
                                 chaos_index: float, track_name: str, surface_type: str,
                                 distance_txt: str, race_type: str,
                                 angles_per_horse: Dict[str,pd.DataFrame],
