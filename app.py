@@ -2321,7 +2321,7 @@ if ML_AVAILABLE:
         with tab_predict:
             st.subheader("ML-Enhanced Probability Predictions")
             
-            if calibrator.is_trained():
+            if calibrator.is_trained:
                 st.success("✅ Model is trained and ready")
                 
                 if st.session_state.get("parsed", False) and 'ratings_df' in locals():
