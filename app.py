@@ -37,9 +37,10 @@ try:
     from historical_data_builder import HistoricalDataBuilder
     from integrate_real_data import convert_to_ml_format
     HISTORICAL_DATA_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception) as e:
     HISTORICAL_DATA_AVAILABLE = False
     HistoricalDataBuilder = None
+    print(f"Historical Data System disabled: {e}")
 
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
@@ -2696,7 +2697,7 @@ else:
                 )
 
                 # --- 3. Update the LLM Prompt ---
-                prompt = """
+                prompt = f"""
 Act as a professional horse racing analyst writing a clear, concise, and actionable betting report suitable for handicappers of all levels.
 
 --- RACE CONTEXT ---
