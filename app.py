@@ -3027,17 +3027,46 @@ if HISTORICAL_DATA_AVAILABLE:
         st.rerun()
 else:
     st.error("⚠️ Historical Data System Not Available")
+    
+    # Add debug info
+    with st.expander("🔍 Debug Information"):
+        st.code(f"HISTORICAL_DATA_AVAILABLE = {HISTORICAL_DATA_AVAILABLE}")
+        st.write("Testing direct import...")
+        try:
+            import sys
+            # Force reload modules
+            if 'historical_data_builder' in sys.modules:
+                del sys.modules['historical_data_builder']
+            if 'integrate_real_data' in sys.modules:
+                del sys.modules['integrate_real_data']
+            
+            from historical_data_builder import HistoricalDataBuilder
+            from integrate_real_data import convert_to_ml_format
+            st.success("✅ Direct import test PASSED - Modules can be imported!")
+            st.warning("Issue: Module imports work but HISTORICAL_DATA_AVAILABLE is cached as False")
+            st.info("**Solution:** Stop and restart the Streamlit server completely")
+        except Exception as e:
+            st.error(f"❌ Direct import test FAILED: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+    
     st.info("""
     **Troubleshooting Steps:**
     1. Press **C** in browser to clear Streamlit cache
     2. Click **Rerun** button (top right)
-    3. If still not working, restart Streamlit server
+    3. If still not working, **Stop server (Ctrl+C)** and run: `python -m streamlit run app.py`
     
     Files verified present: ✅ historical_data_builder.py ✅ integrate_real_data.py
     """)
     if st.button("🔄 Force Reload App", key="force_reload"):
         st.cache_data.clear()
         st.cache_resource.clear()
+        # Force module reload
+        import sys
+        if 'historical_data_builder' in sys.modules:
+            del sys.modules['historical_data_builder']
+        if 'integrate_real_data' in sys.modules:
+            del sys.modules['integrate_real_data']
         st.rerun()
 
 if HISTORICAL_DATA_AVAILABLE:
