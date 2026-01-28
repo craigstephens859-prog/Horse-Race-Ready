@@ -352,7 +352,7 @@ class UnifiedRatingEngine:
         return float(np.clip(rating, -3.0, 6.0))
 
     def _calc_form(self, horse: HorseData) -> float:
-        """Form cycle: layoff + trend + consistency"""
+        """Form cycle: layoff + trend + consistency + TRIP HANDICAPPING"""
         rating = 0.0
 
         # First-time starter special handling
@@ -413,6 +413,32 @@ class UnifiedRatingEngine:
             if all(f <= 3 for f in finishes):
                 rating += 0.5
 
+        # TRIP HANDICAPPING (using comprehensive data)
+        if hasattr(horse, 'trip_comments') and horse.trip_comments:
+            last_comment = horse.trip_comments[0] if horse.trip_comments else ""
+            last_comment_lower = last_comment.lower()
+            
+            # Trouble indicators = excuse for poor finish
+            trouble_keywords = ['stumb', 'bump', 'check', 'steady', 'blocked', 'shut off', 
+                              'wide', 'bad start', 'broke slow', 'squeezed', 'interfered']
+            if any(keyword in last_comment_lower for keyword in trouble_keywords):
+                # Had trouble last out - excuse for form
+                if horse.recent_finishes and horse.recent_finishes[0] >= 5:
+                    rating += 0.8  # Excuse for poor finish
+            
+            # Positive trip notes
+            if 'rallied' in last_comment_lower or 'strong' in last_comment_lower:
+                rating += 0.3
+
+        # RACE HISTORY QUALITY (using comprehensive data)
+        if hasattr(horse, 'race_history') and horse.race_history:
+            # Check for recent competitive finishes
+            recent_races = horse.race_history[:3]
+            close_finishes = sum(1 for race in recent_races 
+                               if race.get('finish', 99) <= 3)
+            if close_finishes >= 2:
+                rating += 0.4  # Consistent contender
+
         return float(np.clip(rating, -3.0, 3.0))
 
     def _calc_speed(self, horse: HorseData, horses_in_race: List[HorseData]) -> float:
@@ -430,24 +456,63 @@ class UnifiedRatingEngine:
         return float(np.clip(differential, -2.0, 2.0))
 
     def _calc_pace(self, horse: HorseData, horses_in_race: List[HorseData], distance_txt: str) -> float:
-        """Pace scenario rating based on field composition"""
+        """Pace scenario rating using COMPREHENSIVE running pattern data"""
         rating = 0.0
 
-        # Count early types
+        # Count early types (basic)
         num_speed = sum(1 for h in horses_in_race if h.pace_style in ['E', 'E/P'])
 
-        if horse.pace_style == 'E':
-            if num_speed == 1:  # Lone speed
-                rating += 2.5
-            elif num_speed == 2:  # Speed duel
-                rating -= 1.0
-            elif num_speed >= 3:  # Brutal pace
-                rating -= 2.5
-        elif horse.pace_style == 'S':  # Closer
-            if num_speed >= 3:  # Hot pace to close into
-                rating += 2.0
-            elif num_speed == 1:  # Nothing to run down
-                rating -= 1.5
+        # ENHANCED: Use comprehensive early_speed_pct if available
+        if hasattr(horse, 'early_speed_pct') and horse.early_speed_pct is not None:
+            # More accurate than just style letter
+            if horse.early_speed_pct >= 75:  # True speedball
+                if num_speed == 1:  # Lone speed
+                    rating += 3.0  # Huge advantage
+                elif num_speed == 2:  # One rival
+                    rating -= 0.5
+                elif num_speed >= 3:  # Brutal pace
+                    rating -= 2.5
+            elif horse.early_speed_pct >= 50:  # Press type
+                if num_speed >= 3:
+                    rating -= 1.0  # Will get caught in duel
+            elif horse.early_speed_pct <= 25:  # True closer
+                if num_speed >= 3:  # Hot pace to close into
+                    rating += 2.5
+                elif num_speed == 1:  # Nothing to run down
+                    rating -= 1.5
+        else:
+            # Fallback to basic style
+            if horse.pace_style == 'E':
+                if num_speed == 1:  # Lone speed
+                    rating += 2.5
+                elif num_speed == 2:  # Speed duel
+                    rating -= 1.0
+                elif num_speed >= 3:  # Brutal pace
+                    rating -= 2.5
+            elif horse.pace_style == 'S':  # Closer
+                if num_speed >= 3:  # Hot pace to close into
+                    rating += 2.0
+                elif num_speed == 1:  # Nothing to run down
+                    rating -= 1.5
+
+        # ENHANCED: Closing percentage matters in slow pace scenarios
+        if hasattr(horse, 'closing_pct') and horse.closing_pct is not None:
+            if horse.closing_pct >= 75 and num_speed >= 3:
+                rating += 0.5  # Strong closer with hot pace = extra boost
+
+        # Distance consideration
+        try:
+            dist_val = float(''.join(c for c in distance_txt if c.isdigit() or c == '.'))
+            if dist_val >= 8.5:  # Routes favor stamina
+                if horse.pace_style == 'S':
+                    rating += 0.3
+            elif dist_val <= 6.0:  # Sprints favor speed
+                if horse.pace_style == 'E':
+                    rating += 0.3
+        except Exception:
+            pass
+
+        return float(np.clip(rating, -3.0, 3.0))
 
         # Route vs sprint adjustment
         is_route = '1 ' in distance_txt.lower() or '1-1' in distance_txt or '8.5' in distance_txt
@@ -507,7 +572,7 @@ class UnifiedRatingEngine:
         return float(np.clip(rating, -0.5, 0.5))
 
     def _calc_tier2_bonus(self, horse: HorseData, surface_type: str, distance_txt: str) -> float:
-        """Advanced bonuses: SPI, surface stats, AWD match"""
+        """Advanced bonuses: Using ALL comprehensive parser data"""
         bonus = 0.0
 
         # SPI bonus
@@ -523,6 +588,51 @@ class UnifiedRatingEngine:
         if horse.angles:
             pos_roi_angles = [a for a in horse.angles if a['roi'] > 1.0]
             bonus += min(0.3, len(pos_roi_angles) * 0.1)
+
+        # EQUIPMENT CHANGES (using comprehensive data)
+        if hasattr(horse, 'equipment_change') and horse.equipment_change:
+            if 'blinkers on' in horse.equipment_change.lower():
+                bonus += 0.25  # Blinkers on can help
+            elif 'blinkers off' in horse.equipment_change.lower():
+                bonus -= 0.15  # Blinkers off can hurt
+
+        # FIRST-TIME LASIX (using comprehensive data)
+        if hasattr(horse, 'first_lasix') and horse.first_lasix:
+            bonus += 0.20  # First-time Lasix often positive
+
+        # SURFACE STATISTICS (using comprehensive data)
+        if hasattr(horse, 'surface_stats') and horse.surface_stats:
+            # Normalize surface type
+            surface_key = {'Dirt': 'Fst', 'Turf': 'Trf', 'Synthetic': 'AW'}.get(surface_type, 'Fst')
+            if surface_key in horse.surface_stats:
+                stats = horse.surface_stats[surface_key]
+                # Bonus for high win% on today's surface
+                if stats.get('win_pct', 0) >= 30:
+                    bonus += 0.25
+                elif stats.get('win_pct', 0) >= 20:
+                    bonus += 0.15
+                # Bonus for high avg figure on surface
+                if stats.get('avg_fig', 0) >= 90:
+                    bonus += 0.10
+
+        # WORKOUT PATTERNS (using comprehensive data)
+        if hasattr(horse, 'workout_pattern') and horse.workout_pattern:
+            if horse.workout_pattern == 'Sharp':
+                bonus += 0.15  # 5+ recent works = sharp
+            elif horse.workout_pattern == 'Sparse':
+                # Check if recent bullet work compensates
+                if hasattr(horse, 'workouts') and horse.workouts:
+                    recent = horse.workouts[0] if len(horse.workouts) > 0 else None
+                    if recent and recent.get('bullet', False):
+                        bonus += 0.10  # Bullet work offsets sparse pattern
+                    else:
+                        bonus -= 0.10  # Sparse and no bullets = concern
+
+        # RUNNING STYLE PATTERNS (using comprehensive data)
+        if hasattr(horse, 'closing_pct') and horse.closing_pct:
+            # High closer rating with hot pace scenario = advantage
+            if horse.closing_pct >= 75:
+                bonus += 0.10
 
         return round(bonus, 2)
 
