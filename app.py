@@ -5,7 +5,7 @@
 # - Track-bias integration (by track/surface/distance bucket + style/post)
 # - Per-horse angles + pedigree tweaks folded into class math
 # - Speed Figure parsing and integration
-# - Centralized MODEL_CONFIG for easy tuning
+# - Centralized for easy tuning
 # - Robust error handling with st.warning
 # - Advanced "common sense" A/B/C/D strategy builder w/ budgeting, field size logic, straight/box examples
 # - Super High 5 exotic support
@@ -14,29 +14,21 @@
 
 import os, re, json, math
 from typing import Dict, List, Tuple, Optional
-from collections import Counter
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-from itertools import product, permutations
+from itertools import product
 
-# PuLP for ticket optimization
+# Try importing ML Engine for Phase 2 functionality
 try:
-    import pulp
-    PULP_AVAILABLE = True
+    from ml_engine import MLCalibrator, RaceDatabase
+    ML_AVAILABLE = True
 except ImportError:
-    PULP_AVAILABLE = False
-    st.warning("⚠️ PuLP not installed. Ticket optimization disabled. Install with: pip install pulp")
-
-# ML imports (optional - graceful fallback if not installed)
-try:
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.preprocessing import StandardScaler
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
-    st.warning("⚠️ scikit-learn not installed. ML adjustment disabled. Install with: pip install scikit-learn")
+    ML_AVAILABLE = False
+    MLCalibrator = None
+    RaceDatabase = None
 
 # ===================== Page / Model Settings =====================
 
@@ -125,17 +117,14 @@ def call_openai_messages(messages: List[Dict]) -> str:
 # ===================== Model Config & Tuning =====================
 
 MODEL_CONFIG = {
-    "softmax_tau": 0.55, "speed_fig_weight": 0.05, "first_timer_fig_default": 50,
-    "ppi_multiplier": 1.0, "ppi_tailwind_factor": 0.3,
-    "prime_power_weight": 0.09, "late_pace_weight": 0.07, "trainer_meet_bonus": 0.08,
-    "jockey_upgrade_bonus": 0.07, "layoff_bullet_bonus": 0.10, "class_drop_bonus": 0.12,
-    "front_bandages_bonus": 0.05, "lasix_off_penalty": -0.08, "back_fig_par_bonus": 0.08,
-    "quirin_lp_sneak_bonus": 0.11, "frac_pace_bonus": 0.09, "dam_sire_turf_bonus": 0.10,
-    "dam_sire_route_bonus": 0.09, "trainer_pattern_roi_scale": 0.02, "bad_trip_bonus": 0.06,
-    "fig_trend_bonus": 0.11, "equip_bonus": 0.07, "bounce_penalty": -0.09,
-    "sire_mud_bonus": 0.08, "owner_roi_bonus": 0.06, "odds_drift_bonus": 0.05,
+    # --- Rating Model ---
+    "softmax_tau": 0.85,  # Controls win prob "sharpness". Lower = more spread out.
+    "speed_fig_weight": 0.05, # (Fig - Avg) * Weight. 0.05 = 10 fig points = 0.5 bonus.
+    "first_timer_fig_default": 50, # Assumed speed fig for a 1st-time starter.
     
     # --- Pace & Style Model ---
+    "ppi_multiplier": 1.5, # Overall impact of the Pace Pressure Index (PPI).
+    "ppi_tailwind_factor": 0.6, # How much of the PPI value is given to E/EP or S horses.
     "style_strength_weights": { # Multiplier for pace tailwind based on strength.
         "Strong": 1.0, 
         "Solid": 0.8, 
@@ -145,7 +134,7 @@ MODEL_CONFIG = {
     
     # --- Manual Bias Model (Section B) ---
     "style_match_table": {
-        "speed favoring": {"E": 0.70, "E/P": 0.50, "P": -0.20, "S": -0.50},
+        "favoring": {"E": 0.70, "E/P": 0.50, "P": -0.20, "S": -0.50},
         "closer favoring": {"E": -0.50, "E/P": -0.20, "P": 0.25, "S": 0.50},
         "fair/neutral": {"E": 0.0, "E/P": 0.0, "P": 0.0, "S": 0.0},
     },
@@ -178,19 +167,8 @@ MODEL_CONFIG = {
     "angle_tweak_min_clip": -0.12, # Min/Max total adjustment from all angles
     "angle_tweak_max_clip": 0.12,
     
-    # --- Trainer Intent Signals ---
-    "trainer_intent_class_drop_bonus": 0.12,  # Big drop = win now
-    "trainer_intent_jky_switch_bonus": 0.09,  # To top jky = intent
-    "trainer_intent_equip_bonus": 0.08,       # Blinkers on = focus
-    "trainer_intent_layoff_works_bonus": 0.10,# Sharp works post-layoff
-    "trainer_intent_ship_bonus": 0.07,        # From better track
-    "trainer_intent_roi_threshold": 1.5,      # Positive ROI angle multiplier
-    
     # --- Exotics & Strategy ---
     "exotic_bias_weights": (1.30, 1.15, 1.05, 1.03), # (1st, 2nd, 3rd, 4th) Harville bias
-    "positions_to_sim": 5,  # For SH5
-    "top_for_pos": [2, 2, 3, 3, 3],  # 1st:2, 2nd:2, 3rd:3, 4th:3, 5th:3
-    "closer_bias_high_ppi": 0.35,  # Probability boost for closers when PPI > 0.5
     "strategy_confident": { # Placeholders, not used by new strategy builder
         "ex_max": 4, "ex_min_prob": 0.020,
         "tri_max": 6, "tri_min_prob": 0.010,
@@ -200,87 +178,7 @@ MODEL_CONFIG = {
         "ex_max": 6, "ex_min_prob": 0.015,
         "tri_max": 10, "tri_min_prob": 0.008,
         "sup_max": 12, "sup_min_prob": 0.006,
-    },
-    
-    # --- Jockey & Trainer Intent Bonuses ---
-    "intent_max_bonus": 0.20,
-    "trainer_roi_bonus_per": 0.05,
-    "jock_win_bonus_per": 0.60,
-    "jock_upgrade_bonus_per": 0.04,
-    
-    # --- Figure Trend Analysis (NEW) ---
-    "fig_uptrend_bonus": 0.12,  # Last 3 figs improving
-    "fig_downtrend_penalty": -0.10,  # Last 3 figs declining
-    
-    # --- Recency Weighting (NEW) ---
-    "recency_decay_rate": 0.15,  # Exponential decay: recent races weighted heavier
-    
-    # --- Distance Consistency (NEW) ---
-    "distance_specialist_threshold": 0.22,
-    "distance_specialist_bonus": 0.08,
-    "distance_poor_threshold": 0.10,
-    "distance_poor_penalty": -0.06,
-    
-    # --- Bounce Detection (NEW) ---
-    "bounce_fig_drop_threshold": 6,
-    "bounce_penalty_aggressive": -0.10,
-    
-    # --- Class Transition (NEW) ---
-    "class_rise_penalty": -0.07,
-    "blinkers_off_penalty": -0.06,
-    
-    # --- Dynamic Exotic Probabilities ---
-    "positions_to_sim": 5,  # For SH5
-    "top_for_pos": [2, 2, 3, 3, 3],  # 1st:2, 2nd:2, 3rd:3, 4th:3, 5th:3
-    "closer_bias_high_ppi": 0.35,  # Probability of boosting closer in high-PPI scenarios
-    
-    # --- TIER 1: BRISNET Pedigree Ratings (NEW) ---
-    "bris_ped_fast_bonus": 0.06,  # Fast track specialist
-    "bris_ped_off_bonus": 0.05,  # Off-track specialist (mud/sloppy)
-    "bris_ped_distance_bonus": 0.07,  # Distance specialist
-    "bris_ped_turf_bonus": 0.06,  # Turf specialist
-    "bris_ped_rating_threshold": 85,  # Bonus applied if rating >= threshold
-    
-    # --- TIER 1: Dam Production Index Bonus (NEW) ---
-    "dpi_bonus_threshold": 1.5,  # Apply bonus if DPI > 1.5 (dam produces above-average earners)
-    "dpi_bonus": 0.05,  # Bonus for high DPI
-    
-    # --- TIER 1: Surface-Specific Record Penalty (NEW) ---
-    "surface_mismatch_off_penalty": -0.06,  # Penalize poor off-track record on mud
-    "surface_mismatch_dirt_penalty": -0.05,  # Penalize poor dirt record on dirt
-    "surface_specialist_threshold_good": 0.40,  # Strong record threshold
-    "surface_specialist_threshold_poor": 0.20,  # Poor record threshold
-    
-    # --- PART 2 ENHANCEMENT: CR/RR Performance Ratio (NEW) ---
-    "cr_rr_outperform_threshold": 0.95,  # Ratio >= 0.95 = performing close to field RR
-    "cr_rr_excellent_threshold": 1.00,   # Ratio >= 1.00 = performing above field
-    "cr_rr_outperform_bonus": 0.06,      # Bonus if ratio >= 0.95
-    "cr_rr_excellent_bonus": 0.10,       # Bonus if ratio >= 1.00
-    "cr_rr_consistency_bonus": 0.04,     # Bonus for consistent CR performances
-    
-    # --- TIER 2: PEDIGREE SPI (Sire Production Index) ---
-    "spi_strong_threshold": 1.0,         # SPI >= 1.0 = strong sire
-    "spi_strong_bonus": 0.06,            # Bonus for strong sire
-    "spi_weak_threshold": 0.5,           # SPI <= 0.5 = weak sire
-    "spi_weak_penalty": -0.05,           # Penalty for weak sire
-    
-    # --- TIER 2: SURFACE SPECIALTY STATISTICS (Sire %Mud, %Turf) ---
-    "mud_specialist_threshold": 25,      # Sire %Mud >= 25% = specialist
-    "mud_specialist_bonus": 0.08,        # Bonus for mud specialist
-    "mud_moderate_threshold": 15,        # Sire %Mud >= 15% = moderate
-    "mud_moderate_bonus": 0.04,          # Bonus for moderate mud record
-    "turf_specialist_threshold": 30,     # Sire %Turf >= 30% = specialist
-    "turf_specialist_bonus": 0.08,       # Bonus for turf specialist
-    "turf_moderate_threshold": 20,       # Sire %Turf >= 20% = moderate
-    "turf_moderate_bonus": 0.04,         # Bonus for moderate turf record
-    
-    # --- TIER 2: AWD (Average Winning Distance) MISMATCH PENALTIES ---
-    "awd_large_mismatch_penalty": -0.08,     # 2.0f+ mismatch
-    "awd_moderate_mismatch_penalty": -0.04,  # 1.0-2.0f mismatch
-    "awd_small_mismatch_penalty": -0.02,     # 0.5-1.0f mismatch
-    
-    # --- EXOTIC SIMULATIONS ---
-    "exotic_sims": 20000,  # Number of simulations for dynamic exotic probabilities
+    }
 }
 
 # =========================
@@ -725,97 +623,6 @@ def _canonical_track(track_name: str) -> str:
                 return canon
     return (track_name or "").strip()
 
-def apex_enhance(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["APEX"] = 0.0
-    
-    # Ensure AvgTop2 column exists
-    if "AvgTop2" not in df.columns:
-        df["AvgTop2"] = MODEL_CONFIG['first_timer_fig_default']
-    
-    # Safe calculations with fallbacks if data is missing
-    max_prime = df["Prime"].max() if not df["Prime"].isna().all() else 0
-    if pd.isna(max_prime):
-        max_prime = 0
-    
-    lp_values = [np.mean(a["lp"] or [50]) for a in all_angles_per_horse.values() if a.get("lp")]
-    avg_lp = np.nanmean(lp_values) if lp_values else 50
-    
-    frac_values = [np.mean([f[0] for f in a["frac"]][:3]) for a in all_angles_per_horse.values() if a.get("frac")]
-    best_frac = min(frac_values) if frac_values else 99
-    
-    race_avg_avgtop2 = df["AvgTop2"].mean()
-    
-    for i, r in df.iterrows():
-        h = r["Horse"]
-        if h not in all_angles_per_horse:
-            continue
-        a = all_angles_per_horse[h]
-        adj = (r["AvgTop2"] - race_avg_avgtop2) * MODEL_CONFIG["speed_fig_weight"]
-        
-        # Safe Prime adjustment (handle NaN)
-        prime_val = r["Prime"] if not pd.isna(r["Prime"]) else 0
-        adj += (prime_val - max_prime) * 0.09
-        
-        # Safe LP adjustment
-        adj += (np.mean(a.get("lp") or [50]) - avg_lp) * 0.07
-        adj += 0.08 if a.get("trainer_win", 0) >= 23 else 0
-        adj += 0.07 if any(j in a.get("jockey", "") for j in ["Irad Ortiz Jr","Flavien Prat","Jose Ortiz","Joel Rosario","John Velazquez","Tyler Gaffalione"]) else 0
-        adj += 0.10 if 45 <= a.get("layoff", 0) <= 180 and a.get("bullets", 0) >= 3 else 0
-        # Pattern bonuses are already numeric, summed later - skip string check
-        adj += 0.05 if "Front Bandages On" in a.get("equip", "") else 0
-        adj -= 0.08 if "Lasix Off" in a.get("equip", "") else 0
-        figs_dict = figs_per_horse.get(h, {})
-        figs_list = figs_dict.get('SPD', []) if isinstance(figs_dict, dict) else []
-        recent_figs = figs_list[1:4] if figs_list and len(figs_list) > 1 else []
-        adj += 0.08 if recent_figs and max(recent_figs) >= today_par + 8 else 0
-        adj += 0.11 if r["Style"] not in ("E","E/P") and np.mean(a.get("lp") or [50]) >= avg_lp + 8 else 0
-        
-        # Safe frac calculation
-        horse_fracs = a.get("frac", [])
-        if horse_fracs:
-            horse_avg_frac = np.mean([f[0] for f in horse_fracs[:3]])
-            adj += 0.09 if horse_avg_frac <= best_frac + 2 else 0
-        dam_sire = a.get("dam_sire", (0, 0))
-        adj += 0.10 if surface_type=="Turf" and dam_sire[0] >= 19 else 0
-        adj += 0.09 if distance_bucket(distance_txt)=="8f+" and dam_sire[1] >= 22 else 0
-        patterns = a.get("patterns", [])
-        adj += min(sum(p for p in patterns if isinstance(p, (int, float)) and p > 0) * 0.02, 0.12)
-        adj += a.get("trips", 0) * 0.06 if a.get("trips", 0) >= 2 else 0
-        adj += 0.11 if figs_list and len(figs_list) >= 3 and figs_list[0] > figs_list[1] > figs_list[2] else 0
-        equip = a.get("equip", "")
-        adj += 0.07 if equip and "Lasix Off" not in equip else 0
-        adj -= 0.09 if a.get("bounce", False) else 0
-        adj += 0.08 if condition_txt in ("muddy","sloppy") and a.get("sire_mud", 0) >= 18 else 0
-        adj += 0.06 if a.get("owner_roi", 0) > 0 else 0
-        
-        # Trainer Intent Signals
-        intent = trainer_intent_per_horse.get(h, {})
-        adj += MODEL_CONFIG["trainer_intent_class_drop_bonus"] if intent.get("class_drop_pct", 0) >= 30 else 0
-        adj += MODEL_CONFIG["trainer_intent_jky_switch_bonus"] if intent.get("jky_switch", False) and a.get("trainer_win", 0) >= 20 else 0
-        adj += MODEL_CONFIG["trainer_intent_equip_bonus"] if intent.get("equip_change") == "blink_on" else 0
-        adj += MODEL_CONFIG["trainer_intent_layoff_works_bonus"] if a.get("layoff", 0) > 45 and intent.get("layoff_works", 0) >= 3 else 0
-        adj += MODEL_CONFIG["trainer_intent_ship_bonus"] if intent.get("ship_from", "") in ["SAR", "CD", "BEL"] else 0  # Elite tracks
-        adj += (intent.get("roi_angles", 0) / MODEL_CONFIG["trainer_intent_roi_threshold"]) * 0.04  # Scaled ROI boost
-        
-        # Post-Time Odds Drift Tracker (Live Odds vs ML Delta)
-        ml_dec  = str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "ML"].iloc[0]) if h in df_final_field["Horse"].values else None
-        live_dec = str_to_decimal_odds(df_final_field.loc[df_final_field["Horse"]==h, "Live Odds"].iloc[0]) if h in df_final_field["Horse"].values else None
-        if ml_dec and live_dec:
-            live_dec = live_dec or ml_dec
-        elif ml_dec:
-            live_dec = ml_dec
-        else:
-            ml_dec = live_dec = None
-        
-        if ml_dec and live_dec and ml_dec > 0:
-            drift_pct = max(0, (ml_dec - live_dec) / ml_dec)  # only positive drift rewarded
-            adj += drift_pct * 0.50  # 50 basis points per 100% drift
-        
-        df.loc[i, "APEX"] = round(adj, 3)
-    df["R"] = (df["R"] + df["APEX"]).round(2)
-    return df
-
 def _post_bucket(post_str: str) -> str:
     try:
         post = int(re.sub(r"[^\d]", "", str(post_str)))
@@ -834,54 +641,7 @@ def _style_norm(style: str) -> str:
     return "E/P" if s in ("EP", "E/P") else s
 
 def _get_track_bias_delta(track_name: str, surface_type: str, distance_txt: str,
-                          style: str, post_str: str,
-                          impact_values: Optional[dict] = None) -> float:
-    """
-    Calculate track bias delta using Impact Values if available, otherwise fall back to generic profiles.
-    
-    Args:
-        track_name: Name of the racetrack
-        surface_type: Dirt/Turf/Synthetic
-        distance_txt: Race distance (e.g., "6 Furlongs")
-        style: Running style (E, E/P, P, S)
-        post_str: Post position as string
-        impact_values: Dict with structure {'running_style': {...}, 'post_position': {...}}
-    
-    Returns:
-        float: Track bias delta bonus/penalty clipped to [-1.0, 1.0]
-    """
-    
-    # PRIORITY 1: Use Impact Values if provided and present in data
-    if impact_values and isinstance(impact_values, dict):
-        impact_values_data = impact_values.get('running_style', {})
-        post_impact_data = impact_values.get('post_position', {})
-        
-        # Try to extract Impact Values
-        s_norm = _style_norm(style)
-        rs_impact = impact_values_data.get(s_norm, None)
-        
-        post_bucket = _post_bucket(post_str)
-        post_impact = post_impact_data.get(post_bucket, None)
-        
-        # If we have at least one Impact Value, use them (convert from percentage to bonus)
-        # Impact Value 1.41 means +41% edge -> convert to +0.41 bonus
-        if rs_impact is not None or post_impact is not None:
-            rs_delta = 0.0
-            post_delta = 0.0
-            
-            # Running Style Impact: 1.30 means +30% edge = +0.30 bonus
-            if rs_impact is not None:
-                rs_delta = float(rs_impact - 1.0) if rs_impact > 0 else 0.0
-            
-            # Post Position Impact: 1.41 means +41% edge = +0.41 bonus
-            if post_impact is not None:
-                post_delta = float(post_impact - 1.0) if post_impact > 0 else 0.0
-            
-            # Use Impact Values (data-driven)
-            combined_delta = rs_delta + post_delta
-            return float(np.clip(combined_delta, -1.0, 1.0))
-    
-    # FALLBACK: Use generic TRACK_BIAS_PROFILES if Impact Values not available
+                          style: str, post_str: str) -> float:
     canon = _canonical_track(track_name)
     surf  = (surface_type or "Dirt").strip().title()
     buck  = distance_bucket(distance_txt)  # ≤6f / 6.5–7f / 8f+
@@ -894,115 +654,6 @@ def _get_track_bias_delta(track_name: str, surface_type: str, distance_txt: str,
     runstyle_delta = float((cfg.get("runstyle", {}) or {}).get(s_norm, 0.0))
     post_delta     = float((cfg.get("post", {}) or {}).get(_post_bucket(post_str), 0.0))
     return float(np.clip(runstyle_delta + post_delta, -1.0, 1.0))
-
-def calculate_spi_bonus(spi: float, dam_sire_spi: float) -> float:
-    """
-    Calculate bonus/penalty based on Sire Production Index (SPI).
-    SPI < 1.0 = weak sire, SPI > 1.0 = strong sire
-    Typical range: 0.3-0.7 (mostly weak to moderate)
-    
-    Returns: bonus/penalty float
-    """
-    bonus = 0.0
-    
-    # Sire SPI bonus/penalty
-    if pd.notna(spi):
-        if spi >= MODEL_CONFIG.get('spi_strong_threshold', 1.0):
-            bonus += MODEL_CONFIG.get('spi_strong_bonus', 0.06)
-        elif spi <= MODEL_CONFIG.get('spi_weak_threshold', 0.5):
-            bonus += MODEL_CONFIG.get('spi_weak_penalty', -0.05)
-    
-    # Dam-Sire SPI (lesser impact, typically worth 50% of sire impact)
-    if pd.notna(dam_sire_spi):
-        if dam_sire_spi >= MODEL_CONFIG.get('spi_strong_threshold', 1.0):
-            bonus += MODEL_CONFIG.get('spi_strong_bonus', 0.06) * 0.5
-        elif dam_sire_spi <= MODEL_CONFIG.get('spi_weak_threshold', 0.5):
-            bonus += MODEL_CONFIG.get('spi_weak_penalty', -0.05) * 0.5
-    
-    return float(np.clip(bonus, -0.12, 0.12))
-
-def calculate_surface_specialty_bonus(sire_mud_pct: float, sire_turf_pct: float, 
-                                     dam_sire_mud_pct: float, race_condition: str,
-                                     race_surface: str) -> float:
-    """
-    Calculate bonus based on sire surface specialty statistics.
-    High %Mud on off-track races, high %Turf on turf races.
-    
-    Returns: bonus/penalty float
-    """
-    bonus = 0.0
-    
-    # Off-track/Muddy condition bonuses
-    if race_condition.lower() in ("muddy", "sloppy", "heavy", "wet-fast"):
-        if pd.notna(sire_mud_pct):
-            if sire_mud_pct >= MODEL_CONFIG.get('mud_specialist_threshold', 25):
-                bonus += MODEL_CONFIG.get('mud_specialist_bonus', 0.08)
-            elif sire_mud_pct >= MODEL_CONFIG.get('mud_moderate_threshold', 15):
-                bonus += MODEL_CONFIG.get('mud_moderate_bonus', 0.04)
-        
-        if pd.notna(dam_sire_mud_pct):
-            if dam_sire_mud_pct >= MODEL_CONFIG.get('mud_specialist_threshold', 25):
-                bonus += MODEL_CONFIG.get('mud_specialist_bonus', 0.08) * 0.3
-    
-    # Turf condition bonus
-    if race_surface.lower() == "turf" and pd.notna(sire_turf_pct):
-        if sire_turf_pct >= MODEL_CONFIG.get('turf_specialist_threshold', 30):
-            bonus += MODEL_CONFIG.get('turf_specialist_bonus', 0.08)
-        elif sire_turf_pct >= MODEL_CONFIG.get('turf_moderate_threshold', 20):
-            bonus += MODEL_CONFIG.get('turf_moderate_bonus', 0.04)
-    
-    return float(np.clip(bonus, -0.12, 0.12))
-
-def calculate_awd_mismatch_penalty(sire_awd: float, dam_sire_awd: float, 
-                                   race_distance: str) -> float:
-    """
-    Calculate penalty for Average Winning Distance (AWD) mismatch.
-    Horse with shorter AWD may struggle at longer distances and vice versa.
-    
-    Example: Race is 5.5f, but Sire AWD is 7.5f = 2.0f mismatch = significant penalty
-    
-    Returns: penalty float (typically negative)
-    """
-    penalty = 0.0
-    
-    try:
-        # Parse race distance in furlongs
-        race_dist_match = re.search(r'(\d+\.?\d*)\s*(?:Furlongs?|f)?', str(race_distance))
-        if not race_dist_match:
-            return 0.0
-        
-        race_dist_f = float(race_dist_match.group(1))
-        
-        # Sire AWD mismatch
-        if pd.notna(sire_awd):
-            awd_diff = abs(race_dist_f - sire_awd)
-            
-            # Penalty scales with mismatch magnitude
-            # 0.5f mismatch = small penalty (-0.02)
-            # 1.0f mismatch = moderate penalty (-0.04)
-            # 2.0f+ mismatch = large penalty (-0.08)
-            if awd_diff >= 2.0:
-                penalty += MODEL_CONFIG.get('awd_large_mismatch_penalty', -0.08)
-            elif awd_diff >= 1.0:
-                penalty += MODEL_CONFIG.get('awd_moderate_mismatch_penalty', -0.04)
-            elif awd_diff >= 0.5:
-                penalty += MODEL_CONFIG.get('awd_small_mismatch_penalty', -0.02)
-        
-        # Dam-Sire AWD (lesser weight, typically 30% of sire impact)
-        if pd.notna(dam_sire_awd):
-            ds_awd_diff = abs(race_dist_f - dam_sire_awd)
-            
-            if ds_awd_diff >= 2.0:
-                penalty += MODEL_CONFIG.get('awd_large_mismatch_penalty', -0.08) * 0.3
-            elif ds_awd_diff >= 1.0:
-                penalty += MODEL_CONFIG.get('awd_moderate_mismatch_penalty', -0.04) * 0.3
-            elif ds_awd_diff >= 0.5:
-                penalty += MODEL_CONFIG.get('awd_small_mismatch_penalty', -0.02) * 0.3
-    except:
-        pass
-    
-    return float(np.clip(penalty, -0.15, 0.0))
-
 
 # ===================== Core Helpers =====================
 
@@ -1056,26 +707,9 @@ def split_into_horse_chunks(pp_text: str) -> List[tuple]:
         end = matches[i+1].start() if i+1 < len(matches) else len(pp_text)
         post = m.group(1).strip()
         name = m.group(2).strip()
-        style = m.group(3) if m.group(3) else "NA"
-        quirin = m.group(4).strip() if m.group(4) else "0"
         block = pp_text[start:end]
-        chunks.append((post, name, style, quirin, block))
+        chunks.append((post, name, block))
     return chunks
-
-def parse_equip_lasix(block: str) -> Tuple[str, str]:
-    # Blinkers: Look for B or b in equipment line (BRIS standard)
-    equip_line = re.search(r"(?i)Equipment.*?([A-Za-z]+)", block or "")
-    blink = "on" if equip_line and "B" in equip_line.group(1).upper() else "off"
-    if re.search(r"Blinkers\s+On", block or "", re.I): blink = "on"
-    if re.search(r"Blinkers\s+Off", block or "", re.I): blink = "off"
-    
-    # Lasix: L = first, L# = repeat, no L = off
-    lasix = "off"
-    if re.search(r"\bL\b", block or ""): lasix = "first"
-    elif re.search(r"\bL\d+\b", block or ""): lasix = "repeat"
-    elif re.search(r"Lasix", block or "", re.I): lasix = "on"
-    
-    return blink, lasix
 
 def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
     rows = []
@@ -1109,7 +743,7 @@ _ODDS_TOKEN = r"(\d+\s*/\s*\d+|\d+\s*-\s*\d+|[+-]?\d+(?:\.\d+)?)"
 
 def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
     ml = {}
-    blocks = {name: block for _, name, _, _, block in split_into_horse_chunks(pp_text)}
+    blocks = {name: block for _, name, block in split_into_horse_chunks(pp_text)}
     for name, block in blocks.items():
         if name in ml: continue
         m_start = re.search(rf"(?mi)^\s*{_ODDS_TOKEN}", block or "")
@@ -1120,153 +754,6 @@ def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
         if m_labeled:
             ml[name.strip()] = m_labeled.group(1).replace(" ", "")
     return ml
-
-def parse_all_angles(block: str) -> dict:
-    """Parse BRISNET Ultimate PP format for advanced handicapping angles"""
-    # Prime Power: 101.5 (4th)
-    prime_match = re.search(r"Prime Power:\s*(\d+\.?\d*)", block or "")
-    prime_val = float(prime_match.group(1)) if prime_match else np.nan
-    
-    # Extract E2/LP (late pace) values from past performance lines
-    # Format: "21Sep25Mnr® 5½ ft :22© :46« :59« 1:06« ¦ ¨§¯ ™C4000 ¨§® 87 72/ 74 +5 +1 56"
-    # The pattern is: E1 E2/ LP where LP is after the slash
-    lp_values = []
-    for m in re.finditer(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?\s+(\d{2,3})\s+(\d{2,3})/\s*(\d{2,3})", block or ""):
-        lp_values.append(int(m.group(3)))  # LP is the 3rd capture group
-    
-    # Extract fractional positions (1C, 2C columns) from past performances
-    # Format: "56 4 6 6ªƒ 8 8¨§ 6¨§" where positions are like "6ªƒ" (6 with superscript)
-    frac_positions = []
-    for m in re.finditer(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?\s+\d+\s+\d+\s+(\d+)[ªƒ²³¨«¬©°±´‚]*\s+(\d+)[ªƒ²³¨«¬©°±´‚]*", block or ""):
-        try:
-            pos1 = int(m.group(1))
-            pos2 = int(m.group(2))
-            frac_positions.append((pos1, pos2, (pos1+pos2)//2))  # Store as tuple
-        except:
-            pass
-    
-    # Trainer win% from: "Trnr: Cluley Denis (120 23-17-14 19%)"
-    trainer_match = re.search(r"Trnr:.*?\([^\)]+\s+(\d+)%\)", block or "")
-    trainer_win = float(trainer_match.group(1)) if trainer_match else 0
-    
-    # Jockey from QuickPlay comments or race lines
-    jockey_match = re.search(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?([A-Z][a-z]+[A-Z][a-z]*?\d*[ª©§¨]*)\s+(?:Lb?f?|L)\s+[\d\.*]+", block or "")
-    jockey_name = jockey_match.group(1) if jockey_match else "NA"
-    
-    # Days since last race - calculate from most recent race date
-    layoff = 0
-    recent_race = re.search(r"(\d{2})[A-Za-z]{3}(\d{2})", block or "")
-    if recent_race:
-        try:
-            day = int(recent_race.group(1))
-            year = int(recent_race.group(2)) + 2000
-            # Simplified: assume recent if within 90 days
-            layoff = 30  # Default placeholder
-        except:
-            pass
-    
-    # Bullet works (marked with "B" or "Bg" in workout lines)
-    bullets = len(re.findall(r"(?m)^\d{2}[A-Za-z]{3}.*?\sB(?:g|\b)", block or ""))
-    
-    # Equipment changes from QuickPlay comments
-    equip = ""
-    if re.search(r"(?i)blinkers?\s+on", block or ""):
-        equip = "Blinkers On"
-    elif re.search(r"(?i)lasix\s+off", block or ""):
-        equip = "Lasix Off"
-    elif re.search(r"(?i)front\s+bandages", block or ""):
-        equip = "Front Bandages On"
-    
-    # Dam's Sire stats: "Dam'sSire: AWD 6.1 18%Mud"
-    dam_sire_match = re.search(r"Dam'sSire:\s*AWD\s*([\d.]+)\s*(\d+)%Mud", block or "")
-    dam_sire = (float(dam_sire_match.group(2)), float(dam_sire_match.group(1))) if dam_sire_match else (0, 0)
-    
-    # Sire mud stats: "Sire Stats: AWD 7.5 13%Mud"
-    sire_mud_match = re.search(r"Sire Stats:\s*AWD\s*[\d.]+\s*(\d+)%Mud", block or "")
-    sire_mud = float(sire_mud_match.group(1)) if sire_mud_match else 0
-    
-    # Pattern recognition from QuickPlay comments (× and ñ markers)
-    patterns = []
-    if re.search(r"(?i)ñ.*drops?\s+in\s+class", block or ""):
-        patterns.append(5.0)  # Class drop bonus
-    if re.search(r"(?i)ñ.*first\s+time", block or ""):
-        patterns.append(3.0)
-    if re.search(r"(?i)ñ.*high.*speed", block or ""):
-        patterns.append(2.0)
-    
-    # Trip comments (trouble in running)
-    trouble_phrases = ["bumped", "steadied", "blocked", "altered course", "hung", "weakened", "off slow", "wide"]
-    trips = min(sum(1 for phrase in trouble_phrases if phrase in block.lower()), 4)
-    
-    # Owner ROI (not commonly in PPs, default to 0)
-    owner_roi = 0
-    
-    d = {
-        "prime": prime_val,
-        "lp": lp_values[:10],
-        "frac": frac_positions[:8],
-        "trainer_win": trainer_win,
-        "jockey": jockey_name,
-        "layoff": layoff,
-        "bullets": bullets,
-        "equip": equip,
-        "dam_sire": dam_sire,
-        "sire_mud": sire_mud,
-        "patterns": patterns,
-        "trips": trips,
-        "owner_roi": owner_roi,
-        "bounce": False  # Calculated in apex_enhance where figs_per_horse is available
-    }
-    return d
-
-def parse_trainer_intent(block: str) -> dict:
-    """Parse trainer intent signals from BRISNET Ultimate PPs"""
-    # Class drop from QuickPlay comments: "ñ Drops in class today"
-    class_drop = 0
-    if re.search(r"(?i)ñ.*drops?\s+in\s+class", block or ""):
-        class_drop = 50  # Assume significant drop if noted
-    
-    # Jockey switch - compare recent jockeys
-    recent_jockeys = re.findall(r"(?m)^\d{2}[A-Za-z]{3}\d{2}.*?([A-Z][a-z]+[A-Z][a-z]*?\d*)[ª©§¨]*\s+(?:Lb?f?|L)", block or "")
-    jky_switch = len(set(recent_jockeys[:3])) > 1 if len(recent_jockeys) >= 2 else False
-    
-    # Equipment change: "ñ" indicates positive, check for blinkers
-    equip_change = "none"
-    if re.search(r"(?i)blinkers?\s+on", block or ""):
-        equip_change = "blink_on"
-    elif re.search(r"(?i)blinkers?\s+off", block or ""):
-        equip_change = "blink_off"
-    
-    # Layoff works: count bullet workouts (marked with "B")
-    # Format: "28Oct Mnr 4f ft :47ª B"
-    workout_matches = re.findall(r"(?m)^\d{2}[A-Za-z]{3}.*?\d+f.*?:(\d{2}).*?B", block or "")
-    layoff_works = sum(1 for time in workout_matches if int(time) <= 50)  # Fast works under 50 seconds
-    
-    # Shipper: "Previously trained by" or ship indicators
-    ship_from = ""
-    if re.search(r"Previously trained by", block or ""):
-        ship_from = "SHIP"
-    shipper_match = re.search(r"(?i)ñ.*shipper", block or "")
-    if shipper_match:
-        ship_from = "SHIP"
-    
-    # ROI angles: look for positive trainer stats
-    # Format: "JKYw/ Trn L60 31 16% 45% -0.37" - last number is ROI
-    roi_total = 0
-    for m in re.finditer(r"(?m)^[+]?[\w\s/]+\s+\d+\s+\d+%\s+\d+%\s+([+-]?\d+\.\d+)", block or ""):
-        roi_val = float(m.group(1))
-        if roi_val > 0:
-            roi_total += roi_val
-    
-    d = {
-        "class_drop_pct": class_drop,
-        "jky_switch": jky_switch,
-        "equip_change": equip_change,
-        "layoff_works": layoff_works,
-        "ship_from": ship_from,
-        "roi_angles": roi_total
-    }
-    return d
 
 ANGLE_LINE_RE = re.compile(
     r'(?mi)^\s*(\d{4}\s+)?(1st\s*time\s*str|Debut\s*MdnSpWt|Maiden\s*Sp\s*Wt|2nd\s*career\s*race|Turf\s*to\s*Dirt|Dirt\s*to\s*Turf|Shipper|Blinkers\s*(?:on|off)|(?:\d+(?:-\d+)?)\s*days?Away|JKYw/\s*Sprints|JKYw/\s*Trn\s*L(?:30|45|60)\b|JKYw/\s*[EPS]|JKYw/\s*NA\s*types)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$'
@@ -1295,713 +782,33 @@ def parse_pedigree_snips(block: str) -> dict:
         out["dam_dpi"] = float(d.group(1))
     return out
 
-def parse_jock_train_for_block(block: str) -> Dict:
-    """Parse jockey win%, trainer ROI, and situational stats from BRISNET PP block"""
-    out = {"jock_win_pct": np.nan, "jock_roi": np.nan, "trainer_roi": np.nan, "trainer_situational": {}}
-    
-    # Jockey regex: Jky: (starts wins-2nds-3rds .win $ROI)
-    jock_re = re.compile(r'(?mi)Jky:\s*\((\d+)\s*(\d+)-(\d+)-(\d+)\s*\.(\d+)\s*\$\s*([\d.]+)\)')
-    m = jock_re.search(block)
-    if m:
-        out["jock_win_pct"] = float(m.group(5)) / 100
-        out["jock_roi"] = float(m.group(6))
-    
-    # Trainer regex similar
-    train_re = re.compile(r'(?mi)Trn:\s*\((\d+)\s*(\d+)-(\d+)-(\d+)\s*\.(\d+)\s*\$\s*([\d.]+)\)')
-    m = train_re.search(block)
-    if m:
-        out["trainer_roi"] = float(m.group(6))
-    
-    # Situationals: e.g., Shipper 52 15% 35% +0.23
-    sit_re = re.compile(r'(?mi)([A-Za-z]+)\s*(\d+)\s*(\d+)%\s*(\d+)%\s*([+-][\d.]+)')
-    for m in sit_re.finditer(block):
-        cat, starts, win_pct, itm_pct, roi = m.groups()
-        out["trainer_situational"][cat] = {"win_pct": int(win_pct), "roi": float(roi)}
-    
-    # Last race purse for class drop (e.g., Purse $50,000)
-    last_purse_re = re.compile(r'(?mi)Purse\s*\$\s*([\d,]+)')
-    m = last_purse_re.search(block)  # Assume first match is last race
-    last_purse = int(m.group(1).replace(",", "")) if m else np.nan
-    out["last_purse"] = last_purse
-    
-    return out
-
-def parse_jockey_trainer_for_block(block: str, debug: bool = False) -> dict:
-    """
-    Parses jockey and trainer names from a horse's PP text block.
-    
-    BRISNET Format:
-    - Jockey: "KIMURA KAZUSHI (0 0-0-0 0%)"
-    - Trainer: "Trnr: DAmato Philip (0 0-0-0 0%)"
-    
-    Returns dict with keys: 'jockey', 'trainer'
-    """
-    result = {
-        'jockey': '',
-        'trainer': ''
-    }
-    
-    if not block:
-        return result
-    
-    # Parse jockey - appears on a line by itself in ALL CAPS before "Trnr:"
-    # Format: "KIMURA KAZUSHI (0 0-0-0 0%)" or "RISPOLI UMBERTO (0 0-0-0 0%)"
-    jockey_match = re.search(r'^([A-Z][A-Z\s\'.-]+?)\s*\([\d\s-]+%\)', block, re.MULTILINE)
-    if jockey_match:
-        jockey_name = jockey_match.group(1).strip()
-        # Clean up extra spaces and convert to title case for readability
-        jockey_name = ' '.join(jockey_name.split())
-        result['jockey'] = jockey_name
-        
-        if debug:
-            print(f"  Jockey found: '{jockey_name}'")
-    
-    # Parse trainer - appears on line starting with "Trnr:"
-    # Format: "Trnr: DAmato Philip (0 0-0-0 0%)"
-    trainer_match = re.search(r'Trnr:\s*([A-Za-z][A-Za-z\s,\'.-]+?)\s*\([\d\s-]+%\)', block, re.MULTILINE)
-    if trainer_match:
-        trainer_name = trainer_match.group(1).strip()
-        # Clean up extra spaces
-        trainer_name = ' '.join(trainer_name.split())
-        result['trainer'] = trainer_name
-        
-        if debug:
-            print(f"  Trainer found: '{trainer_name}'")
-    
-    return result
-
-def parse_running_style_for_block(block: str, debug: bool = False) -> dict:
-    """
-    Parses running style from a horse's PP text block header.
-    
-    BRISNET Format in header line:
-    - "1 Omnipontet (S 1)" - S = Sustained
-    - "2 Nay V Belle (E/P 3)" - E/P = Early/Presser
-    - "4 Queen Maxima (P 1)" - P = Presser
-    - "5 Sunglow (E 8)" - E = Early
-    - "7 Puro Magic (NA 0)" - NA = Not Available
-    
-    Returns dict with key: 'running_style'
-    """
-    result = {
-        'running_style': ''
-    }
-    
-    if not block:
-        return result
-    
-    # Parse running style from header - appears in parentheses after horse name
-    # Format: "Post# HorseName (STYLE #)"
-    # Style can be: E, E/P, P, S, or NA
-    style_match = re.search(r'^\s*\d+\s+[A-Za-z\s=\'-]+\s+\(([A-Z/]+)\s+\d+\)', block, re.MULTILINE)
-    if style_match:
-        running_style = style_match.group(1).strip()
-        result['running_style'] = running_style
-        
-        if debug:
-            print(f"  Running Style found: '{running_style}'")
-    
-    return result
-
-def parse_quickplay_comments_for_block(block: str, debug: bool = False) -> dict:
-    """
-    Parses QuickPlay handicapping comments from a horse's PP text block.
-    
-    BRISNET Format:
-    - Positive: "ñ 21% trainer: NonGraded Stk"
-    - Negative: "× Has not raced for more than 3 months"
-    
-    Returns dict with keys: 'positive_comments' (list), 'negative_comments' (list)
-    """
-    result = {
-        'positive_comments': [],
-        'negative_comments': []
-    }
-    
-    if not block:
-        return result
-    
-    # Parse positive comments - lines starting with ñ
-    positive_matches = re.findall(r'^ñ\s*(.+)$', block, re.MULTILINE)
-    result['positive_comments'] = [comment.strip() for comment in positive_matches]
-    
-    # Parse negative comments - lines starting with ×
-    negative_matches = re.findall(r'^×\s*(.+)$', block, re.MULTILINE)
-    result['negative_comments'] = [comment.strip() for comment in negative_matches]
-    
-    if debug:
-        if result['positive_comments']:
-            print(f"  Positive comments ({len(result['positive_comments'])}):")
-            for comment in result['positive_comments']:
-                print(f"    ñ {comment}")
-        if result['negative_comments']:
-            print(f"  Negative comments ({len(result['negative_comments'])}):")
-            for comment in result['negative_comments']:
-                print(f"    × {comment}")
-    
-    return result
-
-def parse_recent_workout_for_block(block: str, debug: bool = False) -> dict:
-    """
-    Parses the most recent workout from a horse's PP text block.
-    
-    BRISNET Format (workout lines appear at bottom of horse block):
-    - "25Oct SA 4f ft :47« H 12/62"
-    - "18Oct SA 5f ft 1:02© Hg 37/48"
-    
-    Format: Date Track Distance Surface Time Grade Rank/Total
-    
-    Returns dict with keys: 'workout_date', 'workout_track', 'workout_distance', 
-                           'workout_time', 'workout_rank', 'workout_total'
-    """
-    result = {
-        'workout_date': '',
-        'workout_track': '',
-        'workout_distance': '',
-        'workout_time': '',
-        'workout_rank': '',
-        'workout_total': ''
-    }
-    
-    if not block:
-        return result
-    
-    # Workout lines typically start with date pattern like "25Oct" or "18Oct"
-    # Format: DDMmmYY Track Distance Surface Time Grade Rank/Total
-    # Example: "25Oct SA 4f ft :47« H 12/62"
-    # Example with bullet: "×26Oct SA 4f ft :47¨ H 1/11" (× char 215 indicates best workout)
-    # Look for lines with this pattern after the race data ends
-    # Time can include special chars: « (char 171), © (169), ª (170), ¬ (172), ® (174), ¯ (175), ° (176), ¨ (168)
-    workout_pattern = r'×?(\d{1,2}[A-Z][a-z]{2})\s+([A-Z][A-Za-z]{1,3})\s+(\d+f?)\s+(?:ft|gd|sy|sl|fm|hy|my|tr\.t|˜)\s+([\d:\.«©ª¬®¯°¨]+)\s+[A-Z]?g?\s+(\d+)/(\d+)'
-    
-    matches = re.findall(workout_pattern, block, re.MULTILINE)
-    
-    if matches:
-        # Take the first (most recent) workout
-        first_workout = matches[0]
-        result['workout_date'] = first_workout[0]
-        result['workout_track'] = first_workout[1]
-        result['workout_distance'] = first_workout[2]
-        result['workout_time'] = first_workout[3]
-        result['workout_rank'] = first_workout[4]
-        result['workout_total'] = first_workout[5]
-        
-        if debug:
-            print(f"  Recent workout: {result['workout_date']} {result['workout_track']} {result['workout_distance']} {result['workout_time']} (#{result['workout_rank']}/{result['workout_total']})")
-    
-    return result
-
-def parse_prime_power_for_block(block, debug=False):
-    """
-    Parse Prime Power rating and rank from a BRISNET horse block.
-    
-    Format: "Prime Power: 131.9 (7th)"
-    
-    Returns dict with:
-    - prime_power: float rating value (e.g., 131.9)
-    - prime_power_rank: str rank (e.g., "7th")
-    """
-    result = {
-        'prime_power': None,
-        'prime_power_rank': None
-    }
-    
-    # Pattern: "Prime Power: 131.9 (7th)"
-    # Captures the decimal number and the rank in parentheses
-    prime_power_pattern = r'Prime Power:\s+([\d.]+)\s+\((\d+(?:st|nd|rd|th))\)'
-    
-    match = re.search(prime_power_pattern, block)
-    
-    if match:
-        try:
-            result['prime_power'] = float(match.group(1))
-            result['prime_power_rank'] = match.group(2)
-            
-            if debug:
-                print(f"  Prime Power: {result['prime_power']} (rank: {result['prime_power_rank']})")
-        except ValueError:
-            pass
-    
-    return result
-
-# BRISNET Speed Figure Regex - Match the number pattern directly
-# Format: "| ¨¨¬ OC50k/n1x-N ¨¨ 92 101/ 93 +4 +4 98 2 4©..."
-# Key insight: The "pipe" is actually broken bar ¦ (char 166) not | (char 124)!
-# After broken bar, we'll eventually see this number sequence:
-# RR (2-3 digits) CR/ (2-3 digits with slash) E1 (2-3 digits) +/-# +/-# SPD (2-3 digits) PP (1 digit)
-# The post position (PP) that follows SPD is always a SINGLE digit
-# So we can use that as confirmation: ...SPD followed by space and single digit
 SPEED_FIG_RE = re.compile(
-    r"[|\¦I]"  # Pipe separator - match | (124), ¦ (166), or I (73)
-    r"(?:[^\d]|\d(?!/\s*\d{2,3}\s+[+-]))*?"  # Skip non-rating content (lazy match)
-    r"(\d{2,3})\s+"  # RR (Race Rating) - group 1
-    r"(\d{2,3})/?\s+"  # CR (Class Rating) with optional slash - group 2
-    r"(\d{2,3})\s+"  # E1 (Early pace) - group 3
-    r"[+-]?\d+\s+"  # First position indicator
-    r"[+-]?\d+\s+"  # Second position indicator
-    r"(\d{2,3})"  # SPD (Speed rating) - group 4
-    r"\s+\d(?:\s|©|ª|«|¬)"  # Followed by single-digit post position
+    # Matches a date, track, etc., then a race type, then captures the first fig
+    r"(?mi)^\s*(\d{2}[A-Za-z]{3}\d{2})\s+.*?" # Date (e.g., 23Sep23)
+    r"\b(Clm|Mdn|Md Sp Wt|Alw|OC|G1|G2|G3|Stk|Hcp)\b" # A race type keyword
+    r".*?\s+(\d{2,3})\s+" # The first 2-3 digit number after the type
 )
 
-def parse_speed_figures_for_block(block: str, debug: bool = False) -> dict:
+def parse_speed_figures_for_block(block: str) -> List[int]:
     """
-    Parses a horse's PP text block and extracts BRIS speed/pace figures.
-    Returns dict with keys: 'SPD', 'E1', 'E2', 'LP', 'RR', 'CR'
-    Each contains a list of recent values (most recent first, up to 10 races).
-    
-    BRISNET Format: "92 101/ 93 +4 +4 98 2 4© 4© 3¯"
-    Where: RR=92, CR=101, E1=93, E2=98 (after position indicators)
-    SPD is not in this section - may need to extract from elsewhere
+    Parses a horse's PP text block and extracts all main speed figures.
     """
-    result = {
-        'SPD': [],  # Final speed ratings (placeholder - not in this section)
-        'E1': [],   # Early pace ratings  
-        'E2': [],   # Mid pace ratings (what appears after position indicators)
-        'LP': [],   # Late pace ratings (placeholder)
-        'RR': [],   # Race ratings (field quality)
-        'CR': []    # Class ratings (horse performance)
-    }
-    
+    figs = []
     if not block:
-        return result
+        return figs
     
-    if debug:
-        # Show lines that look like running lines (start with date pattern)
-        st.write("**Looking for running lines (lines starting with DDMmmYY):**")
-        potential_lines = [line for line in block.split('\n') if re.match(r'^\s*\d{2}[A-Za-z]{3}\d{2}', line)]
-        if potential_lines:
-            st.code("\n".join(potential_lines[:5]), language="text")  # Show first 5
-            # DIAGNOSTIC: Show character codes around where pipe should be
-            first_line = potential_lines[0]
-            # Look for any character that might be a pipe or vertical bar
-            for pipe_char in ['|', '¦', '│', 'I', 'l']:
-                pipe_idx = first_line.find(pipe_char)
-                if pipe_idx >= 0:
-                    st.write(f"**🔍 Found '{pipe_char}' (code {ord(pipe_char)}) at position {pipe_idx}:**")
-                    snippet = first_line[max(0, pipe_idx-5):min(pipe_idx+30, len(first_line))]
-                    char_info = " ".join([f"{c}({ord(c)})" for c in snippet[:20]])
-                    st.caption(f"Chars around it: {char_info}")
-                    break
-            else:
-                st.warning(f"⚠️ No pipe character found! First 60 chars: {first_line[:60]}")
-                char_codes = " ".join([f"{c}({ord(c)})" for c in first_line[:60]])
-                st.caption(f"Character codes: {char_codes}")
-        else:
-            st.warning("❌ No lines found starting with date pattern (e.g., '23Sep23')")
-    
-    matches_found = 0
     for m in SPEED_FIG_RE.finditer(block):
         try:
-            matches_found += 1
-            rr = int(m.group(1))   # Race Rating
-            cr_text = m.group(2).replace('/', '').strip()  # Class Rating (remove slash)
-            cr = int(cr_text)
-            e1 = int(m.group(3))   # Early pace
-            e2 = int(m.group(4))   # What appears after positions (might be E2 or SPD)
+            # The speed figure is the second capture group
+            fig_val = int(m.group(2))
+            # Basic sanity check for a realistic speed figure
+            if 40 < fig_val < 130:
+                figs.append(fig_val)
+        except Exception:
+            pass # Ignore if conversion fails
             
-            if debug:
-                st.caption(f"🔍 Match {matches_found}: RR={rr}, CR={cr}, E1={e1}, E2={e2}")
-                st.caption(f"    Full match: {m.group(0)[:100]}...")
-            
-            # Sanity checks for realistic BRIS figures (typically 40-130 range)
-            if 40 <= e2 <= 130:
-                # Using E2 as SPD for now since true SPD not in regex
-                result['SPD'].append(e2)
-                result['E2'].append(e2)
-            if 40 <= e1 <= 130:
-                result['E1'].append(e1)
-            if 50 <= rr <= 140:  # RR can be slightly higher
-                result['RR'].append(rr)
-            if 40 <= cr <= 130:
-                result['CR'].append(cr)
-                
-        except (ValueError, IndexError) as e:
-            if debug:
-                st.warning(f"⚠️ Failed to parse match {matches_found}: {e}")
-            pass  # Ignore if conversion fails
-    
-    if debug:
-        if matches_found == 0:
-            st.error(f"❌ No regex matches found in block. First 500 chars:\n{block[:500]}")
-        else:
-            st.success(f"✅ Found {matches_found} running lines with speed figures!")
-    
-    # Keep only the most recent 10 races for each metric
-    for key in result:
-        result[key] = result[key][:10]
-    
-    return result
-
-def parse_cr_rr_history(figs_dict: dict) -> dict:
-    """
-    Calculate CR/RR performance metrics from parsed speed figures.
-    Returns dict with: avg_cr, avg_rr, cr_rr_ratio, consistency_score
-    """
-    out = {"avg_cr": np.nan, "avg_rr": np.nan, "cr_rr_ratio": np.nan, "consistency": 0.0}
-    
-    try:
-        cr_list = figs_dict.get("CR", [])
-        rr_list = figs_dict.get("RR", [])
-        
-        if len(cr_list) > 0 and len(rr_list) > 0:
-            # Average CR and RR (most recent 5 races)
-            avg_cr = np.mean(cr_list[:5]) if len(cr_list) >= 1 else np.nan
-            avg_rr = np.mean(rr_list[:5]) if len(rr_list) >= 1 else np.nan
-            
-            out["avg_cr"] = avg_cr
-            out["avg_rr"] = avg_rr
-            
-            # CR/RR ratio: how much does horse outperform the field?
-            # Ratio > 1.0 means horse performs better than field quality
-            # Ratio >= 0.95 = very good (performing close to or above field RR)
-            if pd.notna(avg_rr) and avg_rr > 0:
-                cr_rr_ratio = avg_cr / avg_rr
-                out["cr_rr_ratio"] = cr_rr_ratio
-            
-            # Consistency score: Do CR performances vary widely or stay consistent?
-            # Low std dev = reliable performer
-            if len(cr_list) >= 3:
-                cr_std = np.std(cr_list[:5])
-                # Normalize to 0-1 scale (lower std = higher consistency)
-                consistency = max(0.0, 1.0 - (cr_std / 20.0))  # 20 point std dev = 0 consistency
-                out["consistency"] = consistency
-    except:
-        pass
-    
-    return out
-
-def parse_ep_lp_trip_for_block(block: str) -> Dict:
-    """Parse Early Pace/Late Pace and trip excuse comments from BRISNET PP block"""
-    out = {"avg_lp": np.nan, "excuse_count": 0}
-    
-    # EP/LP: Collect last 3 races' LP values
-    # Format: CR E1/E2 LP from speed figure lines
-    pace_re = re.compile(r'(?mi)(\d+)\s+(\d+)/\s*(\d+)\s+(\d+)')  # CR E1/E2 LP SPD
-    lps = []
-    for m in pace_re.finditer(block):
-        try:
-            lp = int(m.group(3))  # LP is group 3
-            if 40 < lp < 130:
-                lps.append(lp)
-        except (ValueError, IndexError):
-            pass
-    out["avg_lp"] = np.mean(lps[:3]) if lps else np.nan
-    
-    # Trip notes: Count keywords in comments for excuse tracking
-    trip_keywords = ["blocked", "wide", "steadied", "checked", "bumped", "altered course"]
-    comment_text = block.lower()
-    excuse_count = sum(comment_text.count(k) for k in trip_keywords)
-    out["excuse_count"] = min(excuse_count, 3)  # Cap at 3 for last 3 races
-    
-    return out
-
-def parse_expanded_ped_work_layoff(block: str) -> Dict:
-    """Extract surface win%, bullet workouts, and layoff days from PP block"""
-    out = {"turf_win_pct": np.nan, "mud_win_pct": np.nan, "bullet_count": 0, "days_off": np.nan}
-    
-    # Pedigree surface: Turf|Wet|Fast (rating) starts wins-2nds-3rds $earnings
-    surf_re = re.compile(r'(?mi)(Turf|Wet|Fast)\s*\((\d+)\)\s*(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*\$\s*([\d,]+)')
-    for m in surf_re.finditer(block or ""):
-        try:
-            surf, rating, starts, wins = m.group(1), m.group(2), m.group(3), m.group(4)
-            if int(starts) > 0:
-                win_pct = int(wins) / int(starts)
-                if surf == "Turf":
-                    out["turf_win_pct"] = win_pct
-                elif surf in ("Wet", "Fast"):
-                    out["mud_win_pct"] = win_pct
-        except:
-            pass
-    
-    # Workouts: Count bullet workouts (marked with "B" in workout lines)
-    work_re = re.compile(r'(?mi)^\d{2}[A-Za-z]{3}\d{2}.*?\s+B(?:g)?\s')
-    out["bullet_count"] = len(work_re.findall(block or ""))
-    
-    # Layoff: Days since last race via angle line format or "days Away"
-    lay_re = re.compile(r'(?mi)(\d+)\s*days?\s*Away')
-    m = lay_re.search(block or "")
-    if m:
-        out["days_off"] = int(m.group(1))
-    
-    return out
-
-def parse_bris_pedigree_ratings(block: str) -> dict:
-    """
-    Extract BRISNET Pedigree Ratings (Fast/Off/Distance/Turf) from PP block.
-    Format: "Pedigree: Fast 89, Off 84, Distance 92, Turf 88"
-    Returns dict with keys: fast_ped, off_ped, distance_ped, turf_ped
-    """
-    out = {"fast_ped": np.nan, "off_ped": np.nan, "distance_ped": np.nan, "turf_ped": np.nan}
-    
-    if not block:
-        return out
-    
-    # Parse BRISNET pedigree ratings: Fast, Off, Distance, Turf
-    # Format variations:
-    # "Pedigree: Fast 89, Off 84, Distance 92, Turf 88"
-    # "Fast Ped 89  Off Ped 84  Dist Ped 92  Turf Ped 88"
-    
-    fast_match = re.search(r'(?mi)(?:Fast\s+(?:Ped)?|Pedigree:?\s*Fast)\s*(\d+)', block)
-    if fast_match:
-        out["fast_ped"] = float(fast_match.group(1))
-    
-    off_match = re.search(r'(?mi)(?:Off\s+(?:Ped)?|Off\s+Surface)\s*(\d+)', block)
-    if off_match:
-        out["off_ped"] = float(off_match.group(1))
-    
-    dist_match = re.search(r'(?mi)(?:Distance\s+(?:Ped)?|Dist(?:ance)?\s+Ped)\s*(\d+)', block)
-    if dist_match:
-        out["distance_ped"] = float(dist_match.group(1))
-    
-    turf_match = re.search(r'(?mi)(?:Turf\s+(?:Ped)?|Turf\s+Pedigree)\s*(\d+)', block)
-    if turf_match:
-        out["turf_ped"] = float(turf_match.group(1))
-    
-    return out
-
-def parse_surface_specific_record(block: str) -> dict:
-    """
-    Extract surface-specific record (dirt/turf/off-track) from PP history.
-    Returns dict with keys: dirt_record, turf_record, off_track_record (each as dict with 'wins', 'itmr', 'starts')
-    """
-    out = {
-        "dirt_record": {"wins": 0, "itmr": 0, "starts": 0, "win_pct": 0.0},
-        "turf_record": {"wins": 0, "itmr": 0, "starts": 0, "win_pct": 0.0},
-        "off_track_record": {"wins": 0, "itmr": 0, "starts": 0, "win_pct": 0.0},
-    }
-    
-    if not block:
-        return out
-    
-    try:
-        # Parse surface records from summary lines (typical BRISNET format)
-        # Format: "On Dirt: 5 wins-8 2nd-4 3rd (23 starts) or 22% Win, 57% ITM"
-        # Look for surface-specific lines with win/ITM/starts info
-        
-        dirt_match = re.search(r'(?mi)(?:on\s+)?dirt:?\s*(\d+)\s+(?:wins?|w)\s*-?\s*(\d+)\s+(?:2nds?|2)\s*-?\s*(\d+)\s+(?:3rds?|3)\s*\((\d+)\s+(?:starts?|st)\)', block)
-        if dirt_match:
-            wins, seconds, thirds, starts = map(int, dirt_match.groups())
-            itmr = wins + seconds + thirds
-            out["dirt_record"] = {"wins": wins, "itmr": itmr, "starts": starts, "win_pct": wins/starts if starts > 0 else 0.0}
-        
-        turf_match = re.search(r'(?mi)(?:on\s+)?turf:?\s*(\d+)\s+(?:wins?|w)\s*-?\s*(\d+)\s+(?:2nds?|2)\s*-?\s*(\d+)\s+(?:3rds?|3)\s*\((\d+)\s+(?:starts?|st)\)', block)
-        if turf_match:
-            wins, seconds, thirds, starts = map(int, turf_match.groups())
-            itmr = wins + seconds + thirds
-            out["turf_record"] = {"wins": wins, "itmr": itmr, "starts": starts, "win_pct": wins/starts if starts > 0 else 0.0}
-        
-        off_match = re.search(r'(?mi)(?:on\s+)?(?:off-?track|muddy|sloppy):?\s*(\d+)\s+(?:wins?|w)\s*-?\s*(\d+)\s+(?:2nds?|2)\s*-?\s*(\d+)\s+(?:3rds?|3)\s*\((\d+)\s+(?:starts?|st)\)', block)
-        if off_match:
-            wins, seconds, thirds, starts = map(int, off_match.groups())
-            itmr = wins + seconds + thirds
-            out["off_track_record"] = {"wins": wins, "itmr": itmr, "starts": starts, "win_pct": wins/starts if starts > 0 else 0.0}
-    except:
-        pass
-    
-    return out
-
-def parse_pedigree_spi(block: str) -> dict:
-    """
-    Extract Sire Production Index (SPI) from pedigree section.
-    Format: "Sire: {SireNameHere} {SPI_value}"
-    Example: "Sire: Way of Appeal SPI .36"
-    Returns dict with key 'spi' containing float value or NaN
-    """
-    out = {"spi": np.nan, "dam_sire_spi": np.nan}
-    
-    if not block:
-        return out
-    
-    try:
-        # Look for SPI (Sire Production Index) - typically decimal 0.3-0.7 range
-        # Format variations:
-        # "Sire: {name} SPI .36"  (.36 format without leading 0)
-        # "Sire Production Index: 0.36"
-        # "SPI .36" or "SPI 0.36"
-        # Pattern: SPI followed by optional space, then decimal (with or without leading 0)
-        spi_match = re.search(r'(?mi)SPI\s+[.\d]+(\d)', block)
-        if not spi_match:
-            # Try alternate: just "SPI" followed by a decimal number
-            spi_match = re.search(r'(?mi)SPI\s+(\.\d+|\d+\.\d+)', block)
-        if spi_match:
-            spi_text = spi_match.group(1) if spi_match.lastindex == 1 and '.' not in str(spi_match.group(1)) else spi_match.group(0).split()[-1]
-            if not '.' in str(spi_text):
-                # Re-extract just the number part
-                num_match = re.search(r'(\.\d+|\d+\.\d+)', spi_match.group(0))
-                spi_text = num_match.group(1) if num_match else spi_text
-            # Convert to float, handle ".36" format
-            if spi_text.startswith('.'):
-                spi_val = float('0' + spi_text)
-            else:
-                spi_val = float(spi_text)
-            out["spi"] = spi_val
-        
-        # Dam-Sire SPI (production index of dam's sire)
-        dam_sire_match = re.search(r'(?mi)Dam[\s-]*Sire.*?SPI\s+(\.\d+|\d+\.\d+)', block)
-        if dam_sire_match:
-            dam_sire_text = dam_sire_match.group(1)
-            if dam_sire_text.startswith('.'):
-                dam_sire_val = float('0' + dam_sire_text)
-            else:
-                dam_sire_val = float(dam_sire_text)
-            out["dam_sire_spi"] = dam_sire_val
-    except:
-        pass
-    
-    return out
-
-def parse_pedigree_surface_stats(block: str) -> dict:
-    """
-    Extract Sire surface specialty statistics (%Mud, %Turf, Dam-Sire %Mud, etc.)
-    Format: "Sire: {name} Mud 23% Turf 19%"
-    Returns dict with keys: sire_mud_pct, sire_turf_pct, dam_sire_mud_pct
-    """
-    out = {"sire_mud_pct": np.nan, "sire_turf_pct": np.nan, "dam_sire_mud_pct": np.nan}
-    
-    if not block:
-        return out
-    
-    try:
-        # Look for surface percentages anywhere in the block
-        # First, find all "Mud XX%" and "Turf XX%" patterns
-        mud_matches = list(re.finditer(r'(?mi)Mud\s+(\d+)%', block))
-        turf_matches = list(re.finditer(r'(?mi)Turf\s+(\d+)%', block))
-        
-        # Check if Dam-Sire section exists
-        if 'dam' in block.lower() and 'sire' in block.lower():
-            dam_sire_pos = block.lower().find('dam')
-            
-            # Find which mud % comes before dam-sire line (= Sire Mud)
-            for m in mud_matches:
-                if m.start() < dam_sire_pos:
-                    out["sire_mud_pct"] = float(m.group(1))
-                    break
-            
-            # Find which mud % comes after dam-sire (= Dam-Sire Mud)
-            for m in mud_matches:
-                if m.start() > dam_sire_pos:
-                    out["dam_sire_mud_pct"] = float(m.group(1))
-                    break
-        else:
-            # No dam-sire section, all percentages are for sire
-            if mud_matches:
-                out["sire_mud_pct"] = float(mud_matches[0].group(1))
-        
-        # Turf is usually associated with sire, not dam-sire as often
-        if turf_matches:
-            out["sire_turf_pct"] = float(turf_matches[0].group(1))
-    except:
-        pass
-    
-    return out
-
-def parse_awd_analysis(block: str) -> dict:
-    """
-    Extract Sire and Dam-Sire Average Winning Distance (AWD) from pedigree section.
-    Format: "Sire: {name} AWD 6.2f"
-    Returns dict with keys: sire_awd, dam_sire_awd (both in furlongs as float)
-    """
-    out = {"sire_awd": np.nan, "dam_sire_awd": np.nan}
-    
-    if not block:
-        return out
-    
-    try:
-        # Extract Sire AWD (Average Winning Distance)
-        # Format: "AWD 6.2f" or "AWD 7.5f"
-        sire_section = re.search(r'(?mi)Sire[^D]*?(?=Dam|$)', block)
-        if sire_section:
-            section_text = sire_section.group(0)
-            awd_match = re.search(r'(?mi)AWD\s+(\d+\.?\d*)f', section_text)
-            if awd_match:
-                out["sire_awd"] = float(awd_match.group(1))
-        
-        # Extract Dam-Sire AWD
-        dam_sire_section = re.search(r'(?mi)Dam[\s-]*Sire[^\\n]*', block)
-        if dam_sire_section:
-            ds_text = dam_sire_section.group(0)
-            ds_awd_match = re.search(r'(?mi)AWD\s+(\d+\.?\d*)f', ds_text)
-            if ds_awd_match:
-                out["dam_sire_awd"] = float(ds_awd_match.group(1))
-    except:
-        pass
-    
-    return out
-
-def parse_track_bias_impact_values(block: str) -> dict:
-    """
-    Extract Track Bias Impact Values from the Track Bias section.
-    Format: "Running Style Impact: E 1.30, E/P 1.20, P 0.95, S 0.80"
-    Format: "Post Position Impact: Rail 1.41, 1-3 1.10, 4-7 1.05, 8+ 0.95"
-    Returns dict with structure:
-    {
-        'running_style': {'E': 1.30, 'E/P': 1.20, 'P': 0.95, 'S': 0.80},
-        'post_position': {'rail': 1.41, 'inner': 1.10, 'mid': 1.05, 'outside': 0.95}
-    }
-    """
-    out = {
-        'running_style': {'E': np.nan, 'E/P': np.nan, 'P': np.nan, 'S': np.nan},
-        'post_position': {'rail': np.nan, 'inner': np.nan, 'mid': np.nan, 'outside': np.nan}
-    }
-    
-    if not block:
-        return out
-    
-    try:
-        # Extract Running Style Impact Values
-        # Pattern: "E 1.30" or "E/P 1.20" etc (as part of line like "E 1.30, E/P 1.20, P 0.95, S 0.80")
-        rs_section = re.search(r'(?mi)Running\s+Style.*?Impact', block)
-        if rs_section:
-            # Look for values after the section header
-            section_end = block.find('\n', rs_section.end())
-            if section_end == -1:
-                section_end = len(block)
-            section_text = block[rs_section.end():section_end]
-            
-            e_match = re.search(r'(?mi)\bE\s+(\d\.?\d*)', section_text)
-            if e_match:
-                out['running_style']['E'] = float(e_match.group(1))
-            
-            ep_match = re.search(r'(?mi)E/P\s+(\d\.?\d*)', section_text)
-            if ep_match:
-                out['running_style']['E/P'] = float(ep_match.group(1))
-            
-            p_match = re.search(r'(?mi)\bP\s+(\d\.?\d*)', section_text)
-            if p_match:
-                out['running_style']['P'] = float(p_match.group(1))
-            
-            s_match = re.search(r'(?mi)\bS\s+(\d\.?\d*)', section_text)
-            if s_match:
-                out['running_style']['S'] = float(s_match.group(1))
-        
-        # Extract Post Position Impact Values
-        # Pattern: "Rail 1.41" or "1-3 1.10" or "4-7 1.05" or "8+ 0.95"
-        pp_section = re.search(r'(?mi)Post.*?Position.*?Impact', block)
-        if pp_section:
-            section_end = block.find('\n', pp_section.end())
-            if section_end == -1:
-                section_end = len(block)
-            section_text = block[pp_section.end():section_end]
-            
-            rail_match = re.search(r'(?mi)Rail\s+(\d\.?\d*)', section_text)
-            if rail_match:
-                out['post_position']['rail'] = float(rail_match.group(1))
-            
-            inner_match = re.search(r'(?mi)(?:1-3|Inner)\s+(\d\.?\d*)', section_text)
-            if inner_match:
-                out['post_position']['inner'] = float(inner_match.group(1))
-            
-            mid_match = re.search(r'(?mi)(?:4-7|Mid)\s+(\d\.?\d*)', section_text)
-            if mid_match:
-                out['post_position']['mid'] = float(mid_match.group(1))
-            
-            outside_match = re.search(r'(?mi)(?:8\+|Outside)\s+(\d\.?\d*)', section_text)
-            if outside_match:
-                out['post_position']['outside'] = float(outside_match.group(1))
-    except:
-        pass
-    
-    return out
+    # We only care about the most recent figs, e.g., last 10
+    return figs[:10]
 
 # ---------- Probability helpers ----------
 def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
@@ -2013,76 +820,6 @@ def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.
     ex = np.exp(x)
     p = ex / np.sum(ex)
     return p
-
-def calculate_figure_trend(figs: List[float]) -> Tuple[float, str]:
-    """
-    Analyze figure trend: uptrend (+bonus), downtrend (-bonus), flat (0).
-    Returns (trend_bonus, trend_label)
-    """
-    if not figs or len(figs) < 2:
-        return 0.0, "insufficient"
-    
-    recent_3 = figs[:3]  # Most recent 3 figs
-    
-    # Uptrend: each fig higher than previous
-    if len(recent_3) >= 2 and recent_3[0] > recent_3[1]:
-        if len(recent_3) >= 3 and recent_3[1] > recent_3[2]:
-            return 0.11, "strong_uptrend"
-        return 0.07, "uptrend"
-    
-    # Downtrend: each fig lower than previous
-    if len(recent_3) >= 2 and recent_3[0] < recent_3[1]:
-        if len(recent_3) >= 3 and recent_3[1] < recent_3[2]:
-            return -0.11, "strong_downtrend"
-        return -0.07, "downtrend"
-    
-    return 0.0, "flat"
-
-def calculate_distance_record(block: str, target_distance: str) -> Tuple[float, int, int]:
-    """
-    Extract win% at specific distance from PP block.
-    Returns (win_pct, wins_at_distance, starts_at_distance)
-    """
-    if not block:
-        return np.nan, 0, 0
-    
-    try:
-        # Parse distance from each race line and track performance
-        # Format: "23Sep25Mnr 5½ ft :22© :46« :59« 1:06« ¦ ¨§¯ ™C4000 ¨§® 87 72/ 74 +5 +1 56 1 1©"
-        race_lines = re.findall(r'(?m)^\d{2}[A-Za-z]{3}\d{2}[A-Za-z]{3}\s+([\d½]+)', block or "")
-        
-        # Count races at this distance
-        distance_races = 0
-        distance_wins = 0
-        
-        for line in re.finditer(r'(?m)^\d{2}[A-Za-z]{3}\d{2}[A-Za-z]{3}\s+([\d½]+)[^0-9]*(\d+)\s+(\d+)/\s*(\d+)', block or ""):
-            race_dist = line.group(1)
-            position = int(line.group(3))  # Finishing position
-            
-            # Normalize distance
-            if "½" in str(target_distance):
-                target_norm = float(target_distance.replace("½", ".5"))
-            else:
-                target_norm = float(target_distance) if target_distance else 0
-            
-            if "½" in race_dist:
-                race_dist_norm = float(race_dist.replace("½", ".5"))
-            else:
-                race_dist_norm = float(race_dist) if race_dist else 0
-            
-            # Check if within 0.1 furlongs (close match)
-            if abs(race_dist_norm - target_norm) < 0.2:
-                distance_races += 1
-                if position == 1:
-                    distance_wins += 1
-        
-        if distance_races > 0:
-            win_pct = distance_wins / distance_races
-            return win_pct, distance_wins, distance_races
-    except:
-        pass
-    
-    return np.nan, 0, 0
 
 def compute_ppi(df_styles: pd.DataFrame) -> dict:
     """PPI that works with Detected/Override styles. Returns {'ppi':float, 'by_horse':{name:tailwind}}"""
@@ -2117,7 +854,7 @@ def compute_ppi(df_styles: pd.DataFrame) -> dict:
             by_horse[nm] = 0.0
     return {"ppi": round(ppi_val,3), "by_horse": by_horse}
 
-def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: Dict[str,float],
+def_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: Dict[str,float],
                                 chaos_index: float, track_name: str, surface_type: str,
                                 distance_txt: str, race_type: str,
                                 angles_per_horse: Dict[str,pd.DataFrame],
@@ -2130,11 +867,10 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     
     df = ratings_df.copy()
 
-    # --- MERGE SPEED FIGURES FIRST ---
+    # --- SPEED FIGURE LOGIC ---
     if figs_df.empty or "AvgTop2" not in figs_df.columns:
         # No figures were parsed or dataframe is empty
         st.caption("No speed figures parsed. R_ENHANCE_ADJ set to 0.")
-        df["AvgTop2"] = MODEL_CONFIG['first_timer_fig_default']
         df["R_ENHANCE_ADJ"] = 0.0
     else:
         # 1. Merge the figures into the main ratings dataframe
@@ -2147,105 +883,17 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
 
         # 3. Define the enhancement (R_ENHANCE_ADJ)
         SPEED_FIG_WEIGHT = MODEL_CONFIG['speed_fig_weight']
-
+        
         df["R_ENHANCE_ADJ"] = (df["AvgTop2"] - race_avg_fig) * SPEED_FIG_WEIGHT
-
-    # --- ADD PRIME POWER AND APEX ENHANCEMENT (after AvgTop2 is available) ---
-    df["Prime"] = df["Horse"].map(lambda h: all_angles_per_horse.get(h, {}).get("prime", np.nan))
-    st.caption(f"🔍 Added Prime column: {df['Prime'].notna().sum()} horses with values, sample={df['Prime'].head(3).tolist()}")
-    df = apex_enhance(df)  # apex_enhance already adds APEX to R internally
-    st.caption(f"🔍 After apex_enhance: APEX column exists={('APEX' in df.columns)}, R column sample={df['R'].head(3).tolist()}")
-
-    # Clean up the temporary AvgTop2 column if it exists
-    if "AvgTop2" in df.columns:
+        
+        # 4. Clean up the temporary column
         df.drop(columns=["AvgTop2"], inplace=True)
 
     # --- END SPEED FIGURE LOGIC ---
-    # NOTE: R already includes R_ENHANCE_ADJ + APEX from apex_enhance()
-    # Clean up the helper column
-    if "R_ENHANCE_ADJ" in df.columns:
-        df.drop(columns=["R_ENHANCE_ADJ"], inplace=True)
-    
-    return df
 
-# ---------- ML Adjustment (RandomForest) ----------
-def ml_adjust(df: pd.DataFrame, trainer_intent_data: Dict[str, dict]) -> pd.DataFrame:
-    """
-    Applies machine learning adjustment using RandomForest to refine ratings.
-    Incorporates trainer intent features (class drop %, ROI angles) along with
-    existing rating components.
-    
-    Returns df with additional ML_ADJ column added to R rating.
-    """
-    if not SKLEARN_AVAILABLE:
-        st.caption("⚠️ ML adjustment skipped - scikit-learn not available")
-        return df
-    
-    if df is None or df.empty or len(df) < 3:
-        return df
-    
-    df = df.copy()
-    
-    # Build feature matrix
-    features = pd.DataFrame(index=df.index)
-    
-    # Base rating components
-    features["R"] = df.get("R", 0)
-    features["Cclass"] = df.get("Cclass", 0)
-    features["Cstyle"] = df.get("Cstyle", 0)
-    features["Cpost"] = df.get("Cpost", 0)
-    features["Cpace"] = df.get("Cpace", 0)
-    features["Atrack"] = df.get("Atrack", 0)
-    features["Quirin"] = df.get("Quirin", 0).fillna(0)
-    features["LastFig"] = df.get("LastFig", 0).fillna(0)
-    
-    # APEX component
-    features["APEX"] = df.get("APEX", 0).fillna(0)
-    
-    # Add trainer intent features
-    features["Intent_ClassDrop"] = df.index.map(lambda idx: trainer_intent_data.get(df.loc[idx, "Horse"], {}).get("class_drop_pct", 0))
-    features["Intent_ROI"] = df.index.map(lambda idx: trainer_intent_data.get(df.loc[idx, "Horse"], {}).get("roi_angles", 0))
-    
-    # Fill any remaining NaNs
-    features = features.fillna(0)
-
-    # Create synthetic target (use current R as proxy for training)
-    # In production, you'd train on historical race results
-    y = df["R"].fillna(df["R"].mean()).values
-
-    # Scale features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(features)    # Train RandomForest
-    rf = RandomForestRegressor(
-        n_estimators=50,
-        max_depth=5,
-        min_samples_split=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    
-    try:
-        rf.fit(X_scaled, y)
-        predictions = rf.predict(X_scaled)
-        
-        # ML adjustment is the difference between prediction and current rating
-        # Scale it down to avoid over-correction
-        ml_adjustment = (predictions - y) * 0.3  # 30% weight on ML delta
-        
-        df["ML_ADJ"] = ml_adjustment.round(3)
-        df["R"] = (df["R"] + df["ML_ADJ"]).round(2)
-        
-        # Feature importance (top 5)
-        importance = pd.DataFrame({
-            'feature': features.columns,
-            'importance': rf.feature_importances_
-        }).sort_values('importance', ascending=False).head(5)
-        
-        st.caption(f"✅ ML adjustment applied. Top features: {', '.join(importance['feature'].tolist())}")
-        
-    except Exception as e:
-        st.warning(f"⚠️ ML adjustment failed: {e}")
-        df["ML_ADJ"] = 0.0
+    # Apply the final adjustment
+    df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0) # Ensure no NaNs
+    df["R"] = (df["R"].astype(float) + df["R_ENHANCE_ADJ"].astype(float)).round(2)
     
     return df
 
@@ -2279,58 +927,6 @@ def str_to_decimal_odds(s: str) -> Optional[float]:
         st.warning(f"Could not parse odds string: '{s}'. Error: {e}")
         return None
     return None
-
-# ---------- Safe market/ML adjust helpers (NaN-proof) ----------
-def _implied_prob_from_str(odds_str: str) -> float:
-    dec = str_to_decimal_odds(str(odds_str).strip())
-    if dec is None or dec <= 0: return np.nan
-    return 1.0 / dec
-
-def _safe_normalize_prob_map(prob_map: Dict[str, float]) -> Dict[str, float]:
-    keys = list(prob_map.keys())
-    vals = np.array([max(float(v), 0.0) for v in prob_map.values()], dtype=float)
-    s = float(vals.sum())
-    if s <= 0:
-        n = max(len(keys), 1)
-        return {k: 1.0/n for k in keys}
-    return {k: float(v)/s for k, v in zip(keys, vals)}
-
-def _build_market_table(df_field: pd.DataFrame, fair_probs: Dict[str, float]) -> pd.DataFrame:
-    rows = []
-    for _, r in df_field.iterrows():
-        h = str(r.get("Horse","")).strip()
-        if not h: continue
-        ml_s   = str(r.get("ML","") or "").strip()
-        live_s = str(r.get("Live Odds","") or "").strip()
-        rows.append({
-            "Horse": h,
-            "fair_prob": float(fair_probs.get(h, 0.0)),
-            "ml_prob": _implied_prob_from_str(ml_s) if ml_s else np.nan,
-            "live_prob": _implied_prob_from_str(live_s) if live_s else np.nan
-        })
-    return pd.DataFrame(rows)
-
-def _alpha_from_race_type(race_type: str) -> float:
-    base = base_class_bias.get((race_type or "").strip().lower(), 1.02)  # 0.90..1.15 constants
-    alpha = (base - 0.90) / (1.15 - 0.90) * (0.55 - 0.15) + 0.15
-    return float(np.clip(alpha, 0.15, 0.55))
-
-def adjust_probs_with_market(df_market: pd.DataFrame, race_type: str) -> Dict[str, float]:
-    if df_market is None or df_market.empty:
-        return {}
-    fair = {row["Horse"]: float(row.get("fair_prob", 0.0)) for _, row in df_market.iterrows()}
-    obs  = {}
-    for _, row in df_market.iterrows():
-        h = row["Horse"]; live_p = row.get("live_prob", np.nan); ml_p = row.get("ml_prob", np.nan)
-        obs[h] = live_p if (live_p == live_p) else (ml_p if (ml_p == ml_p) else np.nan)
-    if all((v != v) for v in obs.values()):  # all NaN
-        return _safe_normalize_prob_map(fair)
-    obs_filled = {h: (fair[h] if (v != v) else float(v)) for h, v in obs.items()}
-    fair_n = _safe_normalize_prob_map(fair)
-    obs_n  = _safe_normalize_prob_map(obs_filled)
-    alpha  = _alpha_from_race_type(race_type)
-    blended = {h: (1.0 - alpha)*fair_n[h] + alpha*obs_n[h] for h in fair_n}
-    return _safe_normalize_prob_map(blended)
 
 def overlay_table(fair_probs: Dict[str,float], offered: Dict[str,float]) -> pd.DataFrame:
     rows = []
@@ -2660,13 +1256,6 @@ race_type_manual = st.selectbox(
 race_type = race_type_manual or race_type_detected
 race_type_detected = race_type  # lock in constant key
 
-# Define today's par figure based on race type (rough estimates)
-today_par = {
-    "maiden special weight": 75, "maiden claiming": 65, "claiming": 70,
-    "starter allowance": 75, "allowance": 80, "allowance optional claiming": 85,
-    "listed stakes": 90, "graded stakes": 95, "grade 3": 95, "grade 2": 100, "grade 1": 105
-}.get(race_type_detected, 75)
-
 # ===================== A. Race Setup: Scratches, ML & Styles =====================
 
 st.header("A. Race Setup: Scratches, ML & Live Odds, Styles")
@@ -2698,179 +1287,30 @@ df_editor = st.data_editor(df_styles, use_container_width=True, column_config=co
 
 angles_per_horse: Dict[str, pd.DataFrame] = {}
 pedigree_per_horse: Dict[str, dict] = {}
-ep_lp_trip_per_horse: Dict[str, Dict] = {}
-expanded_ped_per_horse: Dict[str, Dict] = {}
-figs_per_horse: Dict[str, dict] = {}  # Changed from List[int] to dict
-jockey_trainer_per_horse: Dict[str, dict] = {}
-jock_train_per_horse: Dict[str, Dict] = {}
-running_style_per_horse: Dict[str, dict] = {}
-quickplay_per_horse: Dict[str, dict] = {}
-workout_per_horse: Dict[str, dict] = {}
-prime_power_per_horse: Dict[str, dict] = {}
-equip_lasix_per_horse: Dict[str, Tuple[str, str]] = {}
-all_angles_per_horse: Dict[str, dict] = {}
-trainer_intent_per_horse: Dict[str, dict] = {}
-bris_ped_ratings_per_horse: Dict[str, dict] = {}  # NEW: BRISNET Pedigree Ratings
-surface_record_per_horse: Dict[str, dict] = {}  # NEW: Surface-specific records
-cr_rr_per_horse: Dict[str, dict] = {}  # NEW: CR/RR performance ratio history
-pedigree_spi_per_horse: Dict[str, dict] = {}  # NEW: Sire Production Index
-pedigree_surface_stats_per_horse: Dict[str, dict] = {}  # NEW: Sire surface specialty stats
-awd_analysis_per_horse: Dict[str, dict] = {}  # NEW: Average Winning Distance analysis
-track_bias_impact_per_horse: Dict[str, dict] = {}  # NEW: Track Bias Impact Values
-blocks: Dict[str, str] = {}
+figs_per_horse: Dict[str, List[int]] = {}
 
-for _post, name, style, quirin, block in split_into_horse_chunks(pp_text):
+for _post, name, block in split_into_horse_chunks(pp_text):
     if name in df_editor["Horse"].values:
-        blocks[name] = block
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
-        ep_lp_trip_per_horse[name] = parse_ep_lp_trip_for_block(block)
-        expanded_ped_per_horse[name] = parse_expanded_ped_work_layoff(block)
-        bris_ped_ratings_per_horse[name] = parse_bris_pedigree_ratings(block)  # NEW
-        surface_record_per_horse[name] = parse_surface_specific_record(block)  # NEW
-        pedigree_spi_per_horse[name] = parse_pedigree_spi(block)  # NEW: SPI
-        pedigree_surface_stats_per_horse[name] = parse_pedigree_surface_stats(block)  # NEW: Mud/Turf %
-        awd_analysis_per_horse[name] = parse_awd_analysis(block)  # NEW: AWD
-        track_bias_impact_per_horse[name] = parse_track_bias_impact_values(block)  # NEW: Impact Values
-        jockey_trainer_per_horse[name] = parse_jockey_trainer_for_block(block, debug=False)
-        jock_train_per_horse[name] = parse_jock_train_for_block(block)
-        running_style_per_horse[name] = {'running_style': _normalize_style(style)}
-        quickplay_per_horse[name] = parse_quickplay_comments_for_block(block, debug=False)
-        workout_per_horse[name] = parse_recent_workout_for_block(block, debug=False)
-        prime_power_per_horse[name] = parse_prime_power_for_block(block)
-        figs_per_horse[name] = parse_speed_figures_for_block(block, debug=False)
-        cr_rr_per_horse[name] = parse_cr_rr_history(figs_per_horse[name])  # NEW: Parse CR/RR metrics
-        equip_lasix_per_horse[name] = parse_equip_lasix(block)
-        all_angles_per_horse[name] = parse_all_angles(block)
-        trainer_intent_per_horse[name] = parse_trainer_intent(block)
-
-# Debug: Check what was parsed
-st.caption(f"🔍 Parsed all_angles_per_horse for {len(all_angles_per_horse)} horses")
-if all_angles_per_horse:
-    sample_horse = list(all_angles_per_horse.keys())[0]
-    sample_data = all_angles_per_horse[sample_horse]
-    st.caption(f"✓ Sample: {sample_horse} → prime={sample_data.get('prime', 'N/A')}, trainer_win={sample_data.get('trainer_win', 'N/A')}, lp count={len(sample_data.get('lp', []))}")
-else:
-    st.error("❌ all_angles_per_horse is EMPTY - parsing failed!")
-    
-st.caption(f"🔍 Parsed trainer_intent_per_horse for {len(trainer_intent_per_horse)} horses")
-if trainer_intent_per_horse:
-    sample_horse = list(trainer_intent_per_horse.keys())[0]
-    st.caption(f"✓ Sample intent: {sample_horse} → {trainer_intent_per_horse[sample_horse]}")
-else:
-    st.error("❌ trainer_intent_per_horse is EMPTY - parsing failed!")
+        figs_per_horse[name] = parse_speed_figures_for_block(block)
 
 # Create the figs_df
 figs_data = []
-for name, fig_dict in figs_per_horse.items():
-    spd_list = fig_dict.get("SPD", [])
-    if spd_list:  # Only add horses that have SPD figures
+for name, fig_list in figs_per_horse.items():
+    if fig_list: # Only add horses that have figures
         figs_data.append({
             "Horse": name,
-            "Figures": spd_list,  # The list of SPD figures
-            "BestFig": max(spd_list),
-            "AvgTop2": round(np.mean(sorted(spd_list, reverse=True)[:2]), 1)
+            "Figures": fig_list, # The list of parsed figs
+            "BestFig": max(fig_list),
+            "AvgTop2": round(np.mean(sorted(fig_list, reverse=True)[:2]), 1)
         })
-    else:
-        st.caption(f"⚠️ Horse '{name}' has no SPD figures parsed")
-
-figs_df = pd.DataFrame(figs_data)
-st.caption(f"📊 figs_df created with {len(figs_df)} horses (out of {len(figs_per_horse)} total)")
+figs_df = pd.DataFrame(figs_data) # <--- THIS IS THE NEW FIGS DATAFRAME
 
 df_final_field = df_editor[df_editor["Scratched"]==False].copy()
 if df_final_field.empty:
     st.warning("All horses are scratched.")
     st.stop()
-
-# Add LastFig column - most recent speed figure for each horse
-df_final_field['LastFig'] = df_final_field['Horse'].map(
-    lambda h: figs_per_horse.get(h, {}).get('SPD', [np.nan])[0] if figs_per_horse.get(h, {}).get('SPD') else np.nan
-)
-
-# Add other speed rating columns
-df_final_field['E1'] = df_final_field['Horse'].map(
-    lambda h: figs_per_horse.get(h, {}).get('E1', [np.nan])[0] if figs_per_horse.get(h, {}).get('E1') else np.nan
-)
-df_final_field['E2'] = df_final_field['Horse'].map(
-    lambda h: figs_per_horse.get(h, {}).get('E2', [np.nan])[0] if figs_per_horse.get(h, {}).get('E2') else np.nan
-)
-df_final_field['RR'] = df_final_field['Horse'].map(
-    lambda h: figs_per_horse.get(h, {}).get('RR', [np.nan])[0] if figs_per_horse.get(h, {}).get('RR') else np.nan
-)
-df_final_field['CR'] = df_final_field['Horse'].map(
-    lambda h: figs_per_horse.get(h, {}).get('CR', [np.nan])[0] if figs_per_horse.get(h, {}).get('CR') else np.nan
-)
-
-st.caption(f"✅ Added speed figure columns: LastFig, E1, E2, RR, CR to df_final_field")
-
-# Add Jockey and Trainer columns
-df_final_field['Jockey'] = df_final_field['Horse'].map(
-    lambda h: jockey_trainer_per_horse.get(h, {}).get('jockey', '')
-)
-df_final_field['Trainer'] = df_final_field['Horse'].map(
-    lambda h: jockey_trainer_per_horse.get(h, {}).get('trainer', '')
-)
-
-st.caption(f"✅ Added jockey/trainer columns: Jockey, Trainer to df_final_field")
-
-# Add Running Style column from BRISNET
-df_final_field['RunningStyle'] = df_final_field['Horse'].map(
-    lambda h: running_style_per_horse.get(h, {}).get('running_style', '')
-)
-
-st.caption(f"✅ Added running style column: RunningStyle to df_final_field")
-
-# Add QuickPlay comment columns
-df_final_field['QuickPlayPositive'] = df_final_field['Horse'].map(
-    lambda h: '; '.join(quickplay_per_horse.get(h, {}).get('positive_comments', []))
-)
-df_final_field['QuickPlayNegative'] = df_final_field['Horse'].map(
-    lambda h: '; '.join(quickplay_per_horse.get(h, {}).get('negative_comments', []))
-)
-
-st.caption(f"✅ Added QuickPlay columns: QuickPlayPositive, QuickPlayNegative to df_final_field")
-
-# Add Recent Workout columns
-df_final_field['WorkoutDate'] = df_final_field['Horse'].map(
-    lambda h: workout_per_horse.get(h, {}).get('workout_date', '')
-)
-df_final_field['WorkoutTrack'] = df_final_field['Horse'].map(
-    lambda h: workout_per_horse.get(h, {}).get('workout_track', '')
-)
-df_final_field['WorkoutDistance'] = df_final_field['Horse'].map(
-    lambda h: workout_per_horse.get(h, {}).get('workout_distance', '')
-)
-df_final_field['WorkoutTime'] = df_final_field['Horse'].map(
-    lambda h: workout_per_horse.get(h, {}).get('workout_time', '')
-)
-df_final_field['WorkoutRank'] = df_final_field['Horse'].map(
-    lambda h: workout_per_horse.get(h, {}).get('workout_rank', '')
-)
-df_final_field['WorkoutTotal'] = df_final_field['Horse'].map(
-    lambda h: workout_per_horse.get(h, {}).get('workout_total', '')
-)
-
-st.caption(f"✅ Added workout columns: WorkoutDate, WorkoutTrack, WorkoutDistance, WorkoutTime, WorkoutRank, WorkoutTotal to df_final_field")
-
-# Add Prime Power columns
-df_final_field['PrimePower'] = df_final_field['Horse'].map(
-    lambda h: prime_power_per_horse.get(h, {}).get('prime_power', None)
-)
-df_final_field['PrimePowerRank'] = df_final_field['Horse'].map(
-    lambda h: prime_power_per_horse.get(h, {}).get('prime_power_rank', '')
-)
-
-st.caption(f"✅ Added Prime Power columns: PrimePower, PrimePowerRank to df_final_field")
-
-# Add Equipment and Lasix columns
-df_final_field['Blinkers'] = df_final_field['Horse'].map(
-    lambda h: equip_lasix_per_horse.get(h, ('', ''))[0]
-)
-df_final_field['Lasix'] = df_final_field['Horse'].map(
-    lambda h: equip_lasix_per_horse.get(h, ('', ''))[1]
-)
-
-st.caption(f"✅ Added Equipment/Lasix columns: Blinkers, Lasix to df_final_field")
 
 # Ensure StyleStrength and Style exist
 df_final_field["StyleStrength"] = df_final_field.apply(
@@ -2967,31 +1407,6 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
         if race_bucket != "≤6f" and awd_mean >= 7.5:
             tweak += MODEL_CONFIG['angle_off_track_route_bonus']
 
-    # 4) Expanded pedigree/work/layoff
-    exp_ped = expanded_ped_per_horse.get(name, {})
-    jt_data = jock_train_per_horse.get(name, {})
-    
-    # Turf surface bonus
-    if race_surface.lower() == "turf" and pd.notna(exp_ped.get("turf_win_pct")):
-        if exp_ped.get("turf_win_pct", 0) > 0.15:
-            tweak += MODEL_CONFIG['ped_dist_bonus']
-    
-    # Mud/sloppy bonus
-    if race_cond in {"muddy", "sloppy"} and pd.notna(exp_ped.get("mud_win_pct")):
-        if exp_ped.get("mud_win_pct", 0) > 0.15:
-            tweak += MODEL_CONFIG['ped_dist_bonus']
-    
-    # Bullet workout bonus
-    work_bonus = min(exp_ped.get("bullet_count", 0) * 0.03, 0.09)
-    tweak += work_bonus
-    
-    # Layoff + trainer situational bonus (45-90 days ideal)
-    days_off = exp_ped.get("days_off", np.nan)
-    if pd.notna(days_off) and 45 <= days_off <= 90:
-        trainer_lay_data = jt_data.get("trainer_situational", {}).get("Layoff", {})
-        if trainer_lay_data.get("win_pct", 0) > 18:
-            tweak += 0.04
-
     return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
 
 # Build Cclass as additive bonus (invert calculate_final_rating lower-is-better)
@@ -3020,12 +1435,6 @@ for _, r in df_final_field.iterrows():
     # Convert to additive bonus; more reliable (lower scalar) -> bigger bonus
     cclass_add = round(1.00 - base_scalar, 3)
     cclass_add += _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
-    
-    # Equipment & Lasix adjustments
-    blink, lasix = equip_lasix_per_horse.get(name, ("off", "off"))
-    cclass_add += 0.08 if blink == "on" else 0.03 if blink == "off" else 0
-    cclass_add += 0.09 if lasix == "first" else -0.10 if lasix == "off" else -0.04 if lasix == "repeat" else 0
-    
     Cclass_vals.append(cclass_add)
 
 df_final_field["Cclass"] = Cclass_vals
@@ -3082,6 +1491,148 @@ def style_match_score(running_style_bias: str, style: str, quirin: float) -> flo
         base += MODEL_CONFIG['style_quirin_bonus']
     return float(np.clip(base, -1.0, 1.0))
 
+# ======================== Phase 1: Enhanced Parsing Functions ========================
+
+def parse_track_bias_impact_values(pp_text: str) -> Dict[str, float]:
+    """Extract Track Bias Impact Values from '9b. Track Bias (Numerical)' section"""
+    impact_values = {}
+    
+    # Find the Track Bias section
+    bias_match = re.search(r'9b\.\s*Track Bias.*?\n(.*?)(?=\n\d+[a-z]?\.|$)', pp_text, re.DOTALL | re.IGNORECASE)
+    if not bias_match:
+        return impact_values
+    
+    bias_text = bias_match.group(1)
+    
+    # Parse Impact Value lines (e.g., "- E (Early Speed): Impact Value = 1.8")
+    for match in re.finditer(r'-\s*([A-Z/]+)\s*\([^)]+\):\s*Impact Value\s*=\s*([\d.]+)', bias_text):
+        style_code = match.group(1).strip()
+        impact_val = float(match.group(2))
+        impact_values[style_code] = impact_val
+    
+    return impact_values
+
+def parse_pedigree_spi(pp_text: str) -> Dict[str, Optional[int]]:
+    """Extract SPI (Sire Performance Index) from pedigree sections"""
+    spi_values = {}
+    
+    # Look for pattern like "Sire: Hard Spun (SPI: 1.30)" in Section 4
+    horse_sections = re.split(r'\n(?=\d+\.\s+Horse:)', pp_text)
+    
+    for section in horse_sections:
+        horse_match = re.search(r'Horse:\s*(.+?)(?=\s*\(#|\n)', section)
+        if not horse_match:
+            continue
+        horse_name = horse_match.group(1).strip()
+        
+        # Look for SPI in Sire line
+        spi_match = re.search(r'Sire:.*?SPI:\s*([\d.]+)', section, re.IGNORECASE)
+        if spi_match:
+            try:
+                spi = int(float(spi_match.group(1)) * 100)  # Convert 1.30 to 130
+                spi_values[horse_name] = spi
+            except:
+                spi_values[horse_name] = None
+        else:
+            spi_values[horse_name] = None
+    
+    return spi_values
+
+def parse_pedigree_surface_stats(pp_text: str) -> Dict[str, Dict[str, any]]:
+    """Extract surface statistics (Turf/AW win%) from pedigree sections"""
+    surface_stats = {}
+    
+    horse_sections = re.split(r'\n(?=\d+\.\s+Horse:)', pp_text)
+    
+    for section in horse_sections:
+        horse_match = re.search(r'Horse:\s*(.+?)(?=\s*\(#|\n)', section)
+        if not horse_match:
+            continue
+        horse_name = horse_match.group(1).strip()
+        
+        stats = {}
+        # Look for "Turf: 12% (class-adj)" or similar
+        turf_match = re.search(r'Turf:\s*([\d.]+)%', section, re.IGNORECASE)
+        if turf_match:
+            stats['turf_pct'] = float(turf_match.group(1))
+        
+        # Look for "AW: 8% (class-adj)" or similar
+        aw_match = re.search(r'(?:AW|All-Weather):\s*([\d.]+)%', section, re.IGNORECASE)
+        if aw_match:
+            stats['aw_pct'] = float(aw_match.group(1))
+        
+        if stats:
+            surface_stats[horse_name] = stats
+    
+    return surface_stats
+
+def parse_awd_analysis(pp_text: str) -> Dict[str, str]:
+    """Extract AWD (Avg Winning Distance) analysis from pedigree sections"""
+    awd_data = {}
+    
+    horse_sections = re.split(r'\n(?=\d+\.\s+Horse:)', pp_text)
+    
+    for section in horse_sections:
+        horse_match = re.search(r'Horse:\s*(.+?)(?=\s*\(#|\n)', section)
+        if not horse_match:
+            continue
+        horse_name = horse_match.group(1).strip()
+        
+        # Look for "✔ AWD Match" or "⚠ Distance Mismatch"
+        if '✔ AWD Match' in section or 'AWD Match' in section:
+            awd_data[horse_name] = 'match'
+        elif '⚠ Distance Mismatch' in section or 'Distance Mismatch' in section:
+            awd_data[horse_name] = 'mismatch'
+    
+    return awd_data
+
+def calculate_spi_bonus(spi: Optional[int]) -> float:
+    """Calculate bonus/penalty based on SPI (Sire Performance Index)"""
+    if spi is None:
+        return 0.0
+    if spi >= 120:
+        return 0.15
+    elif spi >= 110:
+        return 0.10
+    elif spi >= 100:
+        return 0.05
+    elif spi >= 90:
+        return 0.0
+    else:
+        return -0.05
+
+def calculate_surface_specialty_bonus(surface_pct: Optional[float], surface_type: str) -> float:
+    """Calculate bonus for surface specialty (Turf or AW)"""
+    if surface_pct is None:
+        return 0.0
+    
+    if surface_type.lower() == 'turf':
+        if surface_pct >= 15:
+            return 0.20
+        elif surface_pct >= 12:
+            return 0.15
+        elif surface_pct >= 10:
+            return 0.10
+        elif surface_pct < 5:
+            return -0.10
+    elif surface_type.lower() in ['aw', 'all-weather', 'synthetic']:
+        if surface_pct >= 12:
+            return 0.15
+        elif surface_pct >= 10:
+            return 0.10
+        elif surface_pct < 5:
+            return -0.10
+    
+    return 0.0
+
+def calculate_awd_mismatch_penalty(awd_status: Optional[str]) -> float:
+    """Calculate penalty for distance mismatch"""
+    if awd_status == 'mismatch':
+        return -0.10
+    return 0.0
+
+# ======================== End Phase 1 Functions ========================
+
 def post_bias_score(post_bias_pick: str, post_str: str) -> float:
     pick = (post_bias_pick or "").strip().lower()
     try:
@@ -3109,12 +1660,14 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                          post_bias_pick: str,
                          ppi_value: float = 0.0, # ppi_value arg seems unused, ppi_map is recalculated
                          pedigree_per_horse: Optional[Dict[str,dict]] = None,
-                         track_name: str = "") -> pd.DataFrame:
+                         track_name: str = "",
+                         pp_text: str = "") -> pd.DataFrame:
     """
     Reads 'Cclass' from df_styles (pre-built), adds Cstyle/Cpost/Cpace (+Atrack),
+    plus Tier 2 bonuses (Impact Values, SPI, Surface Stats, AWD),
     sums to Arace and R. Returns rating table.
     """
-    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace", "Cclass", "Atrack", "Arace", "R", "LastFig", "E1", "E2", "RR", "CR"]
+    cols = ["#", "Post", "Horse", "Style", "Quirin", "Cstyle", "Cpost", "Cpace", "Cclass", "Atrack", "Arace", "R"]
     if df_styles is None or df_styles.empty:
         return pd.DataFrame(columns=cols)
 
@@ -3125,11 +1678,12 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
     # Derive per-horse pace tailwind from PPI
     ppi_map = compute_ppi(df_styles).get("by_horse", {})
-
-    # Pre-calculate field average prime power before loop
-    all_primes = [parse_prime_power_for_block(blocks.get(row["Horse"], "")).get('prime_power') 
-                  for _, row in df_styles.iterrows()]
-    field_avg_prime = np.nanmean([p for p in all_primes if p is not None and not np.isnan(p)])
+    
+    # ======================== Phase 1: Parse Tier 2 Enhancements ========================
+    impact_values = parse_track_bias_impact_values(pp_text) if pp_text else {}
+    spi_values = parse_pedigree_spi(pp_text) if pp_text else {}
+    surface_stats = parse_pedigree_surface_stats(pp_text) if pp_text else {}
+    awd_analysis = parse_awd_analysis(pp_text) if pp_text else {}
 
     rows = []
     mapped_bias = _style_bias_label_from_choice(running_style_bias)
@@ -3142,200 +1696,41 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         cstyle = style_match_score(mapped_bias, style, quirin) # Pass potential NaN
         cpost  = post_bias_score(post_bias_pick, post)
         cpace  = float(ppi_map.get(name, 0.0))
-        
-        # Jockey/Trainer Intent Bonus
-        jt_data = jock_train_per_horse.get(name, {})  # Assume stored like pedigree_per_horse
-        last_purse = jt_data.get("last_purse", np.nan)
-        drop_pct = (purse_val - last_purse) / last_purse if last_purse > 0 else 0
-        drop_bonus = MODEL_CONFIG['class_drop_bonus'] if drop_pct < -0.20 else 0  # Negative for drop
-        
-        jock_bonus = max(0, (jt_data.get("jock_win_pct", 0) - 0.15) * MODEL_CONFIG['jock_win_bonus_per'])
-        trainer_bonus = max(0, (jt_data.get("trainer_roi", 1.0) - 1.0) * MODEL_CONFIG['trainer_roi_bonus_per'])
-        
-        # Jock upgrade: Compare to avg jock_win (compute field avg)
-        field_avg_jock_win = np.nanmean([d.get("jock_win_pct", np.nan) for d in jock_train_per_horse.values()])
-        upgrade_diff = jt_data.get("jock_win_pct", 0) - field_avg_jock_win
-        upgrade_bonus = max(0, upgrade_diff * MODEL_CONFIG['jock_upgrade_bonus_per'])
-        
-        intent_bonus = min(MODEL_CONFIG['intent_max_bonus'], drop_bonus + jock_bonus + trainer_bonus + upgrade_bonus)
 
-        # Prime Power Bonus (field average calculated before loop)
-        prime_dict = parse_prime_power_for_block(blocks.get(name, ""))
-        prime = prime_dict.get('prime_power') if prime_dict else None
-        prime_bonus = (prime - field_avg_prime) * 0.005 if prime is not None and field_avg_prime is not None and not np.isnan(prime) and not np.isnan(field_avg_prime) else 0
-
-        # EP/LP/Trip Enhancement Bonus
-        pace_data = ep_lp_trip_per_horse.get(name, {})
-        field_avg_lp = np.nanmean([d.get("avg_lp", np.nan) for d in ep_lp_trip_per_horse.values()])
-        lp_bonus = 0.06 if pace_data.get("avg_lp", 0) > field_avg_lp + 10 and ppi_map.get(name, 0) > 0.5 else 0
-        excuse_bonus = min(pace_data.get("excuse_count", 0) * 0.03, 0.09)
-        pace_enh_bonus = lp_bonus + excuse_bonus
-        cpace += pace_enh_bonus
-
-        # === 5 NEW HIGH-ROI PREDICTIVE FEATURES ===
-        
-        # 1. FIGURE TREND ANALYSIS (Uptrend/Downtrend bonus/penalty)
-        figs_list = figs_per_horse.get(name, {}).get('SPD', [])
-        trend_bonus, trend_label = calculate_figure_trend(figs_list)
-        
-        # 2. RECENCY WEIGHTING (Recent races weighted heavier)
-        # Apply decay to older figures - most recent get full weight, older get less
-        recency_decay = 1.0 if len(figs_list) <= 1 else min(0.15 * (len(figs_list) - 1), 0.4)
-        cpace *= (1.0 - recency_decay * 0.3)  # Slightly reduce pace if older
-        
-        # 3. DISTANCE-SPECIFIC CONSISTENCY (Win% at THIS distance)
-        block = blocks.get(name, "")
-        dist_win_pct, dist_wins, dist_starts = calculate_distance_record(block, distance_txt)
-        distance_bonus = 0.0
-        if pd.notna(dist_win_pct):
-            if dist_win_pct > MODEL_CONFIG['distance_specialist_threshold']:
-                distance_bonus = MODEL_CONFIG['distance_specialist_bonus']  # 0.08
-            elif dist_win_pct < MODEL_CONFIG['distance_poor_threshold']:
-                distance_bonus = MODEL_CONFIG['distance_poor_penalty']  # -0.06
-        
-        # 4. BOUNCE DETECTION (Sharp drop in speed figures)
-        bounce_penalty = 0.0
-        if len(figs_list) >= 2:
-            fig_drop = figs_list[1] - figs_list[0]  # Older - Recent (positive = drop)
-            if fig_drop > MODEL_CONFIG['bounce_fig_drop_threshold']:  # >6 point drop
-                bounce_penalty = MODEL_CONFIG['bounce_penalty_aggressive']  # -0.10
-        
-        # 5. CLASS TRANSITION & EQUIPMENT CHANGES
-        class_trans_penalty = 0.0
-        equip_penalty = 0.0
-        
-        # Class rise penalty: if moving UP in class, apply penalty
-        last_purse = jt_data.get("last_purse", np.nan)
-        if pd.notna(last_purse) and last_purse > 0:
-            class_change_pct = (purse_val - last_purse) / last_purse
-            if class_change_pct > 0.20:  # Moving UP in class by >20%
-                class_trans_penalty = MODEL_CONFIG['class_rise_penalty']  # -0.07
-        
-        # Blinkers off penalty
-        blink_status = equip_lasix_per_horse.get(name, ('', ''))[0]
-        if blink_status == "off" and re.search(r'Blinkers\s+On', block or "", re.I):
-            equip_penalty = MODEL_CONFIG['blinkers_off_penalty']  # -0.06
-        
-        # Sum all new bonuses
-        new_features_bonus = trend_bonus + distance_bonus + bounce_penalty + class_trans_penalty + equip_penalty
-        
-        # === TIER 1: BRISNET PEDIGREE RATINGS (NEW) ===
-        bris_ped_bonus = 0.0
-        bris_ped = bris_ped_ratings_per_horse.get(name, {})
-        
-        # Apply bonus if condition matches horse's pedigree strength
-        if surface_type.lower() == "dirt" and pd.notna(bris_ped.get("fast_ped")):
-            if bris_ped["fast_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
-                bris_ped_bonus += MODEL_CONFIG['bris_ped_fast_bonus']
-        
-        if surface_type.lower() == "turf" and pd.notna(bris_ped.get("turf_ped")):
-            if bris_ped["turf_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
-                bris_ped_bonus += MODEL_CONFIG['bris_ped_turf_bonus']
-        
-        if condition_txt.lower() in ("muddy", "sloppy", "heavy") and pd.notna(bris_ped.get("off_ped")):
-            if bris_ped["off_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
-                bris_ped_bonus += MODEL_CONFIG['bris_ped_off_bonus']
-        
-        # Distance specialist bonus (applies to any race)
-        if pd.notna(bris_ped.get("distance_ped")):
-            if bris_ped["distance_ped"] >= MODEL_CONFIG['bris_ped_rating_threshold']:
-                bris_ped_bonus += MODEL_CONFIG['bris_ped_distance_bonus']
-        
-        # === TIER 1: DAM PRODUCTION INDEX BONUS (NEW) ===
-        dpi_bonus = 0.0
-        ped_data = pedigree_per_horse.get(name, {})
-        if pd.notna(ped_data.get("dam_dpi")):
-            if ped_data["dam_dpi"] >= MODEL_CONFIG['dpi_bonus_threshold']:
-                dpi_bonus = MODEL_CONFIG['dpi_bonus']
-        
-        # === TIER 1: SURFACE-SPECIFIC RECORD PENALTY (NEW) ===
-        surface_record_penalty = 0.0
-        surf_record = surface_record_per_horse.get(name, {})
-        
-        # Penalize if moving to surface where horse has poor record but good record elsewhere
-        if surface_type.lower() == "dirt":
-            dirt_rec = surf_record.get("dirt_record", {})
-            off_rec = surf_record.get("off_track_record", {})
-            
-            # If dirt record is poor (<20%) but off-track record is good (>40%), penalize
-            if dirt_rec.get("win_pct", 0) < MODEL_CONFIG['surface_specialist_threshold_poor'] and \
-               off_rec.get("win_pct", 0) > MODEL_CONFIG['surface_specialist_threshold_good']:
-                surface_record_penalty = MODEL_CONFIG['surface_mismatch_dirt_penalty']
-        
-        elif surface_type.lower() == "turf":
-            turf_rec = surf_record.get("turf_record", {})
-            dirt_rec = surf_record.get("dirt_record", {})
-            
-            # If turf record is poor but dirt record is good, apply penalty (less likely on turf)
-            if turf_rec.get("win_pct", 0) < MODEL_CONFIG['surface_specialist_threshold_poor'] and \
-               dirt_rec.get("win_pct", 0) > MODEL_CONFIG['surface_specialist_threshold_good']:
-                surface_record_penalty = MODEL_CONFIG['surface_mismatch_dirt_penalty']
-        
-        # === PART 2 ENHANCEMENT: CR/RR PERFORMANCE RATIO BONUS (NEW) ===
-        cr_rr_bonus = 0.0
-        cr_rr_data = cr_rr_per_horse.get(name, {})
-        cr_rr_ratio = cr_rr_data.get("cr_rr_ratio", np.nan)
-        consistency = cr_rr_data.get("consistency", 0.0)
-        
-        # Bonus if horse consistently performs close to or above field quality
-        if pd.notna(cr_rr_ratio):
-            if cr_rr_ratio >= MODEL_CONFIG['cr_rr_excellent_threshold']:
-                # Horse performing above field quality (CR >= RR)
-                cr_rr_bonus += MODEL_CONFIG['cr_rr_excellent_bonus']
-            elif cr_rr_ratio >= MODEL_CONFIG['cr_rr_outperform_threshold']:
-                # Horse performing close to field quality
-                cr_rr_bonus += MODEL_CONFIG['cr_rr_outperform_bonus']
-        
-        # Additional bonus for consistent performances
-        if consistency > 0.7:  # High consistency
-            cr_rr_bonus += MODEL_CONFIG['cr_rr_consistency_bonus']
-        
-        # Combine all three Tier 1 bonuses + CR/RR bonus
-        tier1_bonus = bris_ped_bonus + dpi_bonus + surface_record_penalty + cr_rr_bonus
-
-        # === NEW TIER 2: PEDIGREE ENHANCEMENTS (SPI, Surface Stats, AWD) ===
-        
-        # 1. Sire Production Index (SPI) Bonus/Penalty
-        spi_bonus = 0.0
-        spi_data = pedigree_spi_per_horse.get(name, {})
-        if pd.notna(spi_data.get("spi")) or pd.notna(spi_data.get("dam_sire_spi")):
-            spi_bonus = calculate_spi_bonus(spi_data.get("spi"), spi_data.get("dam_sire_spi"))
-        
-        # 2. Surface Specialty Statistics Bonus (Sire %Mud, %Turf)
-        surface_stats_bonus = 0.0
-        surf_stats = pedigree_surface_stats_per_horse.get(name, {})
-        if any(pd.notna(v) for v in [surf_stats.get("sire_mud_pct"), surf_stats.get("sire_turf_pct"), 
-                                       surf_stats.get("dam_sire_mud_pct")]):
-            surface_stats_bonus = calculate_surface_specialty_bonus(
-                surf_stats.get("sire_mud_pct"),
-                surf_stats.get("sire_turf_pct"),
-                surf_stats.get("dam_sire_mud_pct"),
-                condition_txt,
-                surface_type
-            )
-        
-        # 3. Average Winning Distance (AWD) Mismatch Penalty
-        awd_penalty = 0.0
-        awd_data = awd_analysis_per_horse.get(name, {})
-        if pd.notna(awd_data.get("sire_awd")) or pd.notna(awd_data.get("dam_sire_awd")):
-            awd_penalty = calculate_awd_mismatch_penalty(
-                awd_data.get("sire_awd"),
-                awd_data.get("dam_sire_awd"),
-                distance_txt
-            )
-        
-        # Sum Tier 2 bonuses
-        tier2_bonus = spi_bonus + surface_stats_bonus + awd_penalty
-
-        # === TRACK BIAS WITH IMPACT VALUES (CRITICAL FIX) ===
-        # Pass Impact Values to _get_track_bias_delta for data-driven calculation
-        impact_values = track_bias_impact_per_horse.get(name, {})
-        a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post,
-                                       impact_values=impact_values)
+        a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
         c_class = float(row.get("Cclass", 0.0))
+        
+        # ======================== Tier 2 Bonuses ========================
+        tier2_bonus = 0.0
+        
+        # 1. Track Bias Impact Value bonus
+        if style in impact_values:
+            impact_val = impact_values[style]
+            if impact_val >= 1.5:
+                tier2_bonus += 0.15
+            elif impact_val >= 1.2:
+                tier2_bonus += 0.10
+        
+        # 2. SPI (Sire Performance Index) bonus
+        if name in spi_values:
+            tier2_bonus += calculate_spi_bonus(spi_values[name])
+        
+        # 3. Surface Specialty bonus
+        if name in surface_stats:
+            stats = surface_stats[name]
+            if surface_type.lower() == 'turf' and 'turf_pct' in stats:
+                tier2_bonus += calculate_surface_specialty_bonus(stats['turf_pct'], 'turf')
+            elif surface_type.lower() in ['aw', 'all-weather', 'synthetic'] and 'aw_pct' in stats:
+                tier2_bonus += calculate_surface_specialty_bonus(stats['aw_pct'], 'aw')
+        
+        # 4. AWD (Distance Mismatch) penalty
+        if name in awd_analysis:
+            tier2_bonus += calculate_awd_mismatch_penalty(awd_analysis[name])
+        
+        # ======================== End Tier 2 Bonuses ========================
 
-        arace = c_class + cstyle + cpost + cpace + a_track + intent_bonus + prime_bonus + new_features_bonus + tier1_bonus + tier2_bonus
+        arace = c_class + cstyle + cpost + cpace + a_track + tier2_bonus
         R     = arace
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
@@ -3344,12 +1739,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         rows.append({
             "#": post, "Post": post, "Horse": name, "Style": style, "Quirin": quirin_display,
             "Cstyle": round(cstyle, 2), "Cpost": round(cpost, 2), "Cpace": round(cpace, 2),
-            "Cclass": round(c_class, 2), "Atrack": round(a_track, 2), "Arace": round(arace, 2), "R": round(R, 2),
-            "LastFig": row.get("LastFig", np.nan),
-            "E1": row.get("E1", np.nan),
-            "E2": row.get("E2", np.nan),
-            "RR": row.get("RR", np.nan),
-            "CR": row.get("CR", np.nan)
+            "Cclass": round(c_class, 2), "Atrack": round(a_track, 2), "Arace": round(arace, 2), "R": round(R, 2)
         })
     out = pd.DataFrame(rows, columns=cols)
     return out.sort_values(by="R", ascending=False)
@@ -3367,7 +1757,7 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
     r = ratings_df["R_numeric"].values
     if len(r) == 0: return {}
 
-    p = softmax_from_rating(r, tau=0.55)
+    p = softmax_from_rating(r) # tau will be pulled from MODEL_CONFIG
 
     # Clean up temporary column
     ratings_df.drop(columns=['R_numeric'], inplace=True)
@@ -3378,171 +1768,6 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
       p = p / p_sum
 
     return {h: p[i] for i, h in enumerate(ratings_df["Horse"].values)}
-
-
-def dynamic_exotic_probs(win_probs: Dict[str, float], ppi_val: float, df_styles: pd.DataFrame,
-                         positions: int = 5, sims: int = 20000) -> List[List[str]]:
-    """
-    Simulate exotic race outcomes with common-sense closer bias in high-PPI scenarios.
-    Returns list of simulated outcomes (each outcome is a list of horses in finish order).
-    """
-    horses = list(win_probs.keys())
-    probs = np.array(list(win_probs.values()))
-    style_map = dict(zip(df_styles["Horse"], df_styles["Style"]))  # For closer bias
-    outcomes = []
-    
-    for _ in range(sims):
-        idx = np.random.choice(range(len(horses)), positions, replace=False, p=probs / probs.sum())
-        outcome = [horses[i] for i in idx]
-        
-        # Common-sense bias: In high PPI (>0.5), boost closers (P/S) probability for 3rd/4th/5th
-        if ppi_val > 0.5:
-            closer_horses = [h for h in outcome if style_map.get(h, '') in ["P", "S"]]
-            if closer_horses and np.random.rand() < MODEL_CONFIG['closer_bias_high_ppi']:
-                # Randomly promote a closer to 3rd-5th if in top 2
-                closer = np.random.choice(closer_horses)
-                curr_pos = outcome.index(closer)
-                if curr_pos < 2:
-                    target_pos = np.random.choice([2, 3, 4])
-                    outcome[curr_pos], outcome[target_pos] = outcome[target_pos], outcome[curr_pos]
-        
-        outcomes.append(outcome)
-    
-    return outcomes
-
-
-def extract_probable_positions(outcomes: List[List[str]]) -> Dict[str, List[Tuple[str, int]]]:
-    """
-    Extract most probable horses for each position from simulated outcomes.
-    Returns dict with keys "Pos1", "Pos2", etc., each containing top N horses by frequency.
-    """
-    pos_counters = [Counter([o[i] for o in outcomes]) for i in range(MODEL_CONFIG['positions_to_sim'])]
-    probables = {}
-    
-    for pos in range(1, MODEL_CONFIG['positions_to_sim'] + 1):
-        top_n = MODEL_CONFIG['top_for_pos'][pos-1]
-        probables[f"Pos{pos}"] = pos_counters[pos-1].most_common(top_n)
-    
-    return probables
-
-
-def generate_bet_outcomes(probables: Dict[str, List[Tuple[str, int]]]) -> str:
-    """
-    Generate human-readable betting recommendations from probable positions.
-    Covers Win, Exacta, Trifecta, Superfecta, and Super High 5.
-    """
-    report = "### Most Probable Finishing Outcomes (Common-Sense Bets)\n"
-    
-    # Win: Top 2 for 1st (straight bets, key underlays)
-    top1 = [h for h, _ in probables["Pos1"]]
-    report += f"**Win (1st Place):** Most likely 2 winners: {top1[0]} (underlay if short odds - key it), {top1[1] if len(top1)>1 else 'None'} (value overlay bet).\n"
-    
-    # Exacta: Top 2 1st / Top 2 2nd (straight + box)
-    top2 = [h for h, _ in probables["Pos2"]]
-    report += f"**Exacta (1st-2nd):** Wheel {top1[0]}/{top2[0]},{top2[1]} or box top 2 1st/2nd ({'/'.join(top1 + top2)}).\n"
-    
-    # Trifecta: Add Top 3 3rd (wheels + part-box)
-    top3 = [h for h, _ in probables["Pos3"]]
-    report += f"**Trifecta (1st-3rd):** Wheel {top1[0]}/{top2[0]},{top2[1]}/{top3[0]},{top3[1]},{top3[2]} (key underlay on top, spread overlays underneath).\n"
-    
-    # Superfecta: Add Top 3 4th
-    top4 = [h for h, _ in probables["Pos4"]]
-    report += f"**Superfecta (1st-4th):** Part-wheel {top1[0]}/{top2[0]},{top2[1]}/{top3[0]},{top3[1]},{top3[2]}/{top4[0]},{top4[1]},{top4[2]} (common-sense: Tight on top if underlay dominant).\n"
-    
-    # SH5: Add Top 3 5th (wide wheel for value bombs)
-    top5 = [h for h, _ in probables["Pos5"]] if "Pos5" in probables else []
-    if top5:
-        report += f"**Super High 5 (1st-5th):** Wheel {top1[0]}/{top2[0]},{top2[1]}/{top3[0]},{top3[1]},{top3[2]}/{top4[0]},{top4[1]},{top4[2]}/{top5[0]},{top5[1]},{top5[2]} (spread wide underneath for overlays in meltdowns).\n"
-    
-    return report
-
-
-def optimize_tickets(outcomes: List[List[str]], probables: Dict[str, List[Tuple[str, int]]],
-                     offered_odds: Dict[str, float], budget: float = 100.0, base_bet: float = 0.10) -> str:
-    """
-    Optimize exotic tickets using PuLP to maximize EV within budget.
-    Focuses on high-probability permutations with key underlay bonuses.
-    """
-    if not PULP_AVAILABLE:
-        return "⚠️ Ticket optimization disabled (PuLP not installed)."
-    
-    # Extract top horses for each position
-    top1_h = [h for h, _ in probables["Pos1"]]
-    top2_h = [h for h, _ in probables["Pos2"]]
-    top3_h = [h for h, _ in probables["Pos3"]]
-    top4_h = [h for h, _ in probables["Pos4"]]
-    top5_h = [h for h, _ in probables["Pos5"]] if "Pos5" in probables else []
-    
-    # Generate candidate supers/SH5 (limit to top combos to avoid explosion)
-    candidate_perms = []
-    try:
-        for p1 in permutations(top1_h + top2_h, 1):  # Top-heavy
-            for p2 in permutations(top2_h + top3_h, 1):
-                for p3 in permutations(top3_h + top4_h, 1):
-                    for p4 in permutations(top4_h + top5_h, 1):
-                        perm = list(p1 + p2 + p3 + p4)
-                        if len(set(perm)) == 4:  # Unique
-                            candidate_perms.append(tuple(perm))
-        
-        if top5_h and len(candidate_perms) > 0:
-            # Extend to SH5, but sample to keep feasible
-            candidate_perms = [p + (np.random.choice(top5_h),) for p in candidate_perms[:100]]  # Cap for PuLP
-    except Exception as e:
-        return f"⚠️ Error generating permutations: {e}"
-    
-    if not candidate_perms:
-        return "⚠️ No candidate permutations generated."
-    
-    # Count frequency of perms in simulations
-    perm_len = len(candidate_perms[0]) if candidate_perms else 4
-    perm_freq = Counter(tuple(o[:perm_len]) for o in outcomes)
-    total_sims = len(outcomes)
-    
-    # Fair payouts based on simulation frequency
-    fair_payouts = {perm: (total_sims / freq) * 2 if freq > 0 else float('inf') 
-                    for perm, freq in perm_freq.items() if perm in candidate_perms}
-    
-    # EV calculation: Rough estimate using offered odds on top horse
-    ev_map = {}
-    for perm in candidate_perms:
-        top_horse_odds = offered_odds.get(perm[0], 5.0)  # Default 4-1
-        prob = perm_freq.get(perm, 1) / total_sims if total_sims > 0 else 0
-        ev = prob * (top_horse_odds - 1) - (1 - prob) if prob > 0 else -1
-        ev_map[perm] = max(ev, 0)  # Positive only
-    
-    # PuLP optimization: Max sum EV s.t. cost <= budget, prefer underlay-top
-    try:
-        prob = pulp.LpProblem("TicketOpt", pulp.LpMaximize)
-        x = pulp.LpVariable.dicts("select", candidate_perms, cat='Binary')
-        
-        # Objective: EV + bonus for underlay tops (odds < 3.0)
-        prob += pulp.lpSum([
-            x[p] * (ev_map.get(p, 0) + (0.1 if offered_odds.get(p[0], 10) < 3.0 else 0))
-            for p in candidate_perms
-        ])
-        
-        # Constraint: Total cost <= budget
-        prob += pulp.lpSum([x[p] * base_bet for p in candidate_perms]) <= budget
-        
-        prob.solve(pulp.PULP_CBC_CMD(msg=0))
-        
-        selected = [p for p in candidate_perms if x[p].value() and x[p].value() > 0.5]
-    except Exception as e:
-        return f"⚠️ PuLP optimization error: {e}"
-    
-    # Build report
-    report = f"**🎯 Optimized Tickets (${budget:.2f} budget, {len(selected)} combos - EV-focused, key underlays on top):**\n"
-    if not selected:
-        report += "No profitable combos found within budget constraints.\n"
-        return report
-    
-    for p in sorted(selected, key=lambda pp: ev_map.get(pp, 0), reverse=True)[:10]:  # Top 10 by EV
-        fair_payout = fair_payouts.get(p, 0)
-        ev_val = ev_map.get(p, 0)
-        perm_str = '/'.join(p)
-        report += f"* `{perm_str}` (Fair Payout: ${fair_payout:.2f}, Est EV: ${ev_val:.2f})\n"
-    
-    return report
 
 
 # Build scenarios
@@ -3573,7 +1798,8 @@ for i, (rbias, pbias) in enumerate(scenarios):
             post_bias_pick=pbias,
             # ppi_value=ppi_val, # Removed as it's recalculated inside
             pedigree_per_horse=pedigree_per_horse,
-            track_name=track_name
+            track_name=track_name,
+            pp_text=pp_text
         )
         ratings_df = apply_enhancements_and_figs(
             ratings_df=ratings_df,
@@ -3588,116 +1814,44 @@ for i, (rbias, pbias) in enumerate(scenarios):
             pedigree_per_horse=pedigree_per_horse,
             figs_df=figs_df # <--- PASS THE REAL FIGS_DF
         )
-        
         fair_probs = fair_probs_from_ratings(ratings_df)
-
-        # SAFE market blend (no sklearn, no NaNs)
-        market_df = _build_market_table(df_final_field, fair_probs)
-        use_probs = adjust_probs_with_market(market_df, race_type_detected)
-        if not use_probs:
-            use_probs = fair_probs
-            st.caption("Market blend: no valid Live/ML odds — using model-only fair probabilities.")
-        else:
-            valid_rows = int(market_df["live_prob"].notna().sum() + market_df["ml_prob"].notna().sum())
-            st.caption(f"Market blend applied using {valid_rows} Live/ML entries (α={_alpha_from_race_type(race_type_detected):.2f}).")
-
-        # Show Fair% / Fair Odds from the probabilities we actually use
         if 'Horse' in ratings_df.columns:
-            ratings_df["Fair %"]    = ratings_df["Horse"].map(lambda h: f"{use_probs.get(h,0)*100:.1f}%")
-            ratings_df["Fair Odds"] = ratings_df["Horse"].map(lambda h: fair_to_american_str(use_probs.get(h,0)))
+            ratings_df["Fair %"] = ratings_df["Horse"].map(lambda h: f"{fair_probs.get(h,0)*100:.1f}%")
+            ratings_df["Fair Odds"] = ratings_df["Horse"].map(lambda h: fair_to_american_str(fair_probs.get(h,0)))
         else:
             ratings_df["Fair %"] = ""
             ratings_df["Fair Odds"] = ""
+        all_scenario_ratings[(rbias,pbias)] = (ratings_df.copy(), fair_probs) # Store copy and probs
 
-        all_scenario_ratings[(rbias, pbias)] = (ratings_df, use_probs)
-
-        # Table display (guard for helper column)
-        disp = ratings_df.sort_values(by="R", ascending=False).copy()
+        disp = ratings_df.sort_values(by="R", ascending=False)
         if "R_ENHANCE_ADJ" in disp.columns:
             disp = disp.drop(columns=["R_ENHANCE_ADJ"])
-        
-        # Add custom display columns
-        disp["Frac1"] = disp["Horse"].map(lambda h: round(np.mean([f[0] for f in all_angles_per_horse.get(h, {}).get("frac",[(99,)])[:3]]),1) if all_angles_per_horse.get(h) else 99)
-        disp["ParBeat"] = disp["Horse"].map(lambda h: max([f-today_par for f in figs_per_horse.get(h, {}).get('SPD', [])[1:4]], default=0))
-        
-        # Add Drift column (odds drift percentage: positive = shortening/coming in, negative = drifting out)
-        def calculate_drift(horse_name):
-            if horse_name not in df_final_field["Horse"].values:
-                return 0.0
-            horse_row = df_final_field.loc[df_final_field["Horse"] == horse_name].iloc[0]
-            ml_str = str(horse_row.get("ML", "")).strip()
-            live_str = str(horse_row.get("Live Odds", "")).strip()
-            
-            # If no live odds entered, no drift
-            if not live_str or live_str == ml_str:
-                return 0.0
-            
-            ml_dec = str_to_decimal_odds(ml_str)
-            live_dec = str_to_decimal_odds(live_str)
-            
-            if not ml_dec or ml_dec <= 1 or not live_dec or live_dec <= 1:
-                return 0.0
-            
-            # Drift % = ((ML - Live) / ML) * 100
-            # Positive = odds shortened (more money), Negative = odds drifted (less money)
-            drift_pct = ((ml_dec - live_dec) / ml_dec) * 100
-            return round(drift_pct, 1)
-        
-        disp["Drift"] = disp["Horse"].map(calculate_drift)
-        
-        # Add Intent column (sum of trainer intent numeric signals)
-        disp["Intent"] = disp["Horse"].map(lambda h: round(sum([v for k,v in trainer_intent_per_horse.get(h, {}).items() if isinstance(v, (int,float))]), 2))
-        
-        # Debug: Check what's in disp before cleanup
-        st.caption(f"🔍 Display columns before cleanup: {list(disp.columns)}")
-        st.caption(f"🔍 Prime in disp: {'Prime' in disp.columns}, APEX in disp: {'APEX' in disp.columns}, R in disp: {'R' in disp.columns}")
-        if "Prime" in disp.columns:
-            st.caption(f"🔍 Prime sample values: {disp['Prime'].head(3).tolist()}")
-        if "APEX" in disp.columns:
-            st.caption(f"🔍 APEX sample values: {disp['APEX'].head(3).tolist()}")
-        if "R" in disp.columns:
-            st.caption(f"🔍 R sample values: {disp['R'].head(3).tolist()}")
-        
-        # Clean up NaN values for display - convert to numeric first, then fillna
-        if "Prime" in disp.columns:
-            disp["Prime"] = pd.to_numeric(disp["Prime"], errors='coerce').fillna(0).astype(int)
-        if "R" in disp.columns:
-            disp["R"] = pd.to_numeric(disp["R"], errors='coerce').fillna(0.0).round(2)
-        if "APEX" in disp.columns:
-            disp["APEX"] = pd.to_numeric(disp["APEX"], errors='coerce').fillna(0.0).round(3)
-        if "Intent" in disp.columns:
-            disp["Intent"] = pd.to_numeric(disp["Intent"], errors='coerce').fillna(0.0).round(2)
-        
-        # Select and reorder columns for display
-        display_cols = ["#","Horse","Prime","R","Frac1","ParBeat","Drift","Intent","APEX","Fair %","Fair Odds"]
-        # Only include columns that exist
-        display_cols = [c for c in display_cols if c in disp.columns]
-        st.caption(f"🔍 Final display_cols to show: {display_cols}")
-        disp = disp[display_cols]
-        
         st.dataframe(
             disp,
             use_container_width=True, hide_index=True,
             column_config={
-                "#": st.column_config.TextColumn("#", width="small"),
-                "Horse": st.column_config.TextColumn("Horse", width="medium"),
-                "Prime": st.column_config.NumberColumn("Prime", format="%.0f"),
                 "R": st.column_config.NumberColumn("Rating", format="%.2f"),
-                "Frac1": st.column_config.NumberColumn("Frac1", format="%.1f", help="Avg Early Fractional Position (first 3 races)"),
-                "ParBeat": st.column_config.NumberColumn("ParBeat", format="%.0f", help="Best figure vs today's par (races 2-4)"),
-                "Drift": st.column_config.NumberColumn("Drift", format="%.1f", help="Odds drift % (ML to Live - positive = shortening)"),
-                "Intent": st.column_config.NumberColumn("Intent", format="%.2f", help="Trainer intent signal score"),
-                "APEX": st.column_config.NumberColumn("APEX", format="%.3f", help="Advanced handicapping adjustment"),
-                "Fair %": st.column_config.TextColumn("Fair %", width="small"),
-                "Fair Odds": st.column_config.TextColumn("Fair Odds", width="small"),
+                "Cstyle": st.column_config.NumberColumn("C-Style", format="%.2f"),
+                "Cpost": st.column_config.NumberColumn("C-Post", format="%.2f"),
+                "Cpace": st.column_config.NumberColumn("C-Pace", format="%.2f"),
+                "Cclass": st.column_config.NumberColumn("C-Class", format="%.2f"),
+                "Atrack": st.column_config.NumberColumn("A-Track", format="%.2f"),
+                "Arace": st.column_config.NumberColumn("A-Race", format="%.2f"),
+                # Format Quirin to show integer or be blank
+                "Quirin": st.column_config.NumberColumn("Quirin", format="%d", help="BRIS Pace Points"),
             }
         )
 
 # Ensure primary key exists before accessing
 if scenarios:
     primary_key = scenarios[0]
-    primary_df, primary_probs = all_scenario_ratings[primary_key]  # this is use_probs now
-    st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
+    if primary_key in all_scenario_ratings:
+        primary_df, primary_probs = all_scenario_ratings[primary_key]
+        st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
+    else:
+        st.error("Primary scenario ratings not found. Check calculations.")
+        primary_df, primary_probs = pd.DataFrame(), {} # Assign defaults
+        st.stop()
 else:
     st.error("No scenarios generated. Check bias selections.")
     primary_df, primary_probs = pd.DataFrame(), {} # Assign defaults
@@ -3734,8 +1888,7 @@ st.dataframe(
 
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame, 
                            strategy_profile: str, name_to_post: Dict[str, str],
-                           name_to_ml: Dict[str, str], field_size: int, ppi_val: float,
-                           offered_odds_map: Optional[Dict[str, float]] = None) -> str:
+                           name_to_ml: Dict[str, str], field_size: int, ppi_val: float) -> str:
     """
     Builds a clearer, simplified betting strategy report using A/B/C/D grouping, 
     minimum base bet examples, field size logic, and specific bet types (straight/box).
@@ -3786,25 +1939,17 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     # --- 2. A/B/C/D Grouping Logic (Simplified) ---
     A_group, B_group, C_group, D_group = [], [], [], []
     
-    # FIXED: Sort horses by FINAL BLENDED PROBABILITY (includes live odds), not just R rating
-    # This ensures live odds impact the finish order predictions
-    primary_probs_sorted = sorted(primary_probs.items(), key=lambda x: x[1], reverse=True)
-    all_horses = [h for h, p in primary_probs_sorted]  # Horses ordered by blended probability
-    
+    all_horses = primary_df['Horse'].tolist()
     pos_ev_horses = set(df_ol[df_ol["EV per $1"] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
-    neg_ev_horses = set(df_ol[df_ol["EV per $1"] < -0.05]['Horse'].tolist()) if not df_ol.empty else set()
     
     if strategy_profile == "Confident":
-        # Confident Model: A-Group = UNDERLAYS (favorites with negative EV), C-Group = OVERLAYS
-        # Underlays are horses bet BELOW their fair value (low odds, chalk horses)
-        A_group = [h for h in all_horses if h in neg_ev_horses][:3]  # Top 3 underlays (favorites)
-        if not A_group:  # Fallback if no clear underlays
-            A_group = all_horses[:2]  # Use top 2 rated horses
-    else: # Value Hunter - Prioritize overlays
-        # Value Hunter: A-Group = OVERLAYS (positive EV), C-Group = UNDERLAYS (favorites)
-        A_group = [h for h in all_horses if h in pos_ev_horses][:3]  # Top 3 overlays
-        if not A_group:  # Fallback if no overlays
-            A_group = [all_horses[0]] if all_horses else []  # Use top pick
+        A_group = all_horses[:1] 
+        if len(all_horses) > 1 and primary_df.iloc[1]['R'] > (primary_df.iloc[0]['R'] * 0.90): # Only add #2 if very close
+             A_group.append(all_horses[1])
+    else: # Value Hunter - Prioritize top pick + overlays
+        A_group = list(set([all_horses[0]]) | pos_ev_horses) 
+        if len(A_group) > 4: # Cap A group size for Value Hunter
+             A_group = sorted(A_group, key=lambda h: primary_df[primary_df['Horse'] == h].index[0])[:4] # Keep top 4 ranked from the value pool
 
     B_group = [h for h in all_horses if h not in A_group][:3] 
     C_group = [h for h in all_horses if h not in A_group and h not in B_group][:4]
@@ -3830,71 +1975,16 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     contender_report += "**Primary Challengers (B-Group):**\n" + format_horse_list(B_group) + "\n"
     contender_report += "* _Logical contenders expected to finish 2nd or 3rd. Use directly underneath A-Group horses._\n"
     
-    # --- 3a. Most Likely Winner Analysis (NEW) ---
     top_rated_horse = all_horses[0]
-    top_prob = primary_probs.get(top_rated_horse, 0)
     is_overlay = top_rated_horse in pos_ev_horses
-    is_underlay = top_rated_horse in neg_ev_horses
     top_ml_str = name_to_ml.get(top_rated_horse, '100')
     top_ml_dec = str_to_decimal_odds(top_ml_str) or 101
-    top_live_odds = df_final_field[df_final_field["Horse"] == top_rated_horse]["Live Odds"].values
-    top_live_dec = str_to_decimal_odds(str(top_live_odds[0])) if len(top_live_odds) > 0 and top_live_odds[0] else top_ml_dec
-    
-    most_likely_section = f"### 🎯 Most Likely Winner (Model Prediction)\n"
-    most_likely_section += f"**#{name_to_post.get(top_rated_horse, '?')} - {top_rated_horse}**\n\n"
-    most_likely_section += f"* **Model Probability:** {top_prob*100:.1f}% (highest among all runners)\n"
-    most_likely_section += f"* **Morning Line:** {top_ml_str} (dec: {top_ml_dec:.2f})\n"
-    most_likely_section += f"* **Current Live Odds:** {top_live_dec:.2f} (dec)\n"
-    
-    if is_underlay:
-        most_likely_section += f"* **Betting Status:** 🔴 **UNDERLAY** - Odds are shorter than fair value. Use primarily under other horses in exotics; careful on win bets.\n"
-    elif is_overlay:
-        most_likely_section += f"* **Betting Status:** 🟢 **OVERLAY** - Odds are better than fair value. Strong value play; consider win and exacta top.\n"
-    else:
-        most_likely_section += f"* **Betting Status:** 🟡 **FAIR** - Odds approximately match model probability.\n"
-    
-    most_likely_section += f"\n**Why This Horse Wins Most Often (Per Model):**\n"
-    
-    # Build reasoning from top horse's data
-    top_horse_row = primary_df[primary_df["Horse"] == top_rated_horse].iloc[0] if not primary_df[primary_df["Horse"] == top_rated_horse].empty else None
-    if top_horse_row is not None:
-        reasoning = []
-        
-        # Check R rating components
-        if top_horse_row.get("Cclass", 0) > 0:
-            reasoning.append(f"✓ Strong class rating ({top_horse_row['Cclass']:.2f}) - fits field well")
-        
-        if top_horse_row.get("Cstyle", 0) > 0.05:
-            reasoning.append(f"✓ Excellent style match ({top_horse_row['Cstyle']:.2f}) - track bias favors running style")
-        
-        if top_horse_row.get("Cpace", 0) > 0.1:
-            reasoning.append(f"✓ Pace tailwind ({top_horse_row['Cpace']:.2f}) - field setup helps this horse")
-        
-        if not pd.isna(top_horse_row.get("LastFig")) and top_horse_row.get("LastFig", 0) > 80:
-            reasoning.append(f"✓ Strong recent speed figure ({top_horse_row['LastFig']:.0f}) - racing in form")
-        
-        if top_horse_row.get("Atrack", 0) > 0.05:
-            reasoning.append(f"✓ Track bias advantage ({top_horse_row['Atrack']:.2f}) - specific track/distance bias")
-        
-        # Check jockey/trainer data
-        jt_data = jock_train_per_horse.get(top_rated_horse, {})
-        if jt_data.get("jock_win_pct", 0) > 0.20:
-            reasoning.append(f"✓ Elite jockey ({jt_data['jock_win_pct']*100:.0f}% win rate) - top rider")
-        
-        if jt_data.get("trainer_roi", 1.0) > 1.05:
-            reasoning.append(f"✓ Positive trainer ROI ({jt_data['trainer_roi']:.2f}) - trainer adds value")
-        
-        if reasoning:
-            for r in reasoning[:4]:  # Top 4 reasons
-                most_likely_section += f"{r}\n"
-        else:
-            most_likely_section += f"✓ Best overall rating ({primary_df['R'].max():.2f}) among field\n"
-    
-    most_likely_section += f"\n**Confidence Level:** {'HIGH' if top_prob > 0.25 else 'MEDIUM' if top_prob > 0.15 else 'MODERATE'} ({top_prob*100:.0f}% model probability)\n"
-    contender_report += f"\n{most_likely_section}"
-    # Add trainer intent note if strong signals detected
-    if trainer_intent_per_horse.get(top_rated_horse, {}).get("roi_angles", 0) > 2:
-        contender_report += f"\n**Trainer Intent Note:** Strong signals (ROI {trainer_intent_per_horse[top_rated_horse]['roi_angles']:.1f}) indicate win today.\n"
+    is_underlay = not is_overlay and (primary_probs.get(top_rated_horse, 0) > (1 / top_ml_dec)) and top_ml_dec < 4 # Define underlay as < 3/1
+
+    if is_overlay:
+         contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
+    elif is_underlay:
+         contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
 
     # --- 5. Build Simplified Blueprint Section ---
     blueprint_report = "### Betting Strategy Blueprints (Scale Base Bets to Budget: Max ~$100 Recommended)\n"
@@ -3980,18 +2070,6 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 * **Small Fields (<=6):** Focus on Win/Exacta/Trifecta as complex exotics pay less.
 * **Play SH5** mainly on mandatory payout days or when you have a very strong opinion & budget allows.
 """
-    
-    # --- 7. Generate Dynamic Exotic Probabilities ---
-    exotic_outcomes = dynamic_exotic_probs(primary_probs, ppi_val, primary_df, positions=5, sims=MODEL_CONFIG.get('exotic_sims', 20000))
-    probables = extract_probable_positions(exotic_outcomes)
-    bet_outcomes_report = generate_bet_outcomes(probables)
-    final_report += f"\n{bet_outcomes_report}"
-    
-    # --- 8. Generate Optimized Exotic Tickets ---
-    if offered_odds_map:
-        ticket_report = optimize_tickets(exotic_outcomes, probables, offered_odds_map)
-        final_report += f"\n### Optimized Exotic Tickets\n{ticket_report}\n* **Common Sense:** Hammer underlays (low odds, high prob) on top for exacta/tri; spread overlays (value) for super/SH5 bombs.\n"
-    
     return final_report
 
 
@@ -4016,21 +2094,10 @@ if st.button("Analyze This Race", type="primary", key="analyze_button"):
             overlay_pos = df_ol[df_ol["EV per $1"] > 0] if not df_ol.empty else pd.DataFrame()
             overlay_table_md = (overlay_pos[['Horse','Fair %','Fair (AM)','Board (dec)','EV per $1']].to_markdown(index=False)
                                 if not overlay_pos.empty else "None.")
-            
-            # Build offered odds map from live odds or morning line
-            offered_odds_map = {}
-            for _, row in primary_df.iterrows():
-                h = str(row.get("Horse", ""))
-                if h:
-                    live_odds_str = str(df_final_field[df_final_field["Horse"] == h]["Live Odds"].values[0] if not df_final_field[df_final_field["Horse"] == h].empty else "")
-                    ml_odds_str = name_to_ml.get(h, "")
-                    odds_str = live_odds_str if live_odds_str and live_odds_str != "" else ml_odds_str
-                    dec_odds = str_to_decimal_odds(odds_str) if odds_str else 5.0
-                    offered_odds_map[h] = dec_odds if dec_odds else 5.0
 
             # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
             strategy_report_md = build_betting_strategy(
-                primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val, offered_odds_map
+                primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
             )
 
             # --- 3. Update the LLM Prompt ---
@@ -4100,3 +2167,205 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
             st.error(f"Error generating report: {e}")
             import traceback
             st.error(traceback.format_exc())
+
+# ===================== E. ML System & Results Tracking =====================
+
+st.header("E. ML System & Results Tracking")
+
+if ML_AVAILABLE:
+    try:
+        db = RaceDatabase()
+        calibrator = MLCalibrator(db)
+        
+        tab_results, tab_history, tab_train, tab_predict = st.tabs(["📝 Enter Results", "📊 Race History", "🤖 Train Model", "🎯 Get Predictions"])
+        
+        # Tab 1: Enter Race Results
+        with tab_results:
+            st.subheader("Enter Race Results After Completion")
+            
+            if st.session_state.get("parsed", False):
+                # Pre-fill race info from current analysis
+                result_track = st.text_input("Track Name", value=st.session_state.get('track_name', ''))
+                result_date = st.date_input("Race Date", value=datetime.now())
+                result_race_num = st.number_input("Race Number", min_value=1, value=1)
+                result_distance = st.text_input("Distance", value=st.session_state.get('distance_txt', ''))
+                result_surface = st.selectbox("Surface", ["Dirt", "Turf", "Synthetic"], 
+                                             index=["Dirt", "Turf", "Synthetic"].index(st.session_state.get('surface_type', 'Dirt')))
+                
+                st.markdown("#### Enter Horse Results")
+                
+                # Get horses from current analysis
+                if 'df_final_field' in locals() and df_final_field is not None:
+                    horses = df_final_field['Horse'].tolist()
+                else:
+                    horses = []
+                
+                if horses:
+                    winner = st.selectbox("Winner", horses)
+                    finish_positions = {}
+                    final_odds = {}
+                    
+                    for horse in horses:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            finish_positions[horse] = st.number_input(f"{horse} - Finish Position", 
+                                                                     min_value=1, 
+                                                                     value=horses.index(horse) + 1,
+                                                                     key=f"pos_{horse}")
+                        with col2:
+                            final_odds[horse] = st.number_input(f"{horse} - Final Odds (decimal)", 
+                                                                min_value=1.01, 
+                                                                value=5.0,
+                                                                key=f"odds_{horse}")
+                    
+                    if st.button("💾 Save Race Results"):
+                        try:
+                            # Save race
+                            race_id = db.save_race(
+                                track=result_track,
+                                date=result_date.strftime('%Y-%m-%d'),
+                                race_number=result_race_num,
+                                distance=result_distance,
+                                surface=result_surface
+                            )
+                            
+                            # Save horses
+                            for horse in horses:
+                                db.save_horse(
+                                    race_id=race_id,
+                                    name=horse,
+                                    post_position=horses.index(horse) + 1,
+                                    final_odds=final_odds[horse],
+                                    finish_position=finish_positions[horse],
+                                    won=(horse == winner)
+                                )
+                            
+                            st.success(f"✅ Results saved! Race ID: {race_id}")
+                        except Exception as e:
+                            st.error(f"Error saving results: {e}")
+                else:
+                    st.info("📋 Parse a race first in Section A to see horses here")
+            else:
+                st.info("📋 Parse a race first in Section A, then return here to enter results")
+        
+        # Tab 2: Race History
+        with tab_history:
+            st.subheader("Historical Race Data")
+            
+            summary = db.get_race_summary()
+            if summary:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Races", summary['total_races'])
+                with col2:
+                    st.metric("Total Horses", summary['total_horses'])
+                with col3:
+                    avg_field = summary['total_horses'] / summary['total_races'] if summary['total_races'] > 0 else 0
+                    st.metric("Avg Field Size", f"{avg_field:.1f}")
+                
+                # Show recent races
+                st.markdown("#### Recent Races")
+                races = db.get_races(limit=20)
+                if races:
+                    race_df = pd.DataFrame(races)
+                    st.dataframe(race_df, use_container_width=True)
+                else:
+                    st.info("No races recorded yet")
+            else:
+                st.info("📊 No race data yet. Enter results in the '📝 Enter Results' tab after races complete.")
+        
+        # Tab 3: Train Model
+        with tab_train:
+            st.subheader("Train ML Probability Calibration Model")
+            
+            summary = db.get_race_summary()
+            if summary and summary['total_races'] >= 10:
+                st.info(f"📚 {summary['total_races']} races available for training")
+                
+                use_pytorch = st.checkbox("Use PyTorch Neural Network (if available)", value=True)
+                epochs = st.slider("Training Epochs", min_value=10, max_value=500, value=100)
+                
+                if st.button("🚀 Train Model"):
+                    with st.spinner("Training model..."):
+                        try:
+                            results = calibrator.train(use_neural_net=use_pytorch, epochs=epochs)
+                            
+                            st.success(f"✅ Model trained successfully!")
+                            st.json(results)
+                            
+                            # Show loss plot if available
+                            if 'loss_history' in results and results['loss_history']:
+                                loss_df = pd.DataFrame({'Epoch': range(len(results['loss_history'])), 
+                                                       'Loss': results['loss_history']})
+                                st.line_chart(loss_df.set_index('Epoch'))
+                        except Exception as e:
+                            st.error(f"Training error: {e}")
+                            import traceback
+                            st.error(traceback.format_exc())
+            else:
+                needed = 10 - (summary['total_races'] if summary else 0)
+                st.warning(f"⚠️ Need at least 10 races to train model. Enter {needed} more race results.")
+        
+        # Tab 4: Get Predictions
+        with tab_predict:
+            st.subheader("ML-Enhanced Probability Predictions")
+            
+            if calibrator.is_trained():
+                st.success("✅ Model is trained and ready")
+                
+                if st.session_state.get("parsed", False) and 'ratings_df' in locals():
+                    st.markdown("#### Current Race Predictions")
+                    
+                    # Get raw probabilities from ratings
+                    if 'all_scenario_ratings' in locals() and all_scenario_ratings:
+                        # Use first scenario's ratings
+                        first_key = list(all_scenario_ratings.keys())[0]
+                        rating_probs = fair_probs_from_ratings(all_scenario_ratings[first_key])
+                        
+                        if rating_probs:
+                            # Get ML-calibrated probabilities
+                            horses_list = list(rating_probs.keys())
+                            raw_probs = [rating_probs[h] for h in horses_list]
+                            
+                            try:
+                                calibrated = calibrator.predict(raw_probs)
+                                
+                                # Create comparison dataframe
+                                pred_df = pd.DataFrame({
+                                    'Horse': horses_list,
+                                    'Raw Probability': [f"{p:.1%}" for p in raw_probs],
+                                    'ML Calibrated': [f"{p:.1%}" for p in calibrated],
+                                    'Adjustment': [f"{(c-r)*100:+.1f}%" for r, c in zip(raw_probs, calibrated)]
+                                })
+                                
+                                st.dataframe(pred_df, use_container_width=True)
+                                st.info("💡 ML model adjusts probabilities based on historical performance")
+                            except Exception as e:
+                                st.error(f"Prediction error: {e}")
+                    else:
+                        st.info("Run 'Analyze This Race' first to see predictions")
+                else:
+                    st.info("📋 Parse and analyze a race first to get ML predictions")
+            else:
+                st.warning("⚠️ Model not trained yet. Train it in the '🤖 Train Model' tab first (requires 10+ races).")
+    
+    except Exception as e:
+        st.error(f"Error initializing ML system: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+else:
+    st.warning("""
+    ⚠️ **ML System Not Available**
+    
+    The ML Engine could not be loaded. This is usually because required dependencies are missing.
+    
+    **To enable Section E (Results Tracking & ML Training):**
+    1. Install requirements: `pip install -r requirements-ml.txt`
+    2. Or install manually: `pip install scikit-learn torch numpy`
+    3. Restart the Streamlit app
+    
+    The core rating system (Sections A-D) works fine without ML.
+    """)
+
+st.markdown("---")
+st.caption("Horse Race Ready - IQ Mode | Advanced Track Bias Analysis with ML Probability Calibration")
