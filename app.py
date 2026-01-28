@@ -1134,6 +1134,143 @@ def calculate_final_rating(race_type,
     final_score = base_bias * surface_modifier * distance_modifier * condition_modifier
     return round(final_score, 4)
 
+# ===================== Class Rating Calculator (Comprehensive) =====================
+
+def parse_recent_class_levels(block: str) -> List[dict]:
+    """
+    Parse recent races to extract class progression data.
+    Returns list of dicts with purse, race_type, finish_position
+    """
+    races = []
+    # Pattern: date track race_type purse  (e.g., "23Sep23 Bel Alw 85000")
+    pattern = r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+\s+(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G1|G2|G3|Hcp)\s+(\d+)'
+    
+    for match in re.finditer(pattern, block):
+        race_type = match.group(2)
+        purse_str = match.group(3)
+        try:
+            races.append({
+                'race_type': race_type,
+                'purse': int(purse_str) if purse_str.isdigit() else 0
+            })
+        except:
+            pass
+    
+    return races[:5]  # Last 5 races
+
+def calculate_comprehensive_class_rating(
+    today_purse: int,
+    today_race_type: str,
+    horse_block: str,
+    pedigree: dict,
+    angles_df: pd.DataFrame
+) -> float:
+    """
+    Comprehensive class rating considering:
+    1. Today's purse vs recent purse levels
+    2. Race type hierarchy (MCL < CLM < MSW < ALW < STK < GRD)
+    3. Class movement trend
+    4. Pedigree quality indicators
+    5. Angle-based class boosts
+    
+    Returns: Class rating from -3.0 to +6.0
+    """
+    
+    # Race type hierarchy scoring
+    race_type_scores = {
+        'mcl': 1, 'maiden claiming': 1, 'md cl': 1,
+        'clm': 2, 'claiming': 2, 'cl': 2,
+        'mdn': 3, 'md sp wt': 3, 'maiden special weight': 3, 'msw': 3,
+        'alw': 4, 'allowance': 4,
+        'oc': 4.5, 'optional claiming': 4.5,
+        'stk': 5, 'stakes': 5,
+        'hcp': 5.5, 'handicap': 5.5,
+        'g3': 6, 'grade 3': 6,
+        'g2': 7, 'grade 2': 7,
+        'g1': 8, 'grade 1': 8
+    }
+    
+    today_type_norm = str(today_race_type).strip().lower()
+    today_score = race_type_scores.get(today_type_norm, 3.5)
+    
+    # Parse recent races
+    recent_races = parse_recent_class_levels(horse_block)
+    
+    class_rating = 0.0
+    
+    # 1. PURSE COMPARISON (weight: heavy)
+    if recent_races and today_purse > 0:
+        recent_purses = [r['purse'] for r in recent_races if r['purse'] > 0]
+        if recent_purses:
+            avg_recent_purse = np.mean(recent_purses)
+            purse_ratio = today_purse / avg_recent_purse if avg_recent_purse > 0 else 1.0
+            
+            # Purse movement scoring
+            if purse_ratio >= 1.5:  # Major step up
+                class_rating -= 1.2
+            elif purse_ratio >= 1.2:  # Moderate step up
+                class_rating -= 0.6
+            elif purse_ratio >= 0.8 and purse_ratio <= 1.2:  # Same class
+                class_rating += 0.8
+            elif purse_ratio >= 0.6:  # Slight drop
+                class_rating += 1.5
+            else:  # Major drop (class relief)
+                class_rating += 2.5
+    
+    # 2. RACE TYPE PROGRESSION
+    if recent_races:
+        recent_types = [r['race_type'].lower() for r in recent_races]
+        recent_scores = [race_type_scores.get(rt, 3.5) for rt in recent_types]
+        avg_recent_type = np.mean(recent_scores)
+        
+        type_diff = today_score - avg_recent_type
+        
+        if type_diff >= 2.0:  # Major class rise (e.g., ALW → G1)
+            class_rating -= 1.5
+        elif type_diff >= 1.0:  # Moderate rise (e.g., CLM → ALW)
+            class_rating -= 0.8
+        elif abs(type_diff) < 0.5:  # Same class level
+            class_rating += 0.5
+        elif type_diff <= -1.0:  # Dropping in class
+            class_rating += 1.2
+    
+    # 3. PEDIGREE QUALITY BOOST
+    spi = pedigree.get('sire_spi') or pedigree.get('damsire_spi')
+    if pd.notna(spi):
+        spi_val = float(spi)
+        if spi_val >= 110:
+            class_rating += 0.4
+        elif spi_val >= 100:
+            class_rating += 0.2
+    
+    # 4. ANGLE-BASED CLASS INDICATORS
+    if angles_df is not None and not angles_df.empty:
+        angle_text = ' '.join(angles_df['Category'].astype(str)).lower()
+        
+        # Class rise angles
+        if 'first time starter' in angle_text or '1st time str' in angle_text:
+            class_rating += 0.5  # Debut = unknown class, slight boost
+        if '2nd career' in angle_text:
+            class_rating += 0.3
+        if 'shipper' in angle_text:
+            class_rating += 0.2  # Shipper often means stepping up
+    
+    # 5. ABSOLUTE PURSE LEVEL BASELINE
+    # High purse races = better horses overall
+    if today_purse >= 100000:
+        purse_baseline = 1.0
+    elif today_purse >= 50000:
+        purse_baseline = 0.5
+    elif today_purse >= 25000:
+        purse_baseline = 0.0
+    else:
+        purse_baseline = -0.5
+    
+    class_rating += purse_baseline
+    
+    # Clip to reasonable range
+    return float(np.clip(class_rating, -3.0, 6.0))
+
 # ===================== 1. Paste PPs & Parse (durable) =====================
 
 st.header("1. Paste PPs & Parse")
@@ -1430,7 +1567,7 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
 
     return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
 
-# Build Cclass as additive bonus (invert calculate_final_rating lower-is-better)
+# Build Cclass using comprehensive class rating
 race_surface = surface_type
 race_cond = condition_txt
 race_bucket = distance_bucket(distance_txt)
@@ -1439,24 +1576,29 @@ Cclass_vals = []
 for _, r in df_final_field.iterrows():
     name = r["Horse"]
     ped  = pedigree_per_horse.get(name, {}) or {}
-    ang  = angles_per_horse.get(name) # Can be None
-    if ang is None:
-         ang = pd.DataFrame() # Ensure ang is DataFrame for _infer_horse_surface_pref
-    surf_pref = _infer_horse_surface_pref(name, ped, ang, race_surface)
-    dist_pref = _infer_horse_distance_pref(ped)
-
-    base_scalar = calculate_final_rating(
-        race_type=race_type_detected,
-        race_surface=race_surface,
-        race_distance_category=race_bucket,
-        race_surface_condition=race_cond,
-        horse_surface_pref=surf_pref,
-        horse_distance_pref=dist_pref
+    ang  = angles_per_horse.get(name)
+    
+    # Get horse's PP block for class analysis
+    horse_block = ""
+    for _, h_name, block in split_into_horse_chunks(pp_text):
+        if h_name == name:
+            horse_block = block
+            break
+    
+    # Calculate comprehensive class rating
+    comprehensive_class = calculate_comprehensive_class_rating(
+        today_purse=purse_val,
+        today_race_type=race_type_detected,
+        horse_block=horse_block,
+        pedigree=ped,
+        angles_df=ang if ang is not None else pd.DataFrame()
     )
-    # Convert to additive bonus; more reliable (lower scalar) -> bigger bonus
-    cclass_add = round(1.00 - base_scalar, 3)
-    cclass_add += _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
-    Cclass_vals.append(cclass_add)
+    
+    # Add pedigree/angle tweaks on top
+    tweak = _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
+    
+    cclass_total = comprehensive_class + tweak
+    Cclass_vals.append(round(cclass_total, 3))
 
 df_final_field["Cclass"] = Cclass_vals
 
@@ -1732,6 +1874,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
         a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
 
+        # Get pre-computed Cclass from df_styles (calculated in Section A)
         c_class = float(row.get("Cclass", 0.0))
         
         # ======================== Tier 2 Bonuses ========================
