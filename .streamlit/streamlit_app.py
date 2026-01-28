@@ -1514,8 +1514,9 @@ Anchors for verticals (bias-aware): Winner = {anchor1}, Runner-up = {anchor2}
 
 # ===================== E. ML System & Results Tracking =====================
 
+st.header("E. ML System & Results Tracking")
+
 if ML_AVAILABLE:
-    st.header("E. ML System & Results Tracking")
     
     ml_tabs = st.tabs(["📊 Performance Stats", "📝 Enter Results", "🤖 Train Model", "⚙️ Settings"])
     
@@ -1687,6 +1688,19 @@ if ML_AVAILABLE:
         
         **Architecture:** Neural network (15→64→32→16→1)
         """)
-
 else:
-    st.info("💡 Install ML requirements: `pip install torch` or `pip install scikit-learn`")
+    st.warning("⚠️ ML Engine not available. The results tracking system requires ML dependencies.")
+    st.markdown("""
+    **To enable Section E (Results Tracking & ML Training):**
+    
+    Install one of these packages:
+    ```bash
+    pip install scikit-learn
+    ```
+    or
+    ```bash
+    pip install torch
+    ```
+    
+    Then restart your Streamlit app.
+    """)
