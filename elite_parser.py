@@ -208,9 +208,9 @@ class EliteBRISNETParser:
         r'(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]'  # Finish position with BRISNET beat margin symbols
     )
 
-    def __init__(self):
-        self.warnings = []
-        self.confidence_scores = []
+    def __init__(self) -> None:
+        self.warnings: List[str] = []
+        self.confidence_scores: List[float] = []
 
     def parse_full_pp(self, pp_text: str) -> Dict[str, HorseData]:
         """
@@ -233,12 +233,12 @@ class EliteBRISNETParser:
 
         return horses
 
-    def _split_into_chunks(self, pp_text: str) -> List[Tuple[str, str, str, str, float]]:
+    def _split_into_chunks(self, pp_text: str) -> List[Tuple[str, str, str, float, str]]:
         """
         Splits PP text into horse chunks using multiple pattern attempts.
         Returns: [(post, name, style, quirin, block), ...]
         """
-        chunks = []
+        chunks: List[Tuple[str, str, str, float, str]] = []
 
         # Try each pattern until one works
         for pattern in self.HORSE_HDR_PATTERNS:
@@ -399,7 +399,7 @@ class EliteBRISNETParser:
         Returns: (style, quirin, strength)
         """
         # Try to extract from full PP using horse name as anchor
-        full_pattern = rf'(?mi)^\s*\d+[A-Z]?\s+{re.escape(name)}\s*\(\s*(E\/P|EP|E|P|S|NA)(?:\s+(\d+))?\s*\)'
+        full_pattern: str = rf'(?mi)^\s*\d+[A-Z]?\s+{re.escape(name)}\s*\(\s*(E\/P|EP|E|P|S|NA)(?:\s+(\d+))?\s*\)'
 
         match = re.search(full_pattern, block)
         if not match:
@@ -422,10 +422,10 @@ class EliteBRISNETParser:
 
     def _calculate_style_strength(self, style: str, quirin: float) -> str:
         """Calculate style strength based on Quirin points"""
-        s = (style or "NA").upper()
+        s: str = (style or "NA").upper()
         try:
-            q = float(quirin)
-        except Exception:
+            q: float = float(quirin)
+        except (ValueError, TypeError):
             return "Solid"
 
         if pd.isna(q):
@@ -533,14 +533,14 @@ class EliteBRISNETParser:
         Extract speed figures with recency context from BRISNET SPD column.
         Returns: (all_figs, avg_top2, peak, last)
         """
-        figs = []
+        figs: List[int] = []
         for match in self.SPEED_FIG_PATTERN.finditer(block):
             try:
                 # Group 5 is the speed figure (SPD column after E1 E2/ LP 1c 2c)
-                fig_val = int(match.group(5))
+                fig_val: int = int(match.group(5))
                 if 40 < fig_val < 130:
                     figs.append(fig_val)
-            except Exception:
+            except (ValueError, IndexError, AttributeError):
                 pass
 
         # Limit to last 10 races
@@ -560,7 +560,7 @@ class EliteBRISNETParser:
         Extract recent race dates and finishes from BRISNET format.
         Returns: (days_since_last, last_date, finish_positions)
         """
-        races = []
+        races: List[Dict[str, any]] = []
         
         # BRISNET format has finish position in FIN column
         # Pattern: ...SPD PP ST 1C 2C STR FIN JOCKEY...
@@ -604,8 +604,8 @@ class EliteBRISNETParser:
 
     def _parse_class_data(self, block: str) -> Tuple[List[int], List[str]]:
         """Extract recent purse levels and race types from BRISNET format"""
-        purses = []
-        types = []
+        purses: List[int] = []
+        types: List[str] = []
 
         # BRISNET format: ™TrPOaksL 125k¨¨¬ or ™A34000n2x¨¨© or ™Mdn 55k¨¨¨
         # Pattern matches race type marker ™ followed by race type info
@@ -664,9 +664,9 @@ class EliteBRISNETParser:
             return 'Mdn'
         return 'Alw'  # Default to allowance if unclear
 
-    def _parse_pedigree(self, block: str) -> Dict:
+    def _parse_pedigree(self, block: str) -> Dict[str, any]:
         """Extract all pedigree data"""
-        ped = {}
+        ped: Dict[str, any] = {}
 
         # Sire stats
         m = self.PEDIGREE_PATTERNS['sire_stats'].search(block)
@@ -697,10 +697,10 @@ class EliteBRISNETParser:
 
         return ped
 
-    def _parse_angles(self, block: str) -> List[Dict]:
+    def _parse_angles(self, block: str) -> List[Dict[str, any]]:
         """Extract all handicapping angles"""
-        angles = []
-        seen_categories = set()  # Prevent duplicates
+        angles: List[Dict[str, any]] = []
+        seen_categories: set = set()  # Prevent duplicates
 
         for match in self.ANGLE_PATTERN.finditer(block):
             category = re.sub(r'\s+', ' ', match.group(2).strip())
@@ -752,15 +752,15 @@ class EliteBRISNETParser:
 
         return equipment, equipment_change, lasix, first_lasix, weight
 
-    def _parse_comprehensive_race_history(self, block: str) -> Tuple[List[Dict], List[str], List[str], List[float]]:
+    def _parse_comprehensive_race_history(self, block: str) -> Tuple[List[Dict[str, any]], List[str], List[str], List[float]]:
         """
         Extract complete race history with running positions, conditions, comments, odds.
         Returns: (race_history, track_conditions, trip_comments, odds_history)
         """
-        race_history = []
-        track_conditions = []
-        trip_comments = []
-        odds_history = []
+        race_history: List[Dict[str, any]] = []
+        track_conditions: List[str] = []
+        trip_comments: List[str] = []
+        odds_history: List[float] = []
 
         # Simpler pattern focusing on key data
         # Match: DATE TRK ... surface ... SPD PP ST positions FIN JOCKEY ODDS
@@ -839,7 +839,7 @@ class EliteBRISNETParser:
 
         return race_history, track_conditions, trip_comments, odds_history
 
-    def _calculate_running_patterns(self, race_history: List[Dict]) -> Tuple[float, float, float, float]:
+    def _calculate_running_patterns(self, race_history: List[Dict[str, any]]) -> Tuple[float, float, float, float]:
         """
         Calculate running style statistics from race history.
         Returns: (early_speed_pct, closing_pct, avg_early_pos, avg_late_pos)
@@ -847,10 +847,10 @@ class EliteBRISNETParser:
         if not race_history:
             return 0.0, 0.0, 0.0, 0.0
 
-        early_positions = []
-        late_positions = []
-        led_early = 0
-        closed_ground = 0
+        early_positions: List[int] = []
+        late_positions: List[int] = []
+        led_early: int = 0
+        closed_ground: int = 0
 
         for race in race_history[:10]:  # Last 10 races
             try:
@@ -879,12 +879,12 @@ class EliteBRISNETParser:
 
         return early_speed_pct, closing_pct, avg_early_pos, avg_late_pos
 
-    def _parse_surface_stats(self, block: str) -> Dict:
+    def _parse_surface_stats(self, block: str) -> Dict[str, Dict[str, any]]:
         """
         Extract surface-specific performance statistics.
         Returns: {surface: {starts, wins, win_pct, avg_earnings}}
         """
-        surface_stats = {}
+        surface_stats: Dict[str, Dict[str, any]] = {}
 
         # Pattern: Fst (108) 3 1 - 0 - 1 $35,200 83
         pattern = r'(Fst|Off|Dis|Trf|AW)\s+\((\d+)\)\s+(\d+)\s+(\d+)\s+-\s+(\d+)\s+-\s+(\d+)\s+\$?([\d,]+)'
@@ -908,12 +908,12 @@ class EliteBRISNETParser:
 
         return surface_stats
 
-    def _parse_workouts(self, block: str) -> Tuple[List[Dict], Optional[int], str]:
+    def _parse_workouts(self, block: str) -> Tuple[List[Dict[str, any]], Optional[int], str]:
         """
         Extract workout information.
         Returns: (workouts, last_workout_days, pattern)
         """
-        workouts = []
+        workouts: List[Dict[str, any]] = []
 
         # Pattern: 18Jan GP 4f ft :49ª B 48/101
         pattern = r'(\d{1,2}[A-Za-z]{3}(?:\'\d{2})?)\s+(\w+)\s+([×]?)(\d+)f\s+(ft|gd|fm|sy|sl)\s+([\d:]+)\s+([BHG])\s+(\d+/\d+)?'
@@ -978,12 +978,12 @@ class EliteBRISNETParser:
 
         return workouts, last_workout_days, pattern_desc
 
-    def _parse_angle_flags(self, angles: List[Dict]) -> List[str]:
+    def _parse_angle_flags(self, angles: List[Dict[str, any]]) -> List[str]:
         """
         Extract quick-reference angle flags from parsed angles.
         Returns: List of simplified angle descriptions
         """
-        flags = []
+        flags: List[str] = []
 
         for angle in angles:
             category = angle['category']
@@ -1022,13 +1022,13 @@ class EliteBRISNETParser:
             raw_block=block
         )
 
-    def validate_parsed_data(self, horses: Dict[str, HorseData]) -> Dict:
+    def validate_parsed_data(self, horses: Dict[str, HorseData]) -> Dict[str, any]:
         """
         Comprehensive validation of parsed data quality.
         Returns: {overall_score, issues, recommendations}
         """
-        issues = []
-        total_confidence = []
+        issues: List[str] = []
+        total_confidence: List[float] = []
 
         for name, horse in horses.items():
             total_confidence.append(horse.parsing_confidence)
@@ -1087,7 +1087,7 @@ class EliteBRISNETParser:
 # ===================== INTEGRATION WITH PROBABILISTIC MODEL =====================
 
 def integrate_with_torch_model(parsed_horses: Dict[str, HorseData],
-                              rating_engine,
+                              rating_engine: any,
                               softmax_tau: float = 3.0) -> pd.DataFrame:
     """
     Convert parsed data → ratings → softmax probabilities.
@@ -1097,7 +1097,7 @@ def integrate_with_torch_model(parsed_horses: Dict[str, HorseData],
     """
     import torch
 
-    rows = []
+    rows: List[Dict[str, any]] = []
 
     for name, horse in parsed_horses.items():
         # Use existing rating engine (from app.py)

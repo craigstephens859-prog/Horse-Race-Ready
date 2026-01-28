@@ -117,7 +117,7 @@ def resolve_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     if df is None or df.empty:
         return None
 
-    available_cols = {c.strip().lower(): c for c in df.columns}
+    available_cols: Dict[str, str] = {c.strip().lower(): c for c in df.columns}
 
     for candidate in candidates:
         candidate_lower = candidate.strip().lower()
@@ -262,17 +262,17 @@ def compute_eight_angles(
         return pd.DataFrame()
 
     # Resolve column names
-    cols = resolve_angle_columns(df, column_map)
+    cols: Dict[str, Optional[str]] = resolve_angle_columns(df, column_map)
 
     # Helper: Safe column extraction with default
     def safe_get_col(canonical: str, default: float = 0.0) -> pd.Series:
-        col_name = cols.get(canonical)
+        col_name: Optional[str] = cols.get(canonical)
         if col_name and col_name in df.columns:
             return df[col_name].apply(lambda v: _coerce_num(v, default))
         return pd.Series([default] * len(df), index=df.index)
 
     # Extract raw values
-    angle_vals = {}
+    angle_vals: Dict[str, pd.Series] = {}
 
     # Angle 1: Early Speed (from LastFig speed figure)
     angle_vals['EarlySpeed'] = safe_get_col('LastFig', default=0.0)
@@ -367,7 +367,7 @@ def compute_eight_angles(
     return angles_df
 
 
-def apply_angles_to_ratings(ratings, angles: pd.DataFrame, weight: float = 0.25):
+def apply_angles_to_ratings(ratings: any, angles: pd.DataFrame, weight: float = 0.25) -> any:
     """
     Blend angle scores into existing ratings.
 
@@ -384,7 +384,7 @@ def apply_angles_to_ratings(ratings, angles: pd.DataFrame, weight: float = 0.25)
     if angles is None or angles.empty:
         return ratings
 
-    bump = angles.get("Angles_Total", 0).astype(float)
+    bump: pd.Series = angles.get("Angles_Total", 0).astype(float)
 
     if isinstance(ratings, pd.DataFrame):
         base = ratings.get("R", None)
@@ -399,7 +399,7 @@ def apply_angles_to_ratings(ratings, angles: pd.DataFrame, weight: float = 0.25)
 
 # ===================== VALIDATION FUNCTIONS =====================
 
-def validate_angle_calculation(df: pd.DataFrame, verbose: bool = True) -> Dict:
+def validate_angle_calculation(df: pd.DataFrame, verbose: bool = True) -> Dict[str, any]:
     """
     Validate angle calculations for correctness.
 
@@ -411,10 +411,10 @@ def validate_angle_calculation(df: pd.DataFrame, verbose: bool = True) -> Dict:
 
     Returns: Validation report dict
     """
-    angles_df = compute_eight_angles(df, debug=False)
+    angles_df: pd.DataFrame = compute_eight_angles(df, debug=False)
 
-    issues = []
-    warnings = []
+    issues: List[str] = []
+    warnings: List[str] = []
 
     # Check for NaN/Inf
     for col in angles_df.columns:

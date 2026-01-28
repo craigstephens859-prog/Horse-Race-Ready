@@ -200,7 +200,7 @@ class UnifiedRatingEngine:
 
     def _horses_to_dataframe(self, horses: Dict[str, HorseData]) -> pd.DataFrame:
         """Convert HorseData objects to DataFrame for angle calculation"""
-        rows = []
+        rows: List[Dict[str, any]] = []
         for name, horse in horses.items():
             rows.append({
                 'Horse': name,
@@ -223,7 +223,7 @@ class UnifiedRatingEngine:
         """Extract numeric post position from string like '1A'"""
         try:
             return int(''.join(c for c in str(post_str) if c.isdigit()))
-        except Exception:
+        except (ValueError, TypeError):
             return 5  # Default middle post
 
     def _style_to_numeric(self, style: str) -> float:
@@ -298,7 +298,7 @@ class UnifiedRatingEngine:
 
     def _calc_class(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
         """Class rating: purse comparison + race type hierarchy"""
-        rating = 0.0
+        rating: float = 0.0
 
         # Race type scoring
         today_score = self.RACE_TYPE_SCORES.get(today_race_type.lower(), 3.5)
@@ -353,7 +353,7 @@ class UnifiedRatingEngine:
 
     def _calc_form(self, horse: HorseData) -> float:
         """Form cycle: layoff + trend + consistency + TRIP HANDICAPPING"""
-        rating = 0.0
+        rating: float = 0.0
 
         # First-time starter special handling
         if not horse.speed_figures and not horse.recent_finishes:
@@ -447,7 +447,7 @@ class UnifiedRatingEngine:
             return 0.0  # Neutral for first-timers
 
         # Calculate race average
-        race_figs = [h.avg_top2 for h in horses_in_race if h.avg_top2 > 0]
+        race_figs: List[float] = [h.avg_top2 for h in horses_in_race if h.avg_top2 > 0]
         race_avg = np.mean(race_figs) if race_figs else 85.0
 
         # Differential scoring
@@ -457,10 +457,10 @@ class UnifiedRatingEngine:
 
     def _calc_pace(self, horse: HorseData, horses_in_race: List[HorseData], distance_txt: str) -> float:
         """Pace scenario rating using COMPREHENSIVE running pattern data"""
-        rating = 0.0
+        rating: float = 0.0
 
         # Count early types (basic)
-        num_speed = sum(1 for h in horses_in_race if h.pace_style in ['E', 'E/P'])
+        num_speed: int = sum(1 for h in horses_in_race if h.pace_style in ['E', 'E/P'])
 
         # ENHANCED: Use comprehensive early_speed_pct if available
         if hasattr(horse, 'early_speed_pct') and horse.early_speed_pct is not None:
@@ -524,14 +524,14 @@ class UnifiedRatingEngine:
 
     def _calc_style(self, horse: HorseData, surface_type: str, style_bias: Optional[List[str]]) -> float:
         """Running style strength rating"""
-        strength_values = {
+        strength_values: Dict[str, float] = {
             'Strong': 0.8,
             'Solid': 0.4,
             'Slight': 0.1,
             'Weak': -0.3
         }
 
-        base = strength_values.get(horse.style_strength, 0.0)
+        base: float = strength_values.get(horse.style_strength, 0.0)
 
         # Style bias adjustment
         if style_bias:
@@ -543,13 +543,13 @@ class UnifiedRatingEngine:
     def _calc_post(self, horse: HorseData, distance_txt: str, post_bias: Optional[List[str]]) -> float:
         """Post position rating"""
         try:
-            post_num = int(''.join(c for c in horse.post if c.isdigit()))
-        except Exception:
+            post_num: int = int(''.join(c for c in horse.post if c.isdigit()))
+        except (ValueError, TypeError):
             return 0.0
 
-        is_sprint = 'furlong' in distance_txt.lower() or '6' in distance_txt or '7' in distance_txt
+        is_sprint: bool = 'furlong' in distance_txt.lower() or '6' in distance_txt or '7' in distance_txt
 
-        rating = 0.0
+        rating: float = 0.0
 
         if is_sprint:
             if post_num <= 3:
@@ -573,7 +573,7 @@ class UnifiedRatingEngine:
 
     def _calc_tier2_bonus(self, horse: HorseData, surface_type: str, distance_txt: str) -> float:
         """Advanced bonuses: Using ALL comprehensive parser data"""
-        bonus = 0.0
+        bonus: float = 0.0
 
         # SPI bonus
         if horse.sire_spi:
@@ -642,17 +642,17 @@ class UnifiedRatingEngine:
             return df
 
         if TORCH_AVAILABLE:
-            ratings = torch.tensor(df['Rating'].values, dtype=torch.float32)
+            ratings: torch.Tensor = torch.tensor(df['Rating'].values, dtype=torch.float32)
             # Apply temperature scaling
-            ratings_scaled = ratings / self.softmax_tau
+            ratings_scaled: torch.Tensor = ratings / self.softmax_tau
             # Softmax
-            probs = torch.nn.functional.softmax(ratings_scaled, dim=0).numpy()
+            probs: np.ndarray = torch.nn.functional.softmax(ratings_scaled, dim=0).numpy()
         else:
             # Fallback to numpy implementation
-            ratings = df['Rating'].values
-            ratings_scaled = ratings / self.softmax_tau
-            exp_ratings = np.exp(ratings_scaled - np.max(ratings_scaled))  # Numerical stability
-            probs = exp_ratings / np.sum(exp_ratings)
+            ratings: np.ndarray = df['Rating'].values
+            ratings_scaled: np.ndarray = ratings / self.softmax_tau
+            exp_ratings: np.ndarray = np.exp(ratings_scaled - np.max(ratings_scaled))  # Numerical stability
+            probs: np.ndarray = exp_ratings / np.sum(exp_ratings)
 
         df['Probability'] = probs
 
