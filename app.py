@@ -1312,6 +1312,9 @@ if df_final_field.empty:
     st.warning("All horses are scratched.")
     st.stop()
 
+# Store in session state for Section E access
+st.session_state['df_final_field'] = df_final_field
+
 # Ensure StyleStrength and Style exist
 df_final_field["StyleStrength"] = df_final_field.apply(
     lambda row: calculate_style_strength(row["OverrideStyle"] if row["OverrideStyle"] else row["DetectedStyle"], row["Quirin"]), axis=1
@@ -2196,6 +2199,30 @@ if ML_AVAILABLE:
         
         tab_results, tab_history, tab_train, tab_predict = st.tabs(["📝 Enter Results", "📊 Race History", "🤖 Train Model", "🎯 Get Predictions"])
         
+        # Helper function to convert odds to decimal
+        def convert_to_decimal_odds(odds_str):
+            """Convert fractional (5/2) or American (+150) odds to decimal"""
+            if not odds_str or odds_str.strip() == '':
+                return 5.0
+            odds_str = str(odds_str).strip()
+            try:
+                # Fractional odds (e.g., "5/2", "9/1")
+                if '/' in odds_str:
+                    num, den = odds_str.split('/')
+                    return round(float(num) / float(den) + 1.0, 2)
+                # American odds (e.g., "+150", "-200")
+                elif '+' in odds_str or (odds_str.startswith('-') and len(odds_str) > 1):
+                    american = float(odds_str)
+                    if american > 0:
+                        return round(american / 100.0 + 1.0, 2)
+                    else:
+                        return round(100.0 / abs(american) + 1.0, 2)
+                # Already decimal (e.g., "3.5")
+                else:
+                    return round(float(odds_str), 2)
+            except:
+                return 5.0
+        
         # Tab 1: Enter Race Results
         with tab_results:
             st.subheader("Enter Race Results After Completion")
@@ -2212,10 +2239,19 @@ if ML_AVAILABLE:
                 st.markdown("#### Enter Horse Results")
                 
                 # Get horses from current analysis
-                if 'df_final_field' in locals() and df_final_field is not None:
-                    horses = df_final_field['Horse'].tolist()
+                df_field = st.session_state.get('df_final_field', None)
+                if df_field is not None:
+                    horses = df_field['Horse'].tolist()
+                    # Create mapping of horse to live odds
+                    horse_live_odds = {}
+                    if 'Live Odds' in df_field.columns:
+                        for idx, row in df_field.iterrows():
+                            horse_name = row['Horse']
+                            live_odds = row.get('Live Odds', row.get('ML', ''))
+                            horse_live_odds[horse_name] = convert_to_decimal_odds(live_odds)
                 else:
                     horses = []
+                    horse_live_odds = {}
                 
                 if horses:
                     winner = st.selectbox("Winner", horses)
@@ -2230,9 +2266,11 @@ if ML_AVAILABLE:
                                                                      value=horses.index(horse) + 1,
                                                                      key=f"pos_{horse}")
                         with col2:
+                            # Auto-populate from Live Odds if available
+                            default_odds = horse_live_odds.get(horse, 5.0)
                             final_odds[horse] = st.number_input(f"{horse} - Final Odds (decimal)", 
                                                                 min_value=1.01, 
-                                                                value=5.0,
+                                                                value=default_odds,
                                                                 key=f"odds_{horse}")
                     
                     if st.button("💾 Save Race Results"):
