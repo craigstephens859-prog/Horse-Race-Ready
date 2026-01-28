@@ -2203,30 +2203,41 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 )
 
                 if not results_df.empty:
-                    # Convert unified engine output to app.py format
-                    unified_ratings = pd.DataFrame({
-                        "#": range(1, len(results_df) + 1),
-                        "Post": results_df['Post'].astype(str),
-                        "Horse": results_df['Horse'],
-                        "Style": results_df.get('Pace_Style', 'NA'),
-                        "Quirin": results_df.get('Quirin', 0.0),
-                        "Cstyle": results_df.get('Cstyle', 0.0),
-                        "Cpost": results_df.get('Cpost', 0.0),
-                        "Cpace": results_df.get('Cpace', 0.0),
-                        "Cspeed": results_df.get('Cspeed', 0.0),
-                        "Cclass": results_df.get('Cclass', 0.0),
-                        "Cform": results_df.get('Cform', 0.0),
-                        "Atrack": 0.0,
-                        "Arace": results_df['Rating'],
-                        "R": results_df['Rating'],
-                        "Parsing_Confidence": results_df.get('Parsing_Confidence', avg_confidence)
-                    })
+                    # Filter to only include horses that are NOT scratched (i.e., in df_styles)
+                    horses_in_field = set(df_styles['Horse'].tolist())
+                    results_df_filtered = results_df[results_df['Horse'].isin(horses_in_field)].copy()
+                    
+                    if results_df_filtered.empty:
+                        # All horses from unified engine were scratched, fall back to traditional
+                        st.warning("⚠️ All unified engine horses are scratched (using fallback)")
+                    else:
+                        # Convert unified engine output to app.py format
+                        unified_ratings = pd.DataFrame({
+                            "#": range(1, len(results_df_filtered) + 1),
+                            "Post": results_df_filtered['Post'].astype(str),
+                            "Horse": results_df_filtered['Horse'],
+                            "Style": results_df_filtered.get('Pace_Style', 'NA'),
+                            "Quirin": results_df_filtered.get('Quirin', 0.0),
+                            "Cstyle": results_df_filtered.get('Cstyle', 0.0),
+                            "Cpost": results_df_filtered.get('Cpost', 0.0),
+                            "Cpace": results_df_filtered.get('Cpace', 0.0),
+                            "Cspeed": results_df_filtered.get('Cspeed', 0.0),
+                            "Cclass": results_df_filtered.get('Cclass', 0.0),
+                            "Cform": results_df_filtered.get('Cform', 0.0),
+                            "Atrack": 0.0,
+                            "Arace": results_df_filtered['Rating'],
+                            "R": results_df_filtered['Rating'],
+                            "Parsing_Confidence": results_df_filtered.get('Parsing_Confidence', avg_confidence)
+                        })
 
-                    # Add success message to first row if not already present
-                    if len(unified_ratings) > 0:
-                        st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%})")
+                        # Add success message
+                        scratched_count = len(results_df) - len(results_df_filtered)
+                        if scratched_count > 0:
+                            st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%}) - {scratched_count} scratched horse(s) excluded")
+                        else:
+                            st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%})")
 
-                    return unified_ratings
+                        return unified_ratings
         except Exception as e:
             # Fallback to traditional method if unified engine fails
             st.warning(f"⚠️ Unified engine error (using fallback): {str(e)[:100]}")
