@@ -2676,13 +2676,12 @@ else:
                 # --- 1. Build Data for Strategy & Prompt ---
                 if primary_df is None or primary_df.empty or not all(col in primary_df.columns for col in ['Horse', 'R', 'Fair %', 'Fair Odds']):
                     st.error("Primary ratings data is incomplete for report generation.")
-                    st.stop()
-
-                primary_sorted = primary_df.sort_values(by="R", ascending=False)
-                name_to_post = pd.Series(df_final_field["Post"].values,
-                                         index=df_final_field["Horse"]).to_dict()
-                name_to_ml = pd.Series(df_final_field["ML"].values,
-                                       index=df_final_field["Horse"]).to_dict()
+                else:
+                    primary_sorted = primary_df.sort_values(by="R", ascending=False)
+                    name_to_post = pd.Series(df_final_field["Post"].values,
+                                             index=df_final_field["Horse"]).to_dict()
+                    name_to_ml = pd.Series(df_final_field["ML"].values,
+                                           index=df_final_field["Horse"]).to_dict()
                 field_size = len(primary_df)
 
                 top_table = primary_sorted[['Horse','R','Fair %','Fair Odds']].head(5).to_markdown(index=False)

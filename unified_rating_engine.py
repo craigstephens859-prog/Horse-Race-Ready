@@ -531,13 +531,18 @@ class UnifiedRatingEngine:
         if df.empty or 'Rating' not in df.columns:
             return df
 
-        ratings = torch.tensor(df['Rating'].values, dtype=torch.float32)
-
-        # Apply temperature scaling
-        ratings_scaled = ratings / self.softmax_tau
-
-        # Softmax
-        probs = torch.nn.functional.softmax(ratings_scaled, dim=0).numpy()
+        if TORCH_AVAILABLE:
+            ratings = torch.tensor(df['Rating'].values, dtype=torch.float32)
+            # Apply temperature scaling
+            ratings_scaled = ratings / self.softmax_tau
+            # Softmax
+            probs = torch.nn.functional.softmax(ratings_scaled, dim=0).numpy()
+        else:
+            # Fallback to numpy implementation
+            ratings = df['Rating'].values
+            ratings_scaled = ratings / self.softmax_tau
+            exp_ratings = np.exp(ratings_scaled - np.max(ratings_scaled))  # Numerical stability
+            probs = exp_ratings / np.sum(exp_ratings)
 
         df['Probability'] = probs
 
