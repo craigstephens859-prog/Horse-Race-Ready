@@ -33,6 +33,21 @@ except ImportError:
     RaceDatabase = None
 
 # Try importing Historical Data Builder for real data training
+# Check if we need to force reload from session state
+_force_reload = False
+try:
+    import streamlit as st_check
+    if hasattr(st_check, 'session_state') and 'force_hist_reload' in st_check.session_state:
+        _force_reload = st_check.session_state.get('force_hist_reload', False)
+        if _force_reload:
+            # Remove from sys.modules to force reimport
+            import sys
+            for mod in ['historical_data_builder', 'integrate_real_data']:
+                if mod in sys.modules:
+                    del sys.modules[mod]
+except:
+    pass
+
 try:
     from historical_data_builder import HistoricalDataBuilder
     from integrate_real_data import convert_to_ml_format
@@ -40,11 +55,13 @@ try:
 except (ImportError, Exception) as e:
     HISTORICAL_DATA_AVAILABLE = False
     HistoricalDataBuilder = None
-    # Log error for debugging
-    import traceback
-    with open("historical_import_error.log", "w") as f:
-        f.write(f"Historical Data import failed: {e}\n")
-        f.write(traceback.format_exc())
+    # Log error for debugging (only if not already logged)
+    import os
+    if not os.path.exists("historical_import_error.log"):
+        import traceback
+        with open("historical_import_error.log", "w") as f:
+            f.write(f"Historical Data import failed: {e}\n")
+            f.write(traceback.format_exc())
 
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
@@ -2811,7 +2828,7 @@ if ML_AVAILABLE:
             if st.session_state.get("parsed", False):
                 # Pre-fill race info from current analysis
                 result_track = st.text_input("Track Name", value=st.session_state.get('track_name', ''))
-                result_date = st.date_input("Race Date", value=datetime.now())
+                result_date = st.date_input("Race Date", value=datetime.now(), key="result_date_input")
                 result_race_num = st.number_input("Race Number", min_value=1, value=1)
                 result_distance = st.text_input("Distance", value=st.session_state.get('distance_txt', ''))
                 result_surface = st.selectbox("Surface", ["Dirt", "Tur", "Synthetic"],
@@ -3059,14 +3076,34 @@ else:
     Files verified present: ✅ historical_data_builder.py ✅ integrate_real_data.py
     """)
     if st.button("🔄 Force Reload App", key="force_reload"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        # Force module reload
-        import sys
-        if 'historical_data_builder' in sys.modules:
-            del sys.modules['historical_data_builder']
-        if 'integrate_real_data' in sys.modules:
-            del sys.modules['integrate_real_data']
+        with st.spinner("Clearing caches and reloading modules..."):
+            import sys
+            # Set flag to force reload on next app run
+            st.session_state['force_hist_reload'] = True
+            
+            # Clear Streamlit caches
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            
+            # Remove modules from sys.modules to force reimport
+            modules_to_reload = [
+                'historical_data_builder',
+                'integrate_real_data',
+                'elite_parser',
+                'unified_rating_engine'
+            ]
+            removed = []
+            for mod in modules_to_reload:
+                if mod in sys.modules:
+                    del sys.modules[mod]
+                    removed.append(mod)
+            
+            if removed:
+                st.write(f"✓ Removed {len(removed)} modules from cache")
+            
+            st.success("✅ Caches cleared! Reloading app...")
+            import time
+            time.sleep(0.3)
         st.rerun()
 
 if HISTORICAL_DATA_AVAILABLE:
@@ -3153,7 +3190,7 @@ if HISTORICAL_DATA_AVAILABLE:
 
             if st.session_state.get("parsed", False):
                 # Show current race info
-                race_date = st.date_input("Race Date", value=datetime.now())
+                race_date = st.date_input("Race Date", value=datetime.now(), key="add_race_date_input")
                 race_num = st.number_input("Race Number", min_value=1, max_value=15, value=1)
 
                 # Check if already captured
