@@ -2174,8 +2174,9 @@ st.header("E. ML System & Results Tracking")
 
 if ML_AVAILABLE:
     try:
-        db = RaceDatabase()
-        calibrator = MLCalibrator(db)
+        db_path = "race_history.db"
+        db = RaceDatabase(db_path)
+        calibrator = MLCalibrator(db_path)
         
         tab_results, tab_history, tab_train, tab_predict = st.tabs(["📝 Enter Results", "📊 Race History", "🤖 Train Model", "🎯 Get Predictions"])
         
