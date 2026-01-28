@@ -45,6 +45,8 @@ try:
             for mod in ['historical_data_builder', 'integrate_real_data']:
                 if mod in sys.modules:
                     del sys.modules[mod]
+            # Reset the flag after processing
+            st_check.session_state['force_hist_reload'] = False
 except:
     pass
 
@@ -52,16 +54,21 @@ try:
     from historical_data_builder import HistoricalDataBuilder
     from integrate_real_data import convert_to_ml_format
     HISTORICAL_DATA_AVAILABLE = True
+    HISTORICAL_IMPORT_ERROR = None
+    # If we successfully imported after a forced reload, clear the flag
+    if _force_reload:
+        try:
+            import streamlit as st_clear
+            if hasattr(st_clear, 'session_state') and 'force_hist_reload' in st_clear.session_state:
+                st_clear.session_state['force_hist_reload'] = False
+        except:
+            pass
 except (ImportError, Exception) as e:
     HISTORICAL_DATA_AVAILABLE = False
     HistoricalDataBuilder = None
-    # Log error for debugging (only if not already logged)
-    import os
-    if not os.path.exists("historical_import_error.log"):
-        import traceback
-        with open("historical_import_error.log", "w") as f:
-            f.write(f"Historical Data import failed: {e}\n")
-            f.write(traceback.format_exc())
+    # Always capture the most recent error
+    import traceback
+    HISTORICAL_IMPORT_ERROR = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
 
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
@@ -2814,6 +2821,12 @@ else:
     # Add debug info
     with st.expander("🔍 Debug Information"):
         st.code(f"HISTORICAL_DATA_AVAILABLE = {HISTORICAL_DATA_AVAILABLE}")
+        
+        # Show the actual import error if it exists
+        if not HISTORICAL_DATA_AVAILABLE and 'HISTORICAL_IMPORT_ERROR' in globals():
+            st.error("**Import Error Details:**")
+            st.code(HISTORICAL_IMPORT_ERROR)
+        
         st.write("Testing direct import...")
         try:
             import sys
@@ -2827,7 +2840,7 @@ else:
             from integrate_real_data import convert_to_ml_format
             st.success("✅ Direct import test PASSED - Modules can be imported!")
             st.warning("Issue: Module imports work but HISTORICAL_DATA_AVAILABLE is cached as False")
-            st.info("**Solution:** Stop and restart the Streamlit server completely")
+            st.info("**Solution:** Click the Force Reload App button below")
         except Exception as e:
             st.error(f"❌ Direct import test FAILED: {e}")
             import traceback
@@ -2867,9 +2880,13 @@ else:
             if removed:
                 st.write(f"✓ Removed {len(removed)} modules from cache")
             
+            # Also clear any Python module cache
+            import importlib
+            importlib.invalidate_caches()
+            
             st.success("✅ Caches cleared! Reloading app...")
             import time
-            time.sleep(0.3)
+            time.sleep(0.5)
         st.rerun()
 
 if HISTORICAL_DATA_AVAILABLE:
