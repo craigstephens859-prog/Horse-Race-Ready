@@ -32,43 +32,13 @@ except ImportError:
     MLCalibrator = None
     RaceDatabase = None
 
-# Try importing Historical Data Builder for real data training
-# Check if we need to force reload from session state
-_force_reload = False
-try:
-    import streamlit as st_check
-    if hasattr(st_check, 'session_state') and 'force_hist_reload' in st_check.session_state:
-        _force_reload = st_check.session_state.get('force_hist_reload', False)
-        if _force_reload:
-            # Remove from sys.modules to force reimport
-            import sys
-            for mod in ['historical_data_builder', 'integrate_real_data']:
-                if mod in sys.modules:
-                    del sys.modules[mod]
-            # Reset the flag after processing
-            st_check.session_state['force_hist_reload'] = False
-except:
-    pass
-
-try:
-    from historical_data_builder import HistoricalDataBuilder
-    from integrate_real_data import convert_to_ml_format
-    HISTORICAL_DATA_AVAILABLE = True
-    HISTORICAL_IMPORT_ERROR = None
-    # If we successfully imported after a forced reload, clear the flag
-    if _force_reload:
-        try:
-            import streamlit as st_clear
-            if hasattr(st_clear, 'session_state') and 'force_hist_reload' in st_clear.session_state:
-                st_clear.session_state['force_hist_reload'] = False
-        except:
-            pass
-except (ImportError, Exception) as e:
-    HISTORICAL_DATA_AVAILABLE = False
-    HistoricalDataBuilder = None
-    # Always capture the most recent error
-    import traceback
-    HISTORICAL_IMPORT_ERROR = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
+# Historical Data System - LAZY LOADED for fast boot times
+# PyTorch is 2-3GB and slows down Render deploys significantly
+# We load it only when Section E is accessed
+HISTORICAL_DATA_AVAILABLE = None  # None = not yet loaded, True/False after load attempt
+HistoricalDataBuilder = None
+convert_to_ml_format = None
+HISTORICAL_IMPORT_ERROR = None
 
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
@@ -2808,6 +2778,40 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
 st.markdown("---")
 st.header("E. Historical Data System 📊 (Path to 90% ML Accuracy)")
 
+# Lazy load Historical Data System modules (PyTorch is heavy!)
+if HISTORICAL_DATA_AVAILABLE is None:
+    with st.spinner("🔄 Loading Historical Data System (first time only, ~10 seconds)..."):
+        try:
+            import sys
+            # Check for force reload flag
+            if 'force_hist_reload' in st.session_state and st.session_state['force_hist_reload']:
+                for mod in ['historical_data_builder', 'integrate_real_data', 'ml_quant_engine_v2']:
+                    if mod in sys.modules:
+                        del sys.modules[mod]
+                st.session_state['force_hist_reload'] = False
+            
+            from historical_data_builder import HistoricalDataBuilder
+            from integrate_real_data import convert_to_ml_format
+            
+            # Store in session state to avoid reimporting
+            st.session_state['HistoricalDataBuilder'] = HistoricalDataBuilder
+            st.session_state['convert_to_ml_format'] = convert_to_ml_format
+            st.session_state['HISTORICAL_DATA_AVAILABLE'] = True
+            HISTORICAL_DATA_AVAILABLE = True
+            
+        except (ImportError, Exception) as e:
+            import traceback
+            st.session_state['HISTORICAL_IMPORT_ERROR'] = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
+            st.session_state['HISTORICAL_DATA_AVAILABLE'] = False
+            HISTORICAL_DATA_AVAILABLE = False
+else:
+    # Use cached values from session state
+    HISTORICAL_DATA_AVAILABLE = st.session_state.get('HISTORICAL_DATA_AVAILABLE', False)
+    if HISTORICAL_DATA_AVAILABLE:
+        HistoricalDataBuilder = st.session_state.get('HistoricalDataBuilder')
+        convert_to_ml_format = st.session_state.get('convert_to_ml_format')
+    HISTORICAL_IMPORT_ERROR = st.session_state.get('HISTORICAL_IMPORT_ERROR', None)
+
 # Debug and user guidance
 if HISTORICAL_DATA_AVAILABLE:
     st.success("✅ Historical Data System Active")
@@ -2823,7 +2827,7 @@ else:
         st.code(f"HISTORICAL_DATA_AVAILABLE = {HISTORICAL_DATA_AVAILABLE}")
         
         # Show the actual import error if it exists
-        if not HISTORICAL_DATA_AVAILABLE and 'HISTORICAL_IMPORT_ERROR' in globals():
+        if HISTORICAL_IMPORT_ERROR:
             st.error("**Import Error Details:**")
             st.code(HISTORICAL_IMPORT_ERROR)
         
