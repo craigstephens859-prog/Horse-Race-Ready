@@ -60,6 +60,36 @@ class HorseData:
     recent_purses: List[int]
     race_types: List[str]
 
+    # Equipment & Medications
+    equipment: str  # Current equipment (L, Lb, Lbf, etc.)
+    equipment_change: Optional[str]  # "Blinkers On", "Blinkers Off", etc.
+    lasix: bool  # Currently on Lasix
+    first_lasix: bool  # First time Lasix
+    weight: Optional[int]  # Assigned weight
+
+    # Race History Details
+    race_history: List[Dict]  # Full race details with positions, times, etc.
+    track_conditions: List[str]  # ft, gd, my, fm, sys for each race
+    trip_comments: List[str]  # Running style comments
+    beat_margins: List[str]  # How far behind winner
+    odds_history: List[float]  # Past race odds
+    
+    # Running Style Patterns
+    early_speed_pct: float  # % of races led/close early
+    closing_pct: float  # % of races closed ground
+    avg_early_position: float  # Average position at 1st call
+    avg_late_position: float  # Average position at stretch
+
+    # Track/Surface Performance
+    surface_stats: Dict  # {surface: {starts, wins, win_pct, avg_fig}}
+    distance_stats: Dict  # {distance_range: {starts, wins, avg_fig}}
+    track_bias_fit: float  # How well suited to track bias
+
+    # Workouts
+    workouts: List[Dict]  # [{date, track, distance, time, rank}]
+    last_workout_days: Optional[int]
+    workout_pattern: str  # "Sharp", "Steady", "Sparse"
+
     # Pedigree
     sire: str
     dam: str
@@ -71,6 +101,7 @@ class HorseData:
     # Angles
     angles: List[Dict]  # [{category, starts, win%, itm%, roi}]
     angle_count: int
+    angle_flags: List[str]  # Quick reference flags
 
     # Validation
     parsing_confidence: float  # 0.0 to 1.0
@@ -123,11 +154,19 @@ class EliteBRISNETParser:
         re.compile(r'(?mi)Trainer:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%'),
     ]
 
-    # Speed figure pattern with date context
+    # Speed figure pattern with date context - BRISNET format
+    # Format: DATE TRK DIST RR RACETYPE CR E1 E2/ LP 1c 2c SPD PP ST...
+    # Speed figure is in SPD column after E1 E2/ LP 1c 2c columns
     SPEED_FIG_PATTERN = re.compile(
-        r"(?mi)^\s*(\d{2}[A-Za-z]{3}\d{2})\s+.*?"  # Date (23Sep23)
-        r"\b(Clm|Mdn|Md Sp Wt|Alw|OC|G1|G2|G3|Stk|Hcp)\b"  # Race type
-        r".*?\s+(\d{2,3})\s+"  # Speed figure
+        r"(\d{2}[A-Za-z]{3}\d{2})"  # Date (13Dec25)
+        r".*?"  # Everything up to SPD column
+        r"\s+(\d{2})\s+(\d{2})/\s*(\d{2,3})"  # E1 E2/ columns (e.g., "83 87/ 84")
+        r"\s+[+-]?\d+"  # LP column
+        r"\s+[+-]?\d+"  # 1c column
+        r"\s+(\d{2,3})\s+"  # SPD (speed figure) - capturing group
+        r"\d+\s+"  # PP (post position)
+        r"(?:\d+|[A-Za-z]+)",  # ST (start position) - can be number or text
+        re.MULTILINE
     )
 
     # Angle pattern
@@ -157,12 +196,16 @@ class EliteBRISNETParser:
         'dam_name': re.compile(r'Dam:\s*([^\(]+)'),
     }
 
-    # Recent race pattern with dates
+    # Recent race pattern with dates - BRISNET format
+    # Format: 13Dec25GP¯ à 1ˆ fm :times ¨¨¬ ™TrPOaksL 125k¨¨¬ CR E1 E2/ LP... FIN JOCKEY
     RACE_HISTORY_PATTERN = re.compile(
-        r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+\s+'  # Date + Track
-        r'(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G1|G2|G3|Hcp)\s+'  # Type
-        r'(\d+)\s+'  # Purse
-        r'.*?(\d{1,2})(?:st|nd|rd|th)?'  # Finish position
+        r'(\d{2}[A-Za-z]{3}\d{2})'  # Date (13Dec25)
+        r'\s*\w{2,4}\S*'  # Track code
+        r'.*?'  # Distance, surface, times
+        r'™[^\s]+?'  # Race type with ™ prefix
+        r'.*?'  # Skip to finish position area
+        r'STR\s+FIN.*?'  # Marker before finish
+        r'(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]'  # Finish position with BRISNET beat margin symbols
     )
 
     def __init__(self):
@@ -275,6 +318,24 @@ class EliteBRISNETParser:
         # 8. ANGLES
         angles = self._parse_angles(block)
 
+        # 9. EQUIPMENT & MEDICATIONS
+        equipment, equip_change, lasix, first_lasix, weight = self._parse_equipment_meds(block)
+
+        # 10. COMPREHENSIVE RACE HISTORY
+        race_history, conditions, comments, odds_hist = self._parse_comprehensive_race_history(block)
+
+        # 11. RUNNING PATTERNS
+        early_spd_pct, close_pct, avg_early, avg_late = self._calculate_running_patterns(race_history)
+
+        # 12. SURFACE STATISTICS
+        surface_stats = self._parse_surface_stats(block)
+
+        # 13. WORKOUTS
+        workouts, last_work_days, work_pattern = self._parse_workouts(block)
+
+        # 14. ANGLE FLAGS
+        angle_flags = self._parse_angle_flags(angles)
+
         # Create structured data
         return HorseData(
             post=post,
@@ -298,6 +359,26 @@ class EliteBRISNETParser:
             recent_finishes=finishes,
             recent_purses=purses,
             race_types=race_types,
+            equipment=equipment,
+            equipment_change=equip_change,
+            lasix=lasix,
+            first_lasix=first_lasix,
+            weight=weight,
+            race_history=race_history,
+            track_conditions=conditions,
+            trip_comments=comments,
+            beat_margins=[],  # Will be populated if needed
+            odds_history=odds_hist,
+            early_speed_pct=early_spd_pct,
+            closing_pct=close_pct,
+            avg_early_position=avg_early,
+            avg_late_position=avg_late,
+            surface_stats=surface_stats,
+            distance_stats={},  # Can be calculated from race_history if needed
+            track_bias_fit=0.0,  # Calculated at race level
+            workouts=workouts,
+            last_workout_days=last_work_days,
+            workout_pattern=work_pattern,
             sire=pedigree.get('sire', ''),
             dam=pedigree.get('dam', ''),
             sire_spi=pedigree.get('sire_spi'),
@@ -306,6 +387,7 @@ class EliteBRISNETParser:
             dam_dpi=pedigree.get('dam_dpi'),
             angles=angles,
             angle_count=len(angles),
+            angle_flags=angle_flags,
             parsing_confidence=max(0.0, confidence),
             warnings=warnings,
             raw_block=block
@@ -448,13 +530,14 @@ class EliteBRISNETParser:
 
     def _parse_speed_figures(self, block: str) -> Tuple[List[int], float, int, int]:
         """
-        Extract speed figures with recency context.
+        Extract speed figures with recency context from BRISNET SPD column.
         Returns: (all_figs, avg_top2, peak, last)
         """
         figs = []
         for match in self.SPEED_FIG_PATTERN.finditer(block):
             try:
-                fig_val = int(match.group(3))
+                # Group 5 is the speed figure (SPD column after E1 E2/ LP 1c 2c)
+                fig_val = int(match.group(5))
                 if 40 < fig_val < 130:
                     figs.append(fig_val)
             except Exception:
@@ -474,14 +557,35 @@ class EliteBRISNETParser:
 
     def _parse_form_cycle(self, block: str) -> Tuple[Optional[int], Optional[str], List[int]]:
         """
-        Extract recent race dates and finishes.
+        Extract recent race dates and finishes from BRISNET format.
         Returns: (days_since_last, last_date, finish_positions)
         """
         races = []
-        for match in self.RACE_HISTORY_PATTERN.finditer(block):
+        
+        # BRISNET format has finish position in FIN column
+        # Pattern: ...SPD PP ST 1C 2C STR FIN JOCKEY...
+        # After SPD column, we have PP ST 1C 2C STR FIN
+        # Finish position comes after 5 numeric columns past SPD
+        # Example: "86 12 11ƒ 12®ƒ 11¬ 9¬ 6«ƒ HusbandsMJ"
+        #           SPD PP ST  1C   2C  STR FIN
+        
+        pattern = r'(\d{2}[A-Za-z]{3}\d{2}).*?'  # Date
+        pattern += r'(\d{2})\s+(\d{2})/\s*(\d{2,3})'  # E1 E2/ columns
+        pattern += r'\s+[+-]?\d+\s+[+-]?\d+\s+(\d{2,3})'  # LP 1c 2c SPD
+        pattern += r'\s+\d+'  # PP
+        pattern += r'\s+(?:\d+[^\s]*)'  # ST (can have symbols)
+        pattern += r'\s+(?:\d+[^\s]*)'  # 1C
+        pattern += r'\s+(?:\d+[^\s]*)'  # 2C
+        pattern += r'\s+(?:\d+[^\s]*)'  # STR
+        pattern += r'\s+(\d{1,2})[^\s\d]'  # FIN - finish
+
+        for match in re.finditer(pattern, block, re.MULTILINE):
             date_str = match.group(1)
-            finish = int(match.group(4)) if match.group(4) else 99
-            races.append({'date': date_str, 'finish': finish})
+            try:
+                finish = int(match.group(6))
+                races.append({'date': date_str, 'finish': finish})
+            except (ValueError, IndexError):
+                pass
 
         if not races:
             return None, None, []
@@ -499,19 +603,66 @@ class EliteBRISNETParser:
         return days_ago, last_race['date'], finishes
 
     def _parse_class_data(self, block: str) -> Tuple[List[int], List[str]]:
-        """Extract recent purse levels and race types"""
+        """Extract recent purse levels and race types from BRISNET format"""
         purses = []
         types = []
 
-        pattern = r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+\s+(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G1|G2|G3|Hcp)\s+(\d+)'
-
+        # BRISNET format: ™TrPOaksL 125k¨¨¬ or ™A34000n2x¨¨© or ™Mdn 55k¨¨¨
+        # Pattern matches race type marker ™ followed by race type info
+        pattern = r'™([A-Za-z][A-Za-z0-9\s]*?)\s*(\d+)k?(?:[¨°©ª¬«­®¯±²³´]|\s)'
+        
         for match in re.finditer(pattern, block):
-            race_type = match.group(2)
-            purse = int(match.group(3))
+            race_info = match.group(1).strip()
+            purse_str = match.group(2)
+            
+            # Convert purse: if followed by 'k', multiply by 1000
+            purse_match = re.search(r'(\d+)k', match.group(0))
+            if purse_match:
+                purse = int(purse_match.group(1)) * 1000
+            else:
+                purse = int(purse_str)
+            
+            # Classify race type
+            race_type = self._classify_race_type(race_info)
+            
             types.append(race_type)
             purses.append(purse)
 
         return purses[:5], types[:5]
+
+    def _classify_race_type(self, race_info: str) -> str:
+        """Classify BRISNET race type string into standard categories"""
+        race_info_upper = race_info.upper()
+        
+        # Graded stakes
+        if 'G1' in race_info_upper or '-G1' in race_info_upper:
+            return 'G1'
+        if 'G2' in race_info_upper or '-G2' in race_info_upper:
+            return 'G2'
+        if 'G3' in race_info_upper or '-G3' in race_info_upper:
+            return 'G3'
+        # Listed stakes or other stakes
+        if 'L' in race_info or 'STK' in race_info_upper or 'STAKES' in race_info_upper:
+            return 'Stk'
+        # Handicap
+        if 'HCP' in race_info_upper or 'HANDICAP' in race_info_upper:
+            return 'Hcp'
+        # Allowance variations
+        if race_info.startswith('A') and any(c.isdigit() for c in race_info[:5]):
+            return 'Alw'
+        if 'ALW' in race_info_upper or 'ALLOWANCE' in race_info_upper:
+            return 'Alw'
+        if 'OC' in race_info:
+            return 'OC'
+        # Claiming
+        if 'CLM' in race_info_upper or 'CLAIMING' in race_info_upper:
+            return 'Clm'
+        # Maiden
+        if 'MDN' in race_info_upper or 'MAIDEN' in race_info_upper:
+            if 'SP' in race_info_upper or 'SPECIAL' in race_info_upper:
+                return 'Md Sp Wt'
+            return 'Mdn'
+        return 'Alw'  # Default to allowance if unclear
 
     def _parse_pedigree(self, block: str) -> Dict:
         """Extract all pedigree data"""
@@ -569,6 +720,284 @@ class EliteBRISNETParser:
 
         return angles
 
+    def _parse_equipment_meds(self, block: str) -> Tuple[str, Optional[str], bool, bool, Optional[int]]:
+        """
+        Extract equipment, medications, and weight.
+        Returns: (equipment, equipment_change, lasix, first_lasix, weight)
+        """
+        equipment = "L"  # Default
+        equipment_change = None
+        lasix = False
+        first_lasix = False
+        weight = None
+
+        # Equipment indicators: L, Lb, Lbf, Lf, etc.
+        equip_match = re.search(r'\b(L|Lb|Lbf|Lf|Bf|B)\s+(\d{3})\b', block)
+        if equip_match:
+            equipment = equip_match.group(1)
+            weight = int(equip_match.group(2))
+
+        # Lasix indicator (¦ symbol before race type)
+        lasix = bool(re.search(r'¦', block))
+
+        # Equipment change flags in angle section
+        if re.search(r'(?i)blinkers?\s+on', block):
+            equipment_change = "Blinkers On"
+        elif re.search(r'(?i)blinkers?\s+off', block):
+            equipment_change = "Blinkers Off"
+
+        # First-time Lasix
+        if re.search(r'(?i)1st.*?lasix|first.*?lasix', block):
+            first_lasix = True
+
+        return equipment, equipment_change, lasix, first_lasix, weight
+
+    def _parse_comprehensive_race_history(self, block: str) -> Tuple[List[Dict], List[str], List[str], List[float]]:
+        """
+        Extract complete race history with running positions, conditions, comments, odds.
+        Returns: (race_history, track_conditions, trip_comments, odds_history)
+        """
+        race_history = []
+        track_conditions = []
+        trip_comments = []
+        odds_history = []
+
+        # Simpler pattern focusing on key data
+        # Match: DATE TRK ... surface ... SPD PP ST positions FIN JOCKEY ODDS
+        lines = block.split('\n')
+        for line in lines:
+            # Look for lines with date pattern at start
+            date_match = re.match(r'(\d{2}[A-Za-z]{3}\d{2})', line)
+            if not date_match:
+                continue
+
+            try:
+                # Extract surface (ft, gd, fm, my, sys, sl)
+                surface_match = re.search(r'\s+(ft|gd|fm|my|sys|sl)\s+', line)
+                surface = surface_match.group(1) if surface_match else "ft"
+
+                # Extract E1 E2/ LP pattern
+                pace_match = re.search(r'(\d{2})\s+(\d{2})/\s*(\d{2,3})\s+([+-]?\d+)\s+([+-]?\d+)\s+(\d{2,3})', line)
+                if not pace_match:
+                    continue
+
+                e1 = int(pace_match.group(1))
+                e2 = int(pace_match.group(2))
+                late_pace = int(pace_match.group(3))
+                spd = int(pace_match.group(6))
+
+                # Extract post and running positions - look for PP ST 1C 2C STR FIN pattern
+                # After SPD, we have: SPD PP ST 1C 2C STR FIN
+                after_spd = line[pace_match.end():]
+                positions = re.findall(r'(\d+[^\s\d]*)', after_spd)
+
+                if len(positions) >= 6:
+                    post_pos = positions[0]
+                    start_pos = positions[1]
+                    first_call = positions[2]
+                    second_call = positions[3]
+                    stretch = positions[4]
+                    finish_str = positions[5]
+
+                    # Extract numeric finish
+                    finish_match = re.search(r'(\d{1,2})', finish_str)
+                    if not finish_match:
+                        continue
+                    finish = int(finish_match.group(1))
+
+                    # Extract odds - look for pattern like "L *1.10" or "16.30"
+                    odds_match = re.search(r'(?:L\s+)?[*]?(\d+\.\d+)', after_spd)
+                    odds = float(odds_match.group(1)) if odds_match else 0.0
+
+                    # Extract comment - usually after odds and jockey name
+                    comment_match = re.search(r'[A-Z][a-z]+[A-Z].*?\s+[\d.]+\s+(.*?)$', line)
+                    comment = comment_match.group(1).strip() if comment_match else ""
+
+                    race_info = {
+                        'date': date_match.group(1),
+                        'surface': surface,
+                        'e1': e1,
+                        'e2': e2,
+                        'late_pace': late_pace,
+                        'spd': spd,
+                        'post': post_pos,
+                        'start': start_pos,
+                        'first_call': first_call,
+                        'second_call': second_call,
+                        'stretch': stretch,
+                        'finish': finish,
+                        'odds': odds
+                    }
+
+                    race_history.append(race_info)
+                    track_conditions.append(surface)
+                    trip_comments.append(comment)
+                    odds_history.append(odds)
+
+            except (ValueError, IndexError, AttributeError):
+                continue
+
+        return race_history, track_conditions, trip_comments, odds_history
+
+    def _calculate_running_patterns(self, race_history: List[Dict]) -> Tuple[float, float, float, float]:
+        """
+        Calculate running style statistics from race history.
+        Returns: (early_speed_pct, closing_pct, avg_early_pos, avg_late_pos)
+        """
+        if not race_history:
+            return 0.0, 0.0, 0.0, 0.0
+
+        early_positions = []
+        late_positions = []
+        led_early = 0
+        closed_ground = 0
+
+        for race in race_history[:10]:  # Last 10 races
+            try:
+                # Parse position numbers (remove beat margin symbols)
+                early_pos = int(re.search(r'\d+', race.get('first_call', '99')).group())
+                late_pos = int(re.search(r'\d+', race.get('stretch', '99')).group())
+
+                early_positions.append(early_pos)
+                late_positions.append(late_pos)
+
+                if early_pos <= 2:
+                    led_early += 1
+                if late_pos < early_pos:
+                    closed_ground += 1
+            except (AttributeError, ValueError):
+                continue
+
+        total_races = len(early_positions)
+        if total_races == 0:
+            return 0.0, 0.0, 0.0, 0.0
+
+        early_speed_pct = (led_early / total_races) * 100
+        closing_pct = (closed_ground / total_races) * 100
+        avg_early_pos = np.mean(early_positions) if early_positions else 0.0
+        avg_late_pos = np.mean(late_positions) if late_positions else 0.0
+
+        return early_speed_pct, closing_pct, avg_early_pos, avg_late_pos
+
+    def _parse_surface_stats(self, block: str) -> Dict:
+        """
+        Extract surface-specific performance statistics.
+        Returns: {surface: {starts, wins, win_pct, avg_earnings}}
+        """
+        surface_stats = {}
+
+        # Pattern: Fst (108) 3 1 - 0 - 1 $35,200 83
+        pattern = r'(Fst|Off|Dis|Trf|AW)\s+\((\d+)\)\s+(\d+)\s+(\d+)\s+-\s+(\d+)\s+-\s+(\d+)\s+\$?([\d,]+)'
+
+        for match in re.finditer(pattern, block):
+            surface = match.group(1)
+            rating = int(match.group(2))
+            starts = int(match.group(3))
+            wins = int(match.group(4))
+            earnings = int(match.group(7).replace(',', ''))
+
+            win_pct = (wins / starts * 100) if starts > 0 else 0.0
+
+            surface_stats[surface] = {
+                'starts': starts,
+                'wins': wins,
+                'win_pct': win_pct,
+                'avg_fig': rating,
+                'earnings': earnings
+            }
+
+        return surface_stats
+
+    def _parse_workouts(self, block: str) -> Tuple[List[Dict], Optional[int], str]:
+        """
+        Extract workout information.
+        Returns: (workouts, last_workout_days, pattern)
+        """
+        workouts = []
+
+        # Pattern: 18Jan GP 4f ft :49ª B 48/101
+        pattern = r'(\d{1,2}[A-Za-z]{3}(?:\'\d{2})?)\s+(\w+)\s+([×]?)(\d+)f\s+(ft|gd|fm|sy|sl)\s+([\d:]+)\s+([BHG])\s+(\d+/\d+)?'
+
+        for match in re.finditer(pattern, block):
+            try:
+                date_str = match.group(1)
+                track = match.group(2)
+                bullet = match.group(3) == '×'
+                distance = int(match.group(4))
+                surface = match.group(5)
+                time_str = match.group(6)
+                grade = match.group(7)
+                rank_str = match.group(8) if match.group(8) else ""
+
+                rank = None
+                total = None
+                if '/' in rank_str:
+                    rank_parts = rank_str.split('/')
+                    rank = int(rank_parts[0])
+                    total = int(rank_parts[1])
+
+                workouts.append({
+                    'date': date_str,
+                    'track': track,
+                    'bullet': bullet,
+                    'distance': distance,
+                    'surface': surface,
+                    'time': time_str,
+                    'grade': grade,
+                    'rank': rank,
+                    'total': total
+                })
+            except (ValueError, IndexError):
+                continue
+
+        # Calculate last workout days and pattern
+        last_workout_days = None
+        pattern_desc = "Sparse"
+
+        if workouts:
+            # Workouts are most recent first
+            try:
+                # Parse date from first workout
+                from datetime import datetime
+                last_work = workouts[0]['date']
+                # Handle date formats like "18Jan" or "18Jan'25"
+                if "'" in last_work:
+                    last_date = datetime.strptime(last_work, "%d%b'%y")
+                else:
+                    # Assume current year
+                    last_date = datetime.strptime(last_work + str(datetime.now().year)[-2:], "%d%b%y")
+                last_workout_days = (datetime.now() - last_date).days
+            except:
+                pass
+
+            # Determine workout pattern
+            if len(workouts) >= 5:
+                pattern_desc = "Sharp"
+            elif len(workouts) >= 3:
+                pattern_desc = "Steady"
+
+        return workouts, last_workout_days, pattern_desc
+
+    def _parse_angle_flags(self, angles: List[Dict]) -> List[str]:
+        """
+        Extract quick-reference angle flags from parsed angles.
+        Returns: List of simplified angle descriptions
+        """
+        flags = []
+
+        for angle in angles:
+            category = angle['category']
+            win_pct = angle['win_pct']
+            roi = angle['roi']
+
+            # Flag high-percentage angles
+            if win_pct >= 20 and roi > 0:
+                flags.append(f"✓ {category}")
+            elif win_pct >= 15:
+                flags.append(category)
+
+        return flags[:10]  # Limit to top 10
+
     def _create_fallback_data(self, post: str, name: str, block: str, error: str) -> HorseData:
         """Create minimal data when parsing fails"""
         return HorseData(
@@ -580,9 +1009,14 @@ class EliteBRISNETParser:
             speed_figures=[], avg_top2=0.0, peak_fig=0, last_fig=0,
             days_since_last=None, last_race_date=None, recent_finishes=[],
             recent_purses=[], race_types=[],
+            equipment="L", equipment_change=None, lasix=False, first_lasix=False, weight=None,
+            race_history=[], track_conditions=[], trip_comments=[], beat_margins=[], odds_history=[],
+            early_speed_pct=0.0, closing_pct=0.0, avg_early_position=0.0, avg_late_position=0.0,
+            surface_stats={}, distance_stats={}, track_bias_fit=0.0,
+            workouts=[], last_workout_days=None, workout_pattern="Sparse",
             sire="", dam="", sire_spi=None, damsire_spi=None,
             sire_awd=None, dam_dpi=None,
-            angles=[], angle_count=0,
+            angles=[], angle_count=0, angle_flags=[],
             parsing_confidence=0.0,
             warnings=[f"CRITICAL: Parsing failed - {error}"],
             raw_block=block
