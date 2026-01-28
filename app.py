@@ -799,8 +799,8 @@ def parse_speed_figures_for_block(block: str) -> List[int]:
     
     for m in SPEED_FIG_RE.finditer(block):
         try:
-            # The speed figure is the second capture group
-            fig_val = int(m.group(2))
+            # The speed figure is the third capture group
+            fig_val = int(m.group(3))
             # Basic sanity check for a realistic speed figure
             if 40 < fig_val < 130:
                 figs.append(fig_val)
