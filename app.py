@@ -3018,7 +3018,13 @@ if HISTORICAL_DATA_AVAILABLE:
     try:
         # Initialize builder
         if 'historical_builder' not in st.session_state:
-            st.session_state['historical_builder'] = HistoricalDataBuilder()
+            try:
+                st.session_state['historical_builder'] = HistoricalDataBuilder()
+            except Exception as init_error:
+                st.error(f"Failed to initialize HistoricalDataBuilder: {init_error}")
+                import traceback
+                st.error(traceback.format_exc())
+                raise
 
         builder = st.session_state['historical_builder']
 
