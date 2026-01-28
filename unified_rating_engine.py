@@ -102,13 +102,13 @@ class UnifiedRatingEngine:
         """
 
         # STEP 1: PARSE PP TEXT
-        print("🔍 STEP 1: Parsing PP text...")
+        print("[STEP 1] Parsing PP text...")
         horses = self.parser.parse_full_pp(pp_text)
 
         if not horses:
-            raise ValueError("❌ No horses could be parsed from PP text")
+            raise ValueError("[ERROR] No horses could be parsed from PP text")
 
-        print(f"✅ Parsed {len(horses)} horses")
+        print(f"[OK] Parsed {len(horses)} horses")
 
         # Validate parsing quality
         validation = self.parser.validate_parsed_data(horses)
@@ -193,7 +193,7 @@ class UnifiedRatingEngine:
         results_df = results_df.sort_values('Probability', ascending=False).reset_index(drop=True)
         results_df['Predicted_Finish'] = results_df.index + 1
 
-        print("\n✅ PREDICTION COMPLETE")
+        print("\n[OK] PREDICTION COMPLETE")
         print(f"Top selection: {results_df.iloc[0]['Horse']} ({results_df.iloc[0]['Probability']:.1%})")
 
         return results_df

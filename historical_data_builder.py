@@ -127,12 +127,11 @@ class HistoricalDataBuilder:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_horse_race 
             ON horses(race_id)
-        """)
-        
+        """)        
         conn.commit()
         conn.close()
         
-        print(f"✅ Database initialized: {self.db_path}")
+        print(f"[OK] Database initialized: {self.db_path}")
     
     def add_race_from_pp(self, pp_text: str, track: str, date: str, 
                          race_number: int) -> str:
