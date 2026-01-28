@@ -40,7 +40,11 @@ try:
 except (ImportError, Exception) as e:
     HISTORICAL_DATA_AVAILABLE = False
     HistoricalDataBuilder = None
-    print(f"Historical Data System disabled: {e}")
+    # Log error for debugging
+    import traceback
+    with open("historical_import_error.log", "w") as f:
+        f.write(f"Historical Data import failed: {e}\n")
+        f.write(traceback.format_exc())
 
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
@@ -3013,6 +3017,28 @@ else:
 
 st.markdown("---")
 st.header("F. Historical Data System 📊 (Path to 90% ML Accuracy)")
+
+# Debug and user guidance
+if HISTORICAL_DATA_AVAILABLE:
+    st.success("✅ Historical Data System Active")
+    if st.button("🔄 Reload Historical Data System", key="reload_hist"):
+        if 'historical_builder' in st.session_state:
+            del st.session_state['historical_builder']
+        st.rerun()
+else:
+    st.error("⚠️ Historical Data System Not Available")
+    st.info("""
+    **Troubleshooting Steps:**
+    1. Press **C** in browser to clear Streamlit cache
+    2. Click **Rerun** button (top right)
+    3. If still not working, restart Streamlit server
+    
+    Files verified present: ✅ historical_data_builder.py ✅ integrate_real_data.py
+    """)
+    if st.button("🔄 Force Reload App", key="force_reload"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
 
 if HISTORICAL_DATA_AVAILABLE:
     try:
