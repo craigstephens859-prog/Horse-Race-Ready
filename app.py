@@ -2885,7 +2885,7 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                         race_date = datetime.now().strftime('%Y%m%d')
                         race_id = f"{track_name}_{race_date}_R{st.session_state.get('race_num', 1)}"
                         
-                        # Prepare race metadata
+                        # Prepare COMPREHENSIVE race metadata with all context
                         race_metadata = {
                             'track': track_name,
                             'date': race_date,
@@ -2895,19 +2895,70 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                             'distance': distance_txt,
                             'condition': condition_txt,
                             'purse': purse_val,
-                            'field_size': len(primary_df)
+                            'field_size': len(primary_df),
+                            # ADDITIONAL INTELLIGENT FEATURES
+                            'ppi_race_wide': ppi_val,  # Pace Pressure Index
+                            'track_bias_config': TRACK_BIAS_ADJUSTMENTS.get(track_name, {}).get(surface_type, {}).get(race_bucket, {}),
+                            'early_speed_count': len([r for r in primary_df.iterrows() if r[1].get('E1_Style') in ['E', 'EP']]),
+                            'presser_count': len([r for r in primary_df.iterrows() if r[1].get('E1_Style') in ['P', 'EP']]),
+                            'closer_count': len([r for r in primary_df.iterrows() if r[1].get('E1_Style') == 'S']),
+                            'avg_field_beyer': safe_float(primary_df.get('Best Beyer', pd.Series([0])).mean()),
+                            'top3_beyer_avg': safe_float(primary_df.nlargest(3, 'Best Beyer', keep='first').get('Best Beyer', pd.Series([0])).mean() if 'Best Beyer' in primary_df.columns else 0),
+                            'avg_field_days_off': safe_float(primary_df.get('Days Since', pd.Series([0])).mean()),
+                            'chaos_index': chaos_index,
+                            'race_bucket': race_bucket,  # Distance category: ≤6f, 6.5-7f, or 8f+
+                            'is_maiden': 'maiden' in race_type_detected.lower() or 'mdn' in race_type_detected.lower(),
+                            'is_stakes': 'stakes' in race_type_detected.lower() or 'stk' in race_type_detected.lower() or any(g in race_type_detected.lower() for g in ['g1', 'g2', 'g3']),
+                            'is_turf': surface_type.lower() == 'turf',
+                            'is_synthetic': surface_type.lower() in ['synthetic', 'tapeta', 'polytrack']
                         }
                         
-                        # Prepare horses data with all available features
+                        # Prepare horses data with ALL AVAILABLE FEATURES for maximum ML intelligence
                         horses_data = []
                         for idx, row in primary_df.iterrows():
+                            horse_name = str(row.get('Horse', f'Horse_{idx+1}'))
+                            
                             # Extract Fair % with percentage handling
                             fair_pct_raw = row.get('Fair %', 0.0)
                             fair_pct_value = safe_float(fair_pct_raw) / 100.0  # Convert to probability (0-1)
                             
+                            # Get individual horse angles and pedigree data
+                            angles_df = angles_per_horse.get(horse_name)
+                            pedigree_data = pedigree_per_horse.get(horse_name, {})
+                            
+                            # Parse individual angle categories for granular ML features
+                            angle_early_speed = 0.0
+                            angle_class_move = 0.0
+                            angle_recency = 0.0
+                            angle_workout = 0.0
+                            angle_connections = 0.0
+                            angle_surface_switch = 0.0
+                            angle_distance_switch = 0.0
+                            angle_debut = 0.0
+                            
+                            if angles_df is not None and not angles_df.empty:
+                                cats_lower = " ".join(angles_df["Category"].astype(str).tolist()).lower()
+                                # Extract specific angle values for intelligent pattern recognition
+                                if "early speed" in cats_lower:
+                                    angle_early_speed = 1.0
+                                if "class" in cats_lower or "up in class" in cats_lower or "down in class" in cats_lower:
+                                    angle_class_move = 1.0
+                                if "last out" in cats_lower or "recent" in cats_lower or "30 days" in cats_lower:
+                                    angle_recency = 1.0
+                                if "workout" in cats_lower or "work" in cats_lower:
+                                    angle_workout = 1.0
+                                if "trainer" in cats_lower or "jockey" in cats_lower or "combo" in cats_lower:
+                                    angle_connections = 1.0
+                                if "turf to dirt" in cats_lower or "dirt to turf" in cats_lower:
+                                    angle_surface_switch = 1.0
+                                if "distance" in cats_lower or "sprint" in cats_lower or "route" in cats_lower:
+                                    angle_distance_switch = 1.0
+                                if "debut" in cats_lower or "1st time" in cats_lower or "maiden sp wt" in cats_lower:
+                                    angle_debut = 1.0
+                            
                             horse_dict = {
                                 'program_number': int(safe_float(row.get('Post', idx + 1), idx + 1)),
-                                'horse_name': str(row.get('Horse', f'Horse_{idx+1}')),
+                                'horse_name': horse_name,
                                 'post_position': int(safe_float(row.get('Post', idx + 1), idx + 1)),
                                 'morning_line_odds': safe_float(row.get('ML', 99.0), 99.0),
                                 'jockey': str(row.get('Jockey', '')),
@@ -2937,7 +2988,33 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                                 'rating_confidence': safe_float(row.get('Confidence', 0.5), 0.5),
                                 'form_decay_score': safe_float(row.get('Form Decay', 0.0)),
                                 'pace_esp_score': safe_float(row.get('Pace ESP', 0.0)),
-                                'mud_adjustment': safe_float(row.get('Mud Adj', 0.0))
+                                'mud_adjustment': safe_float(row.get('Mud Adj', 0.0)),
+                                # INDIVIDUAL ANGLE FEATURES (8 key angles for ML pattern learning)
+                                'angle_early_speed': angle_early_speed,
+                                'angle_class': angle_class_move,
+                                'angle_recency': angle_recency,
+                                'angle_work_pattern': angle_workout,
+                                'angle_connections': angle_connections,
+                                'angle_pedigree': safe_float(pedigree_data.get('sire_1st', 0.0)) / 100.0 if pedigree_data else 0.0,
+                                'angle_runstyle_bias': 1.0 if row.get('E1_Style') in ['E', 'EP'] else 0.0,
+                                'angle_post': safe_float(row.get('Post Rating', 0.0)),
+                                # PEDIGREE FEATURES (critical for surface/distance/mud breeding)
+                                'pedigree_sire_awd': safe_float(pedigree_data.get('sire_awd', 7.0)) if pedigree_data else 7.0,
+                                'pedigree_sire_1st_pct': safe_float(pedigree_data.get('sire_1st', 0.0)) if pedigree_data else 0.0,
+                                'pedigree_damsire_awd': safe_float(pedigree_data.get('damsire_awd', 7.0)) if pedigree_data else 7.0,
+                                'pedigree_damsire_1st_pct': safe_float(pedigree_data.get('damsire_1st', 0.0)) if pedigree_data else 0.0,
+                                'pedigree_dam_dpi': safe_float(pedigree_data.get('dam_dpi', 1.0)) if pedigree_data else 1.0,
+                                # ADDITIONAL CONTEXTUAL FEATURES
+                                'quirin_points': int(safe_float(row.get('Quirin', 0))),
+                                'style_strength': safe_float(row.get('StyleStrength', 0.0)),
+                                'ppi_individual': safe_float(ppi_map_by_horse.get(horse_name, 0.0)),
+                                'field_size_context': len(primary_df),
+                                'post_position_bias': safe_float(row.get('Post', 0)) / max(len(primary_df), 1),
+                                # LIFETIME STATS (if available from PP text)
+                                'starts_lifetime': int(safe_float(row.get('Starts', 0))),
+                                'wins_lifetime': int(safe_float(row.get('Wins', 0))),
+                                'win_pct': safe_float(row.get('Win%', 0.0)),
+                                'earnings_lifetime': safe_float(row.get('Earnings', 0.0))
                             }
                             horses_data.append(horse_dict)
                         
