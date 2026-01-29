@@ -860,17 +860,42 @@ class UnifiedRatingEngine:
         return composition
     
     def _distance_to_furlongs(self, distance_txt: str) -> float:
-        """Convert distance string to furlongs"""
+        """
+        Convert distance string to furlongs - SECURE VERSION
+        
+        Handles formats like "6F", "1 1/16M", "8.5 furlongs" WITHOUT using eval()
+        
+        Security: Uses ast.literal_eval and fraction parsing instead of eval()
+        to prevent arbitrary code execution attacks
+        """
+        import ast
+        from fractions import Fraction
+        
         try:
             # Handle formats like "6F", "1 1/16M", "8.5 furlongs"
             if 'mile' in distance_txt.lower() or 'm' in distance_txt.lower():
                 # Extract mile portion
                 parts = distance_txt.replace('mile', '').replace('M', '').replace('m', '').strip().split()
                 if len(parts) >= 1:
-                    miles = eval(parts[0])  # Handle "1 1/16" format
+                    # SECURE: Parse fractions like "1 1/16" safely
+                    part = parts[0].strip()
+                    if '/' in part:
+                        # Handle fraction: "1/16" or "1 1/16"
+                        try:
+                            miles = float(Fraction(part))
+                        except (ValueError, ZeroDivisionError):
+                            return 6.0
+                    else:
+                        # Handle whole/decimal: "1" or "1.5"
+                        try:
+                            miles = ast.literal_eval(part)
+                            if not isinstance(miles, (int, float)):
+                                return 6.0
+                        except (ValueError, SyntaxError):
+                            return 6.0
                     return miles * 8  # 1 mile = 8 furlongs
             else:
-                # Extract numeric value
+                # Extract numeric value for furlongs
                 numeric = ''.join(c for c in distance_txt if c.isdigit() or c == '.')
                 if numeric:
                     return float(numeric)

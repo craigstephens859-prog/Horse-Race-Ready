@@ -239,3 +239,60 @@ app.autobackup.py
 app.backup.py
 app.before-*.py
 pylint_report.txt
+
+# =====================================================
+# SECURITY-CRITICAL FILES (DO NOT COMMIT)
+# =====================================================
+
+# API Keys and Secrets
+*.key
+*.secret
+api_keys.txt
+openai_key.txt
+stripe_key.txt
+secrets.toml
+*.secrets.toml
+.streamlit/secrets.*
+
+# Database Files with User Data
+*.db
+*.sqlite
+*.sqlite3
+gold_high_iq.db
+historical_racing_gold.db
+race_database.db
+
+# Model Checkpoints (may contain sensitive training data)
+*.pt
+*.pth
+*.pkl
+*.pickle
+*.h5
+*.ckpt
+model_checkpoints/
+models/*.pt
+
+# Logs (may contain sensitive info)
+*.log
+audit.log
+security.log
+app.log
+
+# Environment Files
+.env
+.env.local
+.env.production
+.env.staging
+*.env
+
+# Credentials
+credentials.json
+service_account.json
+*.pem
+*.key
+*.crt
+
+# Temporary Analysis Files
+analysis_*.txt
+race_report_*.txt
+betting_strategy_*.txt

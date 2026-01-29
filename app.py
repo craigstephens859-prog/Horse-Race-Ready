@@ -15,6 +15,7 @@
 import os
 import re
 import math
+import time
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 from itertools import product
@@ -72,6 +73,30 @@ except ImportError:
     UNIFIED_ENGINE_AVAILABLE = False
     UnifiedRatingEngine = None
 
+# ULTRATHINK V3: Gold High-IQ Database (optimized for ML retraining)
+try:
+    from gold_database_manager import GoldHighIQDatabase
+    gold_db = GoldHighIQDatabase("gold_high_iq.db")
+    GOLD_DB_AVAILABLE = True
+except Exception as e:
+    GOLD_DB_AVAILABLE = False
+    gold_db = None
+    print(f"Gold database initialization error: {e}")
+
+# SECURITY: Import input validation and protection utilities
+try:
+    from security_validators import (
+        sanitize_pp_text,
+        validate_track_name,
+        validate_distance_string,
+        sanitize_race_metadata,
+        RateLimiter
+    )
+    SECURITY_VALIDATORS_AVAILABLE = True
+except ImportError as e:
+    SECURITY_VALIDATORS_AVAILABLE = False
+    print(f"Security validators not available: {e}")
+
 # ===================== Page / Model Settings =====================
 
 st.set_page_config(page_title="Horse Race Ready — IQ Mode", page_icon="🏇", layout="wide")
@@ -124,11 +149,21 @@ try:
 except Exception:
     openai = None
 
+# SECURITY: Rate limiter for OpenAI API calls (10 calls per 60 seconds)
+if SECURITY_VALIDATORS_AVAILABLE:
+    openai_rate_limiter = RateLimiter(max_calls=10, time_window=60)
+else:
+    openai_rate_limiter = None
+
 def model_supports_temperature(model_name: str) -> bool:
     m = (model_name or "").lower()
     return not (m.startswith("gpt-5") or m.startswith("o4") or m.startswith("o3"))
 
 def call_openai_messages(messages: List[Dict]) -> str:
+    # SECURITY: Check rate limit before making API call
+    if openai_rate_limiter is not None and not openai_rate_limiter.allow_call():
+        return "(Rate limit exceeded. Please wait before generating another report. Max 10 reports per minute.)"
+    
     if not OPENAI_API_KEY or (client is None and openai is None):
         return "(Narrative generation disabled — set OPENAI_API_KEY as environment variable)"
     if use_sdk_v1 and client is not None:
@@ -1602,6 +1637,14 @@ if parse_clicked:
     if not text_now:
         st.warning("Paste PPs text first.")
     else:
+        # SECURITY: Validate PP text before processing
+        if SECURITY_VALIDATORS_AVAILABLE:
+            try:
+                text_now = sanitize_pp_text(text_now)
+            except ValueError as e:
+                st.error(f"Invalid PP text: {e}")
+                st.stop()
+        
         st.session_state["pp_text_cache"] = text_now
         st.session_state["parsed"] = True
         _safe_rerun()
@@ -1620,6 +1663,15 @@ first_line = (pp_text.split("\n",1)[0] or "").strip()
 # Track
 parsed_track = parse_track_name_from_pp(pp_text)
 track_name = st.text_input("Track:", value=(parsed_track or st.session_state['track_name']))
+
+# SECURITY: Validate track name if validators available
+if SECURITY_VALIDATORS_AVAILABLE and track_name:
+    try:
+        track_name = validate_track_name(track_name)
+    except ValueError as e:
+        st.warning(f"Invalid track name (using default): {e}")
+        track_name = "Unknown Track"
+
 st.session_state['track_name'] = track_name
 
 # Surface auto from header, but allow override
@@ -2805,551 +2857,464 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                 with col3:
                     st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain", key="dl_strategy_new")
 
+                # ============================================================
+                # AUTO-SAVE TO GOLD HIGH-IQ DATABASE
+                # ============================================================
+                if GOLD_DB_AVAILABLE and gold_db is not None and primary_df is not None:
+                    try:
+                        # Generate race ID
+                        race_date = datetime.now().strftime('%Y%m%d')
+                        race_id = f"{track_name}_{race_date}_R{st.session_state.get('race_num', 1)}"
+                        
+                        # Prepare race metadata
+                        race_metadata = {
+                            'track': track_name,
+                            'date': race_date,
+                            'race_num': st.session_state.get('race_num', 1),
+                            'race_type': race_type_detected,
+                            'surface': surface_type,
+                            'distance': distance_txt,
+                            'condition': condition_txt,
+                            'purse': purse_val,
+                            'field_size': len(primary_df)
+                        }
+                        
+                        # Prepare horses data with all available features
+                        horses_data = []
+                        for idx, row in primary_df.iterrows():
+                            horse_dict = {
+                                'program_number': int(row.get('Post', idx + 1)),
+                                'horse_name': str(row.get('Horse', f'Horse_{idx+1}')),
+                                'post_position': int(row.get('Post', idx + 1)),
+                                'morning_line_odds': float(row.get('ML', 99.0)),
+                                'jockey': str(row.get('Jockey', '')),
+                                'trainer': str(row.get('Trainer', '')),
+                                'owner': str(row.get('Owner', '')),
+                                'running_style': str(row.get('E1_Style', 'P')),
+                                'prime_power': float(row.get('Prime Power', 0.0)),
+                                'best_beyer': int(row.get('Best Beyer', 0)),
+                                'last_beyer': int(row.get('Last Beyer', 0)),
+                                'avg_beyer_3': float(row.get('Avg Beyer (3)', 0.0)),
+                                'e1_pace': float(row.get('E1', 0.0)),
+                                'e2_pace': float(row.get('E2', 0.0)),
+                                'late_pace': float(row.get('Late', 0.0)),
+                                'days_since_last': int(row.get('Days Since', 0)),
+                                'class_rating': float(row.get('Class Rating', 0.0)),
+                                'form_rating': float(row.get('Form Rating', 0.0)),
+                                'speed_rating': float(row.get('Speed Rating', 0.0)),
+                                'pace_rating': float(row.get('Pace Rating', 0.0)),
+                                'style_rating': float(row.get('Style Rating', 0.0)),
+                                'post_rating': float(row.get('Post Rating', 0.0)),
+                                'angles_total': float(row.get('Angles Total', 0.0)),
+                                'rating_final': float(row.get('R', 0.0)),
+                                'predicted_probability': float(row.get('Fair %', 0.0)) / 100.0,
+                                'predicted_rank': int(idx + 1),
+                                'fair_odds': float(row.get('Fair Odds', 99.0)),
+                                # PhD enhancements if available
+                                'rating_confidence': float(row.get('Confidence', 0.5)),
+                                'form_decay_score': float(row.get('Form Decay', 0.0)),
+                                'pace_esp_score': float(row.get('Pace ESP', 0.0)),
+                                'mud_adjustment': float(row.get('Mud Adj', 0.0))
+                            }
+                            horses_data.append(horse_dict)
+                        
+                        # Save to gold database
+                        pp_text_raw = st.session_state.get('pp_text_cache', '')
+                        success = gold_db.save_analyzed_race(
+                            race_id=race_id,
+                            race_metadata=race_metadata,
+                            horses_data=horses_data,
+                            pp_text_raw=pp_text_raw
+                        )
+                        
+                        if success:
+                            st.success(f"💾 **Auto-saved to gold database:** {race_id}")
+                            st.session_state['last_saved_race_id'] = race_id
+                            st.info("🏁 After race completes, submit actual top 5 finishers in **Section E** below!")
+                        
+                    except Exception as save_error:
+                        st.warning(f"Could not auto-save race: {save_error}")
+                        # Don't fail the entire analysis if save fails
+                # ============================================================
+
             except Exception as e:
                 st.error(f"Error generating report: {e}")
                 import traceback
                 st.error(traceback.format_exc())
 
-# ===================== E. HISTORICAL DATA SYSTEM (Real Data Path to 90%) =====================
+# ===================== E. GOLD HIGH-IQ SYSTEM 🏆 (Real Data → 90%) =====================
 
 st.markdown("---")
-st.header("E. Historical Data System 📊 (Path to 90% ML Accuracy)")
+st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
 
-# Lazy load Historical Data System modules (PyTorch is heavy!)
-if HISTORICAL_DATA_AVAILABLE is None:
-    with st.spinner("🔄 Loading Historical Data System (first time only, ~10 seconds)..."):
-        try:
-            import sys
-            # Check for force reload flag
-            if 'force_hist_reload' in st.session_state and st.session_state['force_hist_reload']:
-                for mod in ['historical_data_builder', 'integrate_real_data', 'ml_quant_engine_v2']:
-                    if mod in sys.modules:
-                        del sys.modules[mod]
-                st.session_state['force_hist_reload'] = False
-            
-            from data_ingestion_pipeline import GoldStandardDatabase, BRISNETIngestionAdapter, FeatureEngineer
-            from integrate_real_data import convert_to_ml_format
-            
-            # Store in session state to avoid reimporting
-            st.session_state['GoldStandardDatabase'] = GoldStandardDatabase
-            st.session_state['BRISNETIngestionAdapter'] = BRISNETIngestionAdapter
-            st.session_state['FeatureEngineer'] = FeatureEngineer
-            st.session_state['convert_to_ml_format'] = convert_to_ml_format
-            st.session_state['HISTORICAL_DATA_AVAILABLE'] = True
-            HISTORICAL_DATA_AVAILABLE = True
-            
-        except (ImportError, Exception) as e:
-            import traceback
-            st.session_state['HISTORICAL_IMPORT_ERROR'] = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
-            st.session_state['HISTORICAL_DATA_AVAILABLE'] = False
-            HISTORICAL_DATA_AVAILABLE = False
-else:
-    # Use cached values from session state
-    HISTORICAL_DATA_AVAILABLE = st.session_state.get('HISTORICAL_DATA_AVAILABLE', False)
-    if HISTORICAL_DATA_AVAILABLE:
-        GoldStandardDatabase = st.session_state.get('GoldStandardDatabase')
-        BRISNETIngestionAdapter = st.session_state.get('BRISNETIngestionAdapter')
-        FeatureEngineer = st.session_state.get('FeatureEngineer')
-        convert_to_ml_format = st.session_state.get('convert_to_ml_format')
-    HISTORICAL_IMPORT_ERROR = st.session_state.get('HISTORICAL_IMPORT_ERROR', None)
-
-# Debug and user guidance
-if HISTORICAL_DATA_AVAILABLE:
-    st.success("✅ Historical Data System Active (Gold-Standard Database)")
-    if st.button("🔄 Reload Historical Data System", key="reload_hist"):
-        if 'gold_db' in st.session_state:
-            del st.session_state['gold_db']
-        if 'brisnet_adapter' in st.session_state:
-            del st.session_state['brisnet_adapter']
-        st.rerun()
-else:
-    st.error("⚠️ Historical Data System Not Available")
+if not GOLD_DB_AVAILABLE or gold_db is None:
+    st.error("❌ Gold High-IQ Database not available. Check initialization.")
+    st.warning("""
+    **Troubleshooting:**
+    1. Ensure `gold_database_manager.py` exists
+    2. Check that SQLite3 is working
+    3. Restart the Streamlit app
     
-    # Add debug info
-    with st.expander("🔍 Debug Information", expanded=True):
-        st.code(f"HISTORICAL_DATA_AVAILABLE = {HISTORICAL_DATA_AVAILABLE}")
-        
-        # Show the actual import error if it exists
-        if HISTORICAL_IMPORT_ERROR:
-            st.error("**Import Error Details:**")
-            st.code(HISTORICAL_IMPORT_ERROR)
-        else:
-            st.warning("No error details captured. Attempting direct import test...")
-        
-        st.write("Testing direct import...")
-        try:
-            import sys
-            # Force reload modules
-            if 'historical_data_builder' in sys.modules:
-                del sys.modules['historical_data_builder']
-            if 'integrate_real_data' in sys.modules:
-                del sys.modules['integrate_real_data']
-            if 'ml_quant_engine_v2' in sys.modules:
-                del sys.modules['ml_quant_engine_v2']
-            
-            st.write("Step 1: Importing data_ingestion_pipeline...")
-            from data_ingestion_pipeline import GoldStandardDatabase, BRISNETIngestionAdapter, FeatureEngineer
-            st.success("✅ data_ingestion_pipeline imported")
-            
-            st.write("Step 2: Importing integrate_real_data...")
-            from integrate_real_data import convert_to_ml_format
-            st.success("✅ integrate_real_data imported")
-            
-            st.success("✅ Direct import test PASSED - Modules can be imported!")
-            st.warning("Issue: Module imports work but HISTORICAL_DATA_AVAILABLE is cached")
-            st.info("**Solution:** Wait for new Render deployment (scipy/xgboost added)")
-        except Exception as e:
-            st.error(f"❌ Direct import test FAILED: {type(e).__name__}: {e}")
-            import traceback
-            error_details = traceback.format_exc()
-            st.code(error_details)
-            
-            # Check for specific missing dependencies
-            if "scipy" in str(e).lower():
-                st.error("🔍 Missing: scipy - Deploy commit 355814a to fix")
-            if "xgboost" in str(e).lower() or "xgb" in str(e).lower():
-                st.error("🔍 Missing: xgboost - Deploy commit 355814a to fix")
-    
-    st.info("""
-    **Troubleshooting Steps:**
-    1. Press **C** in browser to clear Streamlit cache
-    2. Click **Rerun** button (top right)
-    3. If still not working, **Stop server (Ctrl+C)** and run: `python -m streamlit run app.py`
-    
-    Files verified present: ✅ historical_data_builder.py ✅ integrate_real_data.py
+    Files needed:
+    - gold_database_manager.py
+    - gold_database_schema.sql
+    - retrain_model.py
     """)
-    if st.button("🔄 Force Reload App", key="force_reload"):
-        with st.spinner("Clearing caches and reloading modules..."):
-            import sys
-            # Set flag to force reload on next app run
-            st.session_state['force_hist_reload'] = True
-            
-            # Clear Streamlit caches
-            st.cache_data.clear()
-            st.cache_resource.clear()
-            
-            # Remove modules from sys.modules to force reimport
-            modules_to_reload = [
-                'historical_data_builder',
-                'integrate_real_data',
-                'elite_parser',
-                'unified_rating_engine'
-            ]
-            removed = []
-            for mod in modules_to_reload:
-                if mod in sys.modules:
-                    del sys.modules[mod]
-                    removed.append(mod)
-            
-            if removed:
-                st.write(f"✓ Removed {len(removed)} modules from cache")
-            
-            # Also clear any Python module cache
-            import importlib
-            importlib.invalidate_caches()
-            
-            st.success("✅ Caches cleared! Reloading app...")
-            import time
-            time.sleep(0.5)
-        st.rerun()
-
-if HISTORICAL_DATA_AVAILABLE:
+else:
     try:
-        # Initialize gold-standard database and adapter
-        if 'gold_db' not in st.session_state:
-            try:
-                st.session_state['gold_db'] = GoldStandardDatabase("historical_racing_gold.db")
-                st.session_state['brisnet_adapter'] = BRISNETIngestionAdapter()
-            except Exception as init_error:
-                st.error(f"Failed to initialize Gold-Standard Database: {init_error}")
-                import traceback
-                st.error(traceback.format_exc())
-                raise
-
-        db = st.session_state['gold_db']
-        adapter = st.session_state['brisnet_adapter']
-
-        # Get current stats from gold-standard database
-        import sqlite3
-        conn = sqlite3.connect(db.db_path)
-        cursor = conn.cursor()
+        # Get stats from gold database
+        stats = gold_db.get_accuracy_stats()
+        pending_races = gold_db.get_pending_races(limit=20)
         
-        cursor.execute("SELECT COUNT(*) FROM races WHERE race_id IN (SELECT DISTINCT race_id FROM results)")
-        completed_races = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM races WHERE race_id NOT IN (SELECT DISTINCT race_id FROM results)")
-        pending_races = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM runners WHERE runner_id IN (SELECT runner_id FROM results)")
-        horses_with_results = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT MIN(race_date), MAX(race_date) FROM races")
-        date_range = cursor.fetchone()
-        
-        conn.close()
-        
-        stats = {
-            'completed_races': completed_races,
-            'pending_races': pending_races,
-            'horses_with_results': horses_with_results,
-            'ready_for_training': completed_races >= 50,
-            'date_range': date_range if date_range[0] else (None, None)
-        }
-
         # Create tabs
-        tab_overview, tab_capture, tab_results, tab_retrain = st.tabs([
-            "📊 Overview", "💾 Auto-Capture", "🏁 Enter Results", "🚀 Retrain Model"
+        tab_overview, tab_results, tab_retrain = st.tabs([
+            "📊 Dashboard", "🏁 Submit Actual Top 5", "🚀 Retrain Model"
         ])
-
-        # Tab 1: Overview
+        
+        # Tab 1: Dashboard
         with tab_overview:
             st.markdown("""
-            ### Building Real Data for 90%+ Accuracy
-
-            This system accumulates **real race data** from your daily BRISNET workflow.
-            As you use the app for picks, it automatically stores:
-            - Pre-race features from PPs
-            - Post-race finishing positions
-            - Track conditions and metadata
-
-            **Path to 90% Accuracy:**
-            - Current synthetic data: 58% winner accuracy
-            - 100 real races: ~70-75% expected
-            - 500 real races: ~82-87% expected
-            - 1,000+ real races: **88-92%** ✅
+            ### Real Data Learning System
+            
+            Every time you click "Analyze This Race", the system **auto-saves**:
+            - All horse features (speed, class, pace, angles, PhD enhancements)
+            - Model predictions (probabilities, ratings, confidence)
+            - Race metadata (track, conditions, purse, etc.)
+            
+            After the race completes, submit the actual top 5 finishers.
+            The system learns from real outcomes to reach 90%+ accuracy.
             """)
-
-            # Stats display
+            
+            # Metrics
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Completed Races", stats['completed_races'])
+                st.metric("Completed Races", stats.get('total_races', 0))
             with col2:
-                st.metric("Pending Results", stats['pending_races'])
+                ready = stats.get('total_races', 0) >= 50
+                st.metric("Training Ready", "✅ Yes" if ready else "⏳ Need 50+")
             with col3:
-                st.metric("Total Horses", stats['horses_with_results'])
+                st.metric("Pending Results", len(pending_races))
             with col4:
-                ready = "✅ Ready!" if stats['ready_for_training'] else "⏳ Need more data"
-                st.metric("Training Ready", ready)
-
-            # Progress to training thresholds
-            st.markdown("#### Progress to Milestones")
-
-            milestones = [
-                (50, "First Retrain (70% expected)"),
-                (100, "Second Retrain (75% expected)"),
-                (500, "Third Retrain (85% expected)"),
-                (1000, "Gold Standard (90% expected)")
-            ]
-
-            for target, label in milestones:
-                progress = min(stats['completed_races'] / target, 1.0)
-                st.progress(progress, text=f"{label}: {stats['completed_races']}/{target} races")
-
-            # Date range
-            if stats['date_range'][0]:
-                st.info(f"📅 Data Range: {stats['date_range'][0]} to {stats['date_range'][1]}")
-
-            # Database location
-            st.caption(f"📁 Gold-Standard Database: {db.db_path}")
-
-        # Tab 2: Auto-Capture
-        with tab_capture:
-            st.markdown("""
-            ### Automatic Race Capture
-
-            Save race details to the historical database. You can either:
-            - **Auto-capture from parsed race**: Use the current race from Sections 1-4
-            - **Manual entry**: Enter race details manually for any race
-            
-            After saving, go to "Enter Results" tab after the race completes.
-            """)
-
-            # Always show race input fields (not conditional on parsed state)
-            col1, col2 = st.columns(2)
-            with col1:
-                capture_date = st.date_input("Race Date", value=datetime.now(), key="capture_date_input")
-            with col2:
-                capture_race_num = st.number_input("Race Number", min_value=1, max_value=15, value=1, key="capture_race_num")
-            
-            capture_track = st.text_input("Track Name", value=st.session_state.get('track_name', ''), key="capture_track")
-            
-            # Check if already captured
-            race_id = f"{capture_track}_{capture_date.strftime('%Y-%m-%d')}_{capture_race_num}"
-
-            import sqlite3
-            conn = sqlite3.connect(db.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT race_id FROM results WHERE race_id = ? LIMIT 1", (race_id,))
-            has_results = cursor.fetchone() is not None
-            
-            cursor.execute("SELECT race_id FROM races WHERE race_id = ?", (race_id,))
-            existing = cursor.fetchone()
-            conn.close()
-
-            if existing:
-                status = "✅ Completed" if has_results else "⏳ Awaiting results"
-                st.info(f"Race already in database: {status}")
-            else:
-                # Offer two capture methods
-                st.markdown("#### Save Race to Database")
-                
-                # Check if we have a parsed race in session
-                has_parsed_race = st.session_state.get("parsed", False) and 'pp_text_cache' in st.session_state
-                
-                if has_parsed_race:
-                    st.success("✅ Parsed race detected - ready for auto-capture")
-                    if st.button("💾 Auto-Capture from Current Race (Sections 1-4)", type="primary", key="auto_capture_btn"):
-                        try:
-                            pp_text = st.session_state.get('pp_text_cache', '')
-                            if not pp_text:
-                                st.error("No PP text found. Please parse a race first.")
-                            else:
-                                # Parse PP and convert to database format
-                                race_data = adapter.parse_pp_to_db_format(
-                                    pp_text=pp_text,
-                                    race_metadata={
-                                        'track': capture_track,
-                                        'date': capture_date.strftime('%Y-%m-%d'),
-                                        'race_num': capture_race_num,
-                                        'race_type': st.session_state.get('race_type', 'ALW'),
-                                        'purse': st.session_state.get('purse_val', 0)
-                                    }
-                                )
-                                
-                                # Insert into gold-standard database
-                                db.insert_race_complete(
-                                    race_data=race_data['race'],
-                                    runners_data=race_data['runners'],
-                                    pp_lines_data=race_data['pp_lines']
-                                )
-                                
-                                st.success(f"✅ Saved race to gold-standard database: {race_id}")
-                                st.info(f"📊 Captured {len(race_data['runners'])} runners with {len(race_data['pp_lines'])} PP lines")
-                                st.info("✅ Race captured! Switch to 'Enter Results' tab after the race completes.")
-                        except Exception as e:
-                            st.error(f"Error saving race: {e}")
-                            import traceback
-                            st.code(traceback.format_exc())
+                if stats.get('total_races', 0) > 0:
+                    st.metric("Winner Accuracy", f"{stats.get('winner_accuracy', 0.0):.1%}")
                 else:
-                    st.warning("⚠️ No parsed race detected. Parse a race in Sections 1-4 first for auto-capture.")
-                    st.info("💡 **Tip**: Parse PPs in Section 1-2, analyze in Section D, then come here to auto-capture with all details.")
-
-        # Tab 3: Enter Results
+                    st.metric("Winner Accuracy", "N/A")
+            
+            # Progress bars
+            st.markdown("#### Progress to Milestones")
+            
+            milestones = [
+                (50, "First Retrain", "70-75%"),
+                (100, "Second Retrain", "75-80%"),
+                (500, "Major Improvement", "85-87%"),
+                (1000, "Gold Standard", "90%+")
+            ]
+            
+            for target, label, expected_acc in milestones:
+                progress = min(stats.get('total_races', 0) / target, 1.0)
+                st.progress(
+                    progress, 
+                    text=f"{label} ({expected_acc} expected): {stats.get('total_races', 0)}/{target} races"
+                )
+            
+            # System performance
+            if stats.get('total_races', 0) > 0:
+                st.markdown("#### System Performance")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Winner Accuracy", f"{stats.get('winner_accuracy', 0.0):.1%}")
+                with col2:
+                    st.metric("Top-3 Accuracy", f"{stats.get('top3_accuracy', 0.0):.1%}")
+                with col3:
+                    st.metric("Top-5 Accuracy", f"{stats.get('top5_accuracy', 0.0):.1%}")
+        
+        # Tab 2: Submit Actual Top 5
         with tab_results:
             st.markdown("""
-            ### Enter Race Results
-
-            After a race completes, enter the finishing order here.
-            This completes the training data cycle.
+            ### Submit Actual Top 5 Finishers
+            
+            After a race completes, enter the actual finishing order here.
+            **Only the top 5 positions are required** for high-quality ML training.
             """)
-
-            # Get pending races from gold-standard database
-            import sqlite3
-            conn = sqlite3.connect(db.db_path)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT r.race_id, r.track_code, r.race_date, r.race_number, r.field_size
-                FROM races r
-                WHERE r.race_id NOT IN (SELECT DISTINCT race_id FROM results)
-                ORDER BY r.race_date DESC, r.race_number
-                LIMIT 20
-            """)
-            pending_races = cursor.fetchall()
-            conn.close()
-
+            
             if not pending_races:
-                st.success("✅ No pending races. All results have been entered!")
+                st.success("✅ No pending races! All analyzed races have results entered.")
+                st.info("💡 Analyze more races in Sections 1-4 to build training data.")
             else:
                 st.info(f"📋 {len(pending_races)} races awaiting results")
-
+                
                 # Select race
-                race_options = [f"{r[1]} R{r[3]} on {r[2]} ({r[4]} horses)" for r in pending_races]
-                selected_idx = st.selectbox("Select Race:", range(len(race_options)),
-                                           format_func=lambda i: race_options[i])
-
+                race_options = [
+                    f"{r[1]} R{r[3]} on {r[2]} ({r[4]} horses)" 
+                    for r in pending_races
+                ]
+                selected_idx = st.selectbox(
+                    "Select Race to Enter Results:",
+                    range(len(race_options)),
+                    format_func=lambda i: race_options[i],
+                    key="select_pending_race"
+                )
+                
                 if selected_idx is not None:
                     selected_race = pending_races[selected_idx]
                     race_id, track, date, race_num, field_size = selected_race
-
-                    st.markdown(f"#### {race_id}")
-
-                    # Get runners for this race from gold-standard schema
-                    conn = sqlite3.connect(db.db_path)
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT program_number, horse_name, post_position
-                        FROM runners
-                        WHERE race_id = ?
-                        ORDER BY program_number
-                    """, (race_id,))
-                    horses = cursor.fetchall()
-                    conn.close()
-
-                    if horses:
+                    
+                    st.markdown(f"#### 🏇 {race_id}")
+                    st.caption(f"{field_size} horses ran in this race")
+                    
+                    # Get horses for this race
+                    horses = gold_db.get_horses_for_race(race_id)
+                    
+                    if not horses:
+                        st.error("No horses found for this race.")
+                    else:
+                        # Display horses in clean table
                         st.markdown("**Horses in this race:**")
-                        for prog_num, name, post in horses:
-                            st.text(f"#{prog_num} - {name} (Post {post})")
-
-                        # Enter finishing order (top 5 only)
-                        st.markdown("**Enter Top 5 Finish Positions:**")
-                        st.caption("Enter the program numbers that finished 1st through 5th")
                         
+                        horses_df = pd.DataFrame(horses)
+                        display_df = horses_df[['program_number', 'horse_name', 'post_position', 
+                                               'predicted_probability', 'fair_odds']].copy()
+                        display_df.columns = ['#', 'Horse Name', 'Post', 'Predicted Win %', 'Fair Odds']
+                        display_df['Predicted Win %'] = (display_df['Predicted Win %'] * 100).round(1).astype(str) + '%'
+                        display_df['Fair Odds'] = display_df['Fair_odds'].round(2)
+                        
+                        st.dataframe(display_df, use_container_width=True, hide_index=True)
+                        
+                        # Enter top 5
+                        st.markdown("---")
+                        st.markdown("### 🏆 Enter Actual Top 5 Finishers")
+                        st.caption("Select the program numbers that finished 1st through 5th")
+                        
+                        # Create clean input grid
                         col1, col2, col3, col4, col5 = st.columns(5)
+                        
+                        program_numbers = [h['program_number'] for h in horses]
+                        horse_names_dict = {h['program_number']: h['horse_name'] for h in horses}
+                        
                         with col1:
-                            pos1 = st.number_input("🥇 1st", min_value=1, max_value=20, value=1, key=f"pos1_{race_id}")
+                            st.markdown("**🥇 1st Place**")
+                            pos1 = st.selectbox(
+                                "Winner",
+                                program_numbers,
+                                key=f"pos1_{race_id}",
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                            )
+                        
                         with col2:
-                            pos2 = st.number_input("🥈 2nd", min_value=1, max_value=20, value=2, key=f"pos2_{race_id}")
+                            st.markdown("**🥈 2nd Place**")
+                            pos2 = st.selectbox(
+                                "Second",
+                                program_numbers,
+                                key=f"pos2_{race_id}",
+                                index=min(1, len(program_numbers)-1),
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                            )
+                        
                         with col3:
-                            pos3 = st.number_input("🥉 3rd", min_value=1, max_value=20, value=3, key=f"pos3_{race_id}")
+                            st.markdown("**🥉 3rd Place**")
+                            pos3 = st.selectbox(
+                                "Third",
+                                program_numbers,
+                                key=f"pos3_{race_id}",
+                                index=min(2, len(program_numbers)-1),
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                            )
+                        
                         with col4:
-                            pos4 = st.number_input("4th", min_value=1, max_value=20, value=4, key=f"pos4_{race_id}")
+                            st.markdown("**4th Place**")
+                            pos4 = st.selectbox(
+                                "Fourth",
+                                program_numbers,
+                                key=f"pos4_{race_id}",
+                                index=min(3, len(program_numbers)-1),
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                            )
+                        
                         with col5:
-                            pos5 = st.number_input("5th", min_value=1, max_value=20, value=5, key=f"pos5_{race_id}")
-
-                        if st.button("✅ Submit Results", type="primary", key=f"submit_{race_id}"):
-                            try:
-                                finish_order = [pos1, pos2, pos3, pos4, pos5]
-                                
-                                # Validate uniqueness
-                                if len(set(finish_order)) != 5:
-                                    st.error("❌ Each position must be unique!")
+                            st.markdown("**5th Place**")
+                            pos5 = st.selectbox(
+                                "Fifth",
+                                program_numbers,
+                                key=f"pos5_{race_id}",
+                                index=min(4, len(program_numbers)-1),
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                            )
+                        
+                        # Validation and submit
+                        finish_order = [pos1, pos2, pos3, pos4, pos5]
+                        
+                        if len(set(finish_order)) != 5:
+                            st.error("❌ Each position must be unique! Please select 5 different horses.")
+                        else:
+                            # Show preview
+                            st.markdown("---")
+                            st.markdown("**Preview:**")
+                            preview_parts = []
+                            for i, pos in enumerate(finish_order):
+                                if i == 0:
+                                    preview_parts.append(f"🥇 {horse_names_dict[pos]}")
+                                elif i == 1:
+                                    preview_parts.append(f"🥈 {horse_names_dict[pos]}")
+                                elif i == 2:
+                                    preview_parts.append(f"🥉 {horse_names_dict[pos]}")
+                                elif i == 3:
+                                    preview_parts.append(f"4th {horse_names_dict[pos]}")
                                 else:
-                                    # Insert results into gold-standard database
-                                    conn = sqlite3.connect(db.db_path)
-                                    cursor = conn.cursor()
+                                    preview_parts.append(f"5th {horse_names_dict[pos]}")
+                            preview_text = " → ".join(preview_parts)
+                            st.info(preview_text)
+                            
+                            # Submit button
+                            if st.button("✅ Submit Top 5 Results", type="primary", key=f"submit_{race_id}"):
+                                with st.spinner("Saving results..."):
+                                    success = gold_db.submit_race_results(
+                                        race_id=race_id,
+                                        finish_order_programs=finish_order
+                                    )
                                     
-                                    for rank, program_num in enumerate(finish_order, 1):
-                                        runner_id = f"{race_id}_{program_num}"
-                                        cursor.execute("""
-                                            INSERT OR REPLACE INTO results 
-                                            (result_id, race_id, runner_id, program_number, finish_position, beaten_lengths)
-                                            VALUES (?, ?, ?, ?, ?, ?)
-                                        """, (runner_id, race_id, runner_id, program_num, rank, 0.0))
-                                    
-                                    conn.commit()
-                                    conn.close()
-                                    
-                                    st.success(f"✅ Results saved for {race_id}!")
-                                    st.balloons()
-                                    st.info("🚀 Go to 'Retrain Model' tab to update ML predictions")
-                                    _safe_rerun()
-
-                            except Exception as e:
-                                st.error(f"Error saving results: {e}")
-                                import traceback
-                                st.code(traceback.format_exc())
-
-        # Tab 4: Retrain Model
+                                    if success:
+                                        st.success(f"✅ Results saved for {race_id}!")
+                                        st.balloons()
+                                        
+                                        # Show accuracy feedback
+                                        predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
+                                        predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
+                                        
+                                        actual_winner = horse_names_dict[pos1]
+                                        
+                                        if predicted_winner == actual_winner:
+                                            st.success(f"🎯 Predicted winner correctly: {actual_winner}")
+                                        else:
+                                            st.info(f"📊 Predicted: {predicted_winner} | Actual: {actual_winner}")
+                                        
+                                        st.info("🚀 Go to 'Retrain Model' tab to update predictions with real data!")
+                                        
+                                        time.sleep(2)
+                                        _safe_rerun()
+                                    else:
+                                        st.error("❌ Error saving results. Please try again.")
+        
+        # Tab 3: Retrain Model
         with tab_retrain:
             st.markdown("""
-            ### Retrain with Real Data
-
-            Once you have 50+ completed races, retrain the ML model to improve accuracy.
-            The model learns from **real race outcomes** instead of synthetic simulations.
+            ### Retrain ML Model with Real Data
+            
+            Once you have **50+ completed races**, retrain the model to learn from real outcomes.
+            The model uses PyTorch with Plackett-Luce ranking loss for optimal accuracy.
             """)
-
-            # Show readiness
-            if stats['completed_races'] < 50:
-                st.warning(f"⚠️ Need 50+ races for first retrain. Current: {stats['completed_races']}")
-                st.info(f"Add {50 - stats['completed_races']} more race results to unlock retraining.")
+            
+            # Check if ready
+            ready_to_train = stats.get('total_races', 0) >= 50
+            
+            if not ready_to_train:
+                st.warning(f"⏳ Need at least 50 completed races. Currently: {stats.get('total_races', 0)}")
+                st.info("💡 Complete more races in the 'Submit Actual Top 5' tab.")
             else:
-                st.success(f"✅ {stats['completed_races']} races available - Ready to retrain!")
-
-                # Expected accuracy
-                if stats['completed_races'] >= 1000:
-                    expected = "88-92% (Gold Standard)"
-                elif stats['completed_races'] >= 500:
-                    expected = "82-87%"
-                elif stats['completed_races'] >= 100:
-                    expected = "72-78%"
-                else:
-                    expected = "65-72%"
-
-                st.info(f"📊 Expected Winner Accuracy: {expected}")
-
-                if st.button("🚀 Retrain Model with Real Data", type="primary"):
-                    with st.spinner("Generating training features from gold-standard database..."):
+                st.success(f"✅ Ready to train! {stats.get('total_races', 0)} races available.")
+                
+                # Training parameters
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    epochs = st.number_input("Epochs", min_value=10, max_value=200, value=50)
+                with col2:
+                    learning_rate = st.select_slider(
+                        "Learning Rate",
+                        options=[0.0001, 0.0005, 0.001, 0.005, 0.01],
+                        value=0.001
+                    )
+                with col3:
+                    batch_size = st.selectbox("Batch Size", [4, 8, 16, 32], index=1)
+                
+                # Train button
+                if st.button("🚀 Start Retraining", type="primary", key="retrain_btn"):
+                    with st.spinner(f"Training model on {stats.get('total_races', 0)} races... This may take 2-5 minutes..."):
                         try:
-                            # Generate features using FeatureEngineer
-                            engineer = FeatureEngineer(db.db_path)
-                            engineer.export_to_parquet("training_data")
+                            from retrain_model import retrain_model
                             
-                            st.success("✅ Features generated successfully!")
-                            st.info("📊 Features exported to training_data/features.parquet")
-                            
-                            # Show info about training with PyTorch model
-                            st.markdown("""
-                            ### Next Steps for Full ML Training:
-                            
-                            The gold-standard features have been exported. To train the PyTorch Top-5 Ranking Model:
-                            
-                            1. **Option A - Command Line** (Recommended):
-                            ```python
-                            python top5_ranking_model.py
-                            ```
-                            
-                            2. **Option B - Python Script**:
-                            ```python
-                            from top5_ranking_model import Top5RankingModel, Top5Trainer, RacingDataset
-                            import torch
-                            from torch.utils.data import DataLoader
-                            
-                            # Load data
-                            dataset = RacingDataset(
-                                parquet_path="training_data/features.parquet",
-                                races_parquet="training_data/races.parquet",
-                                include_results=True
+                            results = retrain_model(
+                                db_path=gold_db.db_path,
+                                epochs=epochs,
+                                learning_rate=learning_rate,
+                                batch_size=batch_size,
+                                min_races=50
                             )
                             
-                            # Train model (see QUICKSTART_GOLD_STANDARD.md for full code)
-                            ```
-                            
-                            **Training Time**: 2-4 hours on CPU, 20-30 minutes on GPU
-                            
-                            **Target Accuracy**: 90%+ winner, 2+ exacta, 2-3 trifecta
-                            
-                            See **[QUICKSTART_GOLD_STANDARD.md](QUICKSTART_GOLD_STANDARD.md)** for complete training instructions.
-                            """)
-                            
-                            st.info(f"📚 Ready to train on {stats['completed_races']} completed races")
-                                    if predicted_winner == actual_winner:
-                                        correct += 1
-
-                                accuracy = (correct / total * 100) if total > 0 else 0
-
-                                # Save model
-                                predictor.save_model("ml_quant_engine_real_data.pkl")
-
-                                st.success("✅ Training Complete!")
-                                st.metric("Winner Accuracy", f"{accuracy:.1f}%")
-                                st.metric("Improvement over Synthetic", f"+{accuracy - 58.0:.1f}%")
-
-                                st.info("💾 Model saved to: ml_quant_engine_real_data.pkl")
+                            if 'error' in results:
+                                st.error(f"❌ Training failed: {results['error']}")
+                            else:
+                                st.success("✅ Training complete!")
+                                
+                                # Display results
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric(
+                                        "Winner Accuracy",
+                                        f"{results['metrics']['winner_accuracy']:.1%}"
+                                    )
+                                with col2:
+                                    st.metric(
+                                        "Top-3 Accuracy",
+                                        f"{results['metrics']['top3_accuracy']:.1%}"
+                                    )
+                                with col3:
+                                    st.metric(
+                                        "Top-5 Accuracy",
+                                        f"{results['metrics']['top5_accuracy']:.1%}"
+                                    )
+                                
+                                st.info(f"⏱️ Training time: {results.get('duration', 0):.1f} seconds")
+                                st.info(f"💾 Model saved: {results.get('model_path', 'N/A')}")
+                                
                                 st.balloons()
-
+                                
                         except Exception as e:
                             st.error(f"Training error: {e}")
                             import traceback
-                            st.error(traceback.format_exc())
-
+                            st.code(traceback.format_exc())
+                
+                # Training history
+                st.markdown("---")
+                st.markdown("### Training History")
+                
+                try:
+                    import sqlite3
+                    conn = sqlite3.connect(gold_db.db_path)
+                    history_df = pd.read_sql_query("""
+                        SELECT 
+                            retrain_timestamp,
+                            total_races_used,
+                            val_winner_accuracy,
+                            val_top3_accuracy,
+                            val_top5_accuracy,
+                            training_duration_seconds
+                        FROM retraining_history
+                        ORDER BY retrain_timestamp DESC
+                        LIMIT 10
+                    """, conn)
+                    conn.close()
+                    
+                    if not history_df.empty:
+                        history_df.columns = [
+                            'Timestamp', 'Races Used', 'Winner Acc', 
+                            'Top-3 Acc', 'Top-5 Acc', 'Duration (s)'
+                        ]
+                        history_df['Winner Acc'] = (history_df['Winner Acc'] * 100).round(1).astype(str) + '%'
+                        history_df['Top-3 Acc'] = (history_df['Top-3 Acc'] * 100).round(1).astype(str) + '%'
+                        history_df['Top-5 Acc'] = (history_df['Top-5 Acc'] * 100).round(1).astype(str) + '%'
+                        history_df['Duration (s)'] = history_df['Duration (s)'].round(1)
+                        
+                        st.dataframe(history_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No training history yet. Train the model to see results here.")
+                except Exception as e:
+                    st.warning("Could not load training history.")
+    
     except Exception as e:
-        st.error(f"Error in Historical Data System: {e}")
+        st.error(f"Error in Gold High-IQ System: {e}")
         import traceback
-        st.error(traceback.format_exc())
-else:
-    st.warning("""
-    ⚠️ **Historical Data System Not Available**
+        st.code(traceback.format_exc())
 
-    The historical data builder could not be loaded.
-
-    **To enable Section E (Real Data Path to 90%):**
-    1. Files should be present: `historical_data_builder.py` and `integrate_real_data.py`
-    2. Make sure all dependencies are installed
-    3. Restart the Streamlit app
-
-    This system builds real training data from your daily picks workflow,
-    enabling the ML model to reach 90%+ accuracy over time.
-    """)
+# End of Section E
 
 st.markdown("---")
 st.caption("Horse Race Ready - IQ Mode | Advanced Track Bias Analysis with ML Probability Calibration & Real Data Training")
