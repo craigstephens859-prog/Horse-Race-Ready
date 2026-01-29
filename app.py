@@ -3097,9 +3097,11 @@ else:
                         horses_df = pd.DataFrame(horses)
                         display_df = horses_df[['program_number', 'horse_name', 'post_position', 
                                                'predicted_probability', 'fair_odds']].copy()
+                        # Format values BEFORE renaming columns
+                        display_df['predicted_probability'] = (display_df['predicted_probability'] * 100).round(1).astype(str) + '%'
+                        display_df['fair_odds'] = display_df['fair_odds'].round(2)
+                        # Now rename columns for display
                         display_df.columns = ['#', 'Horse Name', 'Post', 'Predicted Win %', 'Fair Odds']
-                        display_df['Predicted Win %'] = (display_df['Predicted Win %'] * 100).round(1).astype(str) + '%'
-                        display_df['Fair Odds'] = display_df['Fair_odds'].round(2)
                         
                         st.dataframe(display_df, use_container_width=True, hide_index=True)
                         
