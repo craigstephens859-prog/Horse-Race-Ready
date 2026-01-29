@@ -3176,14 +3176,14 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                             'field_size': len(primary_df),
                             # ADDITIONAL INTELLIGENT FEATURES
                             'ppi_race_wide': ppi_val,  # Pace Pressure Index
-                            'track_bias_config': TRACK_BIAS_ADJUSTMENTS.get(track_name, {}).get(surface_type, {}).get(race_bucket, {}),
+                            'track_bias_config': TRACK_BIAS_PROFILES.get(track_name, {}).get(surface_type, {}).get(race_bucket, {}),
                             'early_speed_count': len([r for r in primary_df.iterrows() if r[1].get('E1_Style') in ['E', 'EP']]),
                             'presser_count': len([r for r in primary_df.iterrows() if r[1].get('E1_Style') in ['P', 'EP']]),
                             'closer_count': len([r for r in primary_df.iterrows() if r[1].get('E1_Style') == 'S']),
                             'avg_field_beyer': safe_float(primary_df.get('Best Beyer', pd.Series([0])).mean()),
                             'top3_beyer_avg': safe_float(primary_df.nlargest(3, 'Best Beyer', keep='first').get('Best Beyer', pd.Series([0])).mean() if 'Best Beyer' in primary_df.columns else 0),
                             'avg_field_days_off': safe_float(primary_df.get('Days Since', pd.Series([0])).mean()),
-                            'chaos_index': chaos_index,
+                            'chaos_index': 0.0,  # Field unpredictability metric (0 = predictable, higher = chaotic)
                             'race_bucket': race_bucket,  # Distance category: ≤6f, 6.5-7f, or 8f+
                             'is_maiden': 'maiden' in race_type_detected.lower() or 'mdn' in race_type_detected.lower(),
                             'is_stakes': 'stakes' in race_type_detected.lower() or 'stk' in race_type_detected.lower() or any(g in race_type_detected.lower() for g in ['g1', 'g2', 'g3']),
