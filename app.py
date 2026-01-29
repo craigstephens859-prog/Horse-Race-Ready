@@ -3022,7 +3022,7 @@ if HISTORICAL_DATA_AVAILABLE:
                             )
                             st.success(f"✅ Saved race: {captured_race_id}")
                             st.info("Don't forget to enter results after the race completes!")
-                            _safe_rerun()
+                            # Removed _safe_rerun() - no need to reload page, keeps Classic Report visible
                         except Exception as e:
                             st.error(f"Error saving race: {e}")
                             st.error("Make sure 'Analyze This Race' has been run first.")
