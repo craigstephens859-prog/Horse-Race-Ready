@@ -150,13 +150,28 @@ class HistoricalDataBuilder:
         race_id = f"{track}_{date}_{race_number}"
         
         # Parse PP using existing parser
-        parsed_data = self.parser.parse(pp_text)
+        horses_dict = self.parser.parse_full_pp(pp_text)
         
-        if not parsed_data or 'horses' not in parsed_data:
+        if not horses_dict:
             raise ValueError("Failed to parse BRISNET PP")
         
-        horses = parsed_data['horses']
-        race_info = parsed_data.get('race_info', {})
+        # Convert to expected format
+        horses = list(horses_dict.values())
+        race_info = {
+            'distance': horses[0].distance if horses else '',
+            'surface': 'Dirt',  # Would need to parse from PP header
+            'conditions': '',
+            'purse': 0
+        }
+        
+        # Convert to expected format
+        horses = list(horses_dict.values())
+        race_info = {
+            'distance': horses[0].distance if horses else '',
+            'surface': 'Dirt',  # Would need to parse from PP header
+            'conditions': '',
+            'purse': 0
+        }
         
         # Store race metadata
         conn = sqlite3.connect(self.db_path)
@@ -196,13 +211,13 @@ class HistoricalDataBuilder:
                             ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     race_id,
-                    horse.get('program_number', 0),
-                    horse.get('horse_name', ''),
-                    horse.get('post_position', 0),
-                    horse.get('morning_line_odds', 0.0),
-                    horse.get('jockey', ''),
-                    horse.get('trainer', ''),
-                    horse.get('weight', 0),
+                    horse.program_number,
+                    horse.horse_name,
+                    horse.post_position,
+                    horse.ml_odds,
+                    horse.jockey,
+                    horse.trainer,
+                    horse.weight,
                     features.get('speed_last_race', 0.0),
                     features.get('speed_avg_3', 0.0),
                     features.get('class_rating', 0.0),
