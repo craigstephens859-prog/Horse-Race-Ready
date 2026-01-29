@@ -2862,6 +2862,25 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                 # ============================================================
                 if GOLD_DB_AVAILABLE and gold_db is not None and primary_df is not None:
                     try:
+                        # Helper function to safely convert percentage strings and odds
+                        def safe_float(value, default=0.0):
+                            """
+                            Convert value to float, handling:
+                            - Percentage strings like '75.6%' 
+                            - American odds like '+150', '-200'
+                            - Regular numbers
+                            """
+                            try:
+                                if isinstance(value, str):
+                                    # Remove % symbol and any whitespace
+                                    value = value.strip().rstrip('%')
+                                    # Remove + symbol from odds like '+150'
+                                    if value.startswith('+'):
+                                        value = value[1:]
+                                return float(value)
+                            except (ValueError, TypeError, AttributeError):
+                                return default
+                        
                         # Generate race ID
                         race_date = datetime.now().strftime('%Y%m%d')
                         race_id = f"{track_name}_{race_date}_R{st.session_state.get('race_num', 1)}"
@@ -2882,39 +2901,43 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                         # Prepare horses data with all available features
                         horses_data = []
                         for idx, row in primary_df.iterrows():
+                            # Extract Fair % with percentage handling
+                            fair_pct_raw = row.get('Fair %', 0.0)
+                            fair_pct_value = safe_float(fair_pct_raw) / 100.0  # Convert to probability (0-1)
+                            
                             horse_dict = {
-                                'program_number': int(row.get('Post', idx + 1)),
+                                'program_number': int(safe_float(row.get('Post', idx + 1), idx + 1)),
                                 'horse_name': str(row.get('Horse', f'Horse_{idx+1}')),
-                                'post_position': int(row.get('Post', idx + 1)),
-                                'morning_line_odds': float(row.get('ML', 99.0)),
+                                'post_position': int(safe_float(row.get('Post', idx + 1), idx + 1)),
+                                'morning_line_odds': safe_float(row.get('ML', 99.0), 99.0),
                                 'jockey': str(row.get('Jockey', '')),
                                 'trainer': str(row.get('Trainer', '')),
                                 'owner': str(row.get('Owner', '')),
                                 'running_style': str(row.get('E1_Style', 'P')),
-                                'prime_power': float(row.get('Prime Power', 0.0)),
-                                'best_beyer': int(row.get('Best Beyer', 0)),
-                                'last_beyer': int(row.get('Last Beyer', 0)),
-                                'avg_beyer_3': float(row.get('Avg Beyer (3)', 0.0)),
-                                'e1_pace': float(row.get('E1', 0.0)),
-                                'e2_pace': float(row.get('E2', 0.0)),
-                                'late_pace': float(row.get('Late', 0.0)),
-                                'days_since_last': int(row.get('Days Since', 0)),
-                                'class_rating': float(row.get('Class Rating', 0.0)),
-                                'form_rating': float(row.get('Form Rating', 0.0)),
-                                'speed_rating': float(row.get('Speed Rating', 0.0)),
-                                'pace_rating': float(row.get('Pace Rating', 0.0)),
-                                'style_rating': float(row.get('Style Rating', 0.0)),
-                                'post_rating': float(row.get('Post Rating', 0.0)),
-                                'angles_total': float(row.get('Angles Total', 0.0)),
-                                'rating_final': float(row.get('R', 0.0)),
-                                'predicted_probability': float(row.get('Fair %', 0.0)) / 100.0,
+                                'prime_power': safe_float(row.get('Prime Power', 0.0)),
+                                'best_beyer': int(safe_float(row.get('Best Beyer', 0))),
+                                'last_beyer': int(safe_float(row.get('Last Beyer', 0))),
+                                'avg_beyer_3': safe_float(row.get('Avg Beyer (3)', 0.0)),
+                                'e1_pace': safe_float(row.get('E1', 0.0)),
+                                'e2_pace': safe_float(row.get('E2', 0.0)),
+                                'late_pace': safe_float(row.get('Late', 0.0)),
+                                'days_since_last': int(safe_float(row.get('Days Since', 0))),
+                                'class_rating': safe_float(row.get('Class Rating', 0.0)),
+                                'form_rating': safe_float(row.get('Form Rating', 0.0)),
+                                'speed_rating': safe_float(row.get('Speed Rating', 0.0)),
+                                'pace_rating': safe_float(row.get('Pace Rating', 0.0)),
+                                'style_rating': safe_float(row.get('Style Rating', 0.0)),
+                                'post_rating': safe_float(row.get('Post Rating', 0.0)),
+                                'angles_total': safe_float(row.get('Angles Total', 0.0)),
+                                'rating_final': safe_float(row.get('R', 0.0)),
+                                'predicted_probability': fair_pct_value,
                                 'predicted_rank': int(idx + 1),
-                                'fair_odds': float(row.get('Fair Odds', 99.0)),
+                                'fair_odds': safe_float(row.get('Fair Odds', 99.0), 99.0),
                                 # PhD enhancements if available
-                                'rating_confidence': float(row.get('Confidence', 0.5)),
-                                'form_decay_score': float(row.get('Form Decay', 0.0)),
-                                'pace_esp_score': float(row.get('Pace ESP', 0.0)),
-                                'mud_adjustment': float(row.get('Mud Adj', 0.0))
+                                'rating_confidence': safe_float(row.get('Confidence', 0.5), 0.5),
+                                'form_decay_score': safe_float(row.get('Form Decay', 0.0)),
+                                'pace_esp_score': safe_float(row.get('Pace ESP', 0.0)),
+                                'mud_adjustment': safe_float(row.get('Mud Adj', 0.0))
                             }
                             horses_data.append(horse_dict)
                         
