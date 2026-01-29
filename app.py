@@ -2666,6 +2666,31 @@ if not st.session_state.get("parsed", False):
 elif 'primary_d' not in st.session_state or 'primary_probs' not in st.session_state:
     st.error("❌ Rating data not available. Please ensure Section C completed successfully.")
 else:
+    # Display existing Classic Report if it exists (before the button)
+    if st.session_state.get('classic_report_generated', False):
+        st.success("✅ Classic Report Generated")
+        st.markdown(st.session_state.get('classic_report', ''))
+        
+        # Show download buttons for existing report
+        if 'classic_report' in st.session_state:
+            report_str = st.session_state['classic_report']
+            analysis_bytes = report_str.encode("utf-8")
+            df_ol = st.session_state.get('df_ol', pd.DataFrame())
+            overlays_bytes = df_ol.to_csv(index=False).encode("utf-8-sig") if isinstance(df_ol, pd.DataFrame) else b""
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.download_button("⬇️ Download Full Analysis (.txt)", data=analysis_bytes, file_name="analysis.txt", mime="text/plain", key="dl_analysis_persistent")
+            with col2:
+                st.download_button("⬇️ Download Overlays (CSV)", data=overlays_bytes, file_name="overlays.csv", mime="text/csv", key="dl_overlays_persistent")
+            with col3:
+                # Create strategy_report_md from session state if available
+                if 'strategy_report' in st.session_state:
+                    tickets_bytes = st.session_state['strategy_report'].encode("utf-8")
+                    st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain", key="dl_strategy_persistent")
+        
+        st.info("💡 To generate a new report, click 'Analyze This Race' again below.")
+    
     if st.button("Analyze This Race", type="primary", key="analyze_button"):
         with st.spinner("Handicapping Race..."):
             try:
@@ -2704,6 +2729,9 @@ else:
                 strategy_report_md = build_betting_strategy(
                     primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
                 )
+                
+                # Store strategy report in session state
+                st.session_state['strategy_report'] = strategy_report_md
 
                 # --- 3. Update the LLM Prompt ---
                 prompt = f"""
@@ -2743,6 +2771,11 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
 - **Tone:** Be informative, direct, and easy to understand. Avoid overly complex jargon. Use horse names and post numbers (#) frequently.
 """
                 report = call_openai_messages(messages=[{"role":"user","content":prompt}])
+                
+                # Store Classic Report in session state so it persists across reruns
+                st.session_state['classic_report'] = report
+                st.session_state['classic_report_generated'] = True
+                
                 st.markdown(report)
 
                 # ---- Save to disk (optional) ----
@@ -2764,9 +2797,13 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                 analysis_bytes = report_str.encode("utf-8")
                 overlays_bytes = df_ol.to_csv(index=False).encode("utf-8-sig") if isinstance(df_ol, pd.DataFrame) else b""
 
-                st.download_button("⬇️ Download Full Analysis (.txt)", data=analysis_bytes, file_name="analysis.txt", mime="text/plain")
-                st.download_button("⬇️ Download Overlays (CSV)", data=overlays_bytes, file_name="overlays.csv", mime="text/csv")
-                st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain") # Renamed for clarity
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.download_button("⬇️ Download Full Analysis (.txt)", data=analysis_bytes, file_name="analysis.txt", mime="text/plain", key="dl_analysis_new")
+                with col2:
+                    st.download_button("⬇️ Download Overlays (CSV)", data=overlays_bytes, file_name="overlays.csv", mime="text/csv", key="dl_overlays_new")
+                with col3:
+                    st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain", key="dl_strategy_new")
 
             except Exception as e:
                 st.error(f"Error generating report: {e}")
