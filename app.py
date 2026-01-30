@@ -859,6 +859,140 @@ def parse_pedigree_snips(block: str) -> dict:
         out["dam_dpi"] = float(d.group(1))
     return out
 
+# ========== SAVANT-LEVEL ENHANCEMENTS (Jan 2026) ==========
+
+def parse_claiming_prices(block: str) -> List[int]:
+    """Extract claiming prices from race lines. Returns list of prices (most recent first)."""
+    prices = []
+    for m in re.finditer(r'Clm\s+(\d+)', block or ""):
+        try:
+            prices.append(int(m.group(1)))
+        except:
+            pass
+    return prices[:5]
+
+def analyze_claiming_price_movement(recent_prices: List[int], today_price: int) -> float:
+    """SAVANT ANGLE: Claiming price class movement. Returns bonus from -0.10 to +0.15"""
+    bonus = 0.0
+    if not recent_prices or today_price <= 0:
+        return bonus
+    avg_recent = np.mean(recent_prices[:3]) if len(recent_prices) >= 3 else recent_prices[0]
+    if avg_recent > today_price * 1.3:
+        bonus += 0.15  # Big drop = intent to win
+    elif avg_recent > today_price * 1.15:
+        bonus += 0.08
+    elif today_price > avg_recent * 1.3:
+        bonus -= 0.10  # Rising in class
+    elif today_price > avg_recent * 1.15:
+        bonus -= 0.05
+    return bonus
+
+def detect_lasix_change(block: str) -> float:
+    """SAVANT ANGLE: Lasix/medication changes. Returns bonus from -0.12 to +0.18"""
+    bonus = 0.0
+    race_lines = [line for line in (block or "").split('\n') if re.search(r'\d{2}[A-Za-z]{3}\d{2}', line)]
+    lasix_pattern = []
+    for line in race_lines[:5]:
+        if re.search(r'\s+L\s+\d+\.\d+\s*$', line):
+            lasix_pattern.append(True)
+        else:
+            lasix_pattern.append(False)
+    if len(lasix_pattern) >= 2:
+        if lasix_pattern[0] and not any(lasix_pattern[1:]):
+            bonus += 0.18  # First-time Lasix = major boost
+        elif not lasix_pattern[0] and lasix_pattern[1]:
+            bonus -= 0.12  # Lasix off = red flag
+        elif lasix_pattern[0] and sum(lasix_pattern) >= 3:
+            bonus += 0.02  # Consistent user
+    return bonus
+
+def parse_fractional_positions(block: str) -> List[List[int]]:
+    """Extract running positions: PP, Start, 1C, 2C, Stretch, Finish."""
+    positions = []
+    pattern = r'(\d{2}[A-Za-z]{3}\d{2}).*?\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*'
+    for m in re.finditer(pattern, block or "", re.MULTILINE):
+        try:
+            pos = [int(m.group(i)) for i in range(2, 8)]
+            positions.append(pos)
+        except:
+            pass
+    return positions[:5]
+
+def calculate_trip_quality(positions: List[List[int]], field_size: int = 10) -> float:
+    """SAVANT ANGLE: Trip handicapping. Returns bonus from -0.04 to +0.12"""
+    bonus = 0.0
+    if not positions or len(positions[0]) < 6:
+        return bonus
+    pp, st, c1, c2, stretch, finish = positions[0]
+    if pp >= 7 and st >= 7 and finish <= 3:
+        bonus += 0.12  # Overcame trouble = class
+    if pp <= 3 and st >= 7 and finish <= 4:
+        bonus += 0.09  # Rail trouble excuse
+    if pp >= field_size - 2 and c1 >= field_size - 2:
+        bonus += 0.08 if finish <= 3 else 0.04  # Wide trip
+    if c2 >= 6 and finish <= 3:
+        bonus += 0.05  # Closer angle
+    if st <= 2 and c1 <= 2 and finish >= 5:
+        bonus -= 0.04  # Couldn't sustain
+    if abs(st - pp) >= 4 and finish <= 4:
+        bonus += 0.06  # Steadied but recovered
+    return bonus
+
+def parse_e1_e2_lp_values(block: str) -> dict:
+    """Extract E1, E2, and LP pace figures."""
+    e1_vals, e2_vals, lp_vals = [], [], []
+    for m in re.finditer(r'(\d{2,3})\s+(\d{2,3})/\s*(\d{2,3})', block or ""):
+        try:
+            e1_vals.append(int(m.group(1)))
+            e2_vals.append(int(m.group(2)))
+            lp_vals.append(int(m.group(3)))
+        except:
+            pass
+    return {'e1': e1_vals[:5], 'e2': e2_vals[:5], 'lp': lp_vals[:5]}
+
+def analyze_pace_figures(e1_vals: List[int], e2_vals: List[int], lp_vals: List[int]) -> float:
+    """SAVANT ANGLE: E1/E2/LP pace analysis. Returns bonus from -0.05 to +0.07"""
+    bonus = 0.0
+    if len(e1_vals) < 3 or len(lp_vals) < 3:
+        return bonus
+    avg_e1 = np.mean(e1_vals[:3])
+    avg_lp = np.mean(lp_vals[:3])
+    if avg_lp > avg_e1 + 5:
+        bonus += 0.07  # Closer with gas
+    if avg_e1 >= 95 and avg_lp >= 85:
+        bonus += 0.06  # Speed + stamina
+    if avg_e1 >= 90 and avg_lp < 75:
+        bonus -= 0.05  # Speed no stamina
+    if len(e2_vals) >= 3:
+        avg_e2 = np.mean(e2_vals[:3])
+        if abs(avg_e1 - avg_e2) <= 3 and abs(avg_e2 - avg_lp) <= 3:
+            bonus += 0.04  # Balanced energy
+    return bonus
+
+def detect_bounce_risk(speed_figs: List[int]) -> float:
+    """SAVANT ANGLE: Bounce detection. Returns penalty/bonus from -0.09 to +0.07"""
+    penalty = 0.0
+    if len(speed_figs) < 3:
+        return penalty
+    last_three = speed_figs[:3]
+    career_best = max(speed_figs) if speed_figs else 0
+    if last_three[0] == career_best and len(speed_figs) > 3:
+        if last_three[1] < last_three[0] - 8:
+            penalty -= 0.09  # Bounce pattern
+        elif last_three[1] < last_three[0] - 5:
+            penalty -= 0.05
+    if len(speed_figs) >= 4 and last_three[0] >= career_best - 2 and last_three[1] >= career_best - 2:
+        penalty += 0.07  # Peak form maintained
+    if last_three[0] > last_three[1] > last_three[2]:
+        penalty += 0.06  # Improving
+    if last_three[0] < last_three[1] < last_three[2]:
+        penalty -= 0.05  # Declining
+    if max(last_three) - min(last_three) <= 5:
+        penalty += 0.03  # Consistent
+    return penalty
+
+# ========== END SAVANT ENHANCEMENTS ==========
+
 SPEED_FIG_RE = re.compile(
     # Matches a date, track, etc., then a race type, then captures the first fig
     r"(?mi)^\s*(\d{2}[A-Za-z]{3}\d{2})\s+.*?" # Date (e.g., 23Sep23)
@@ -1083,6 +1217,45 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"] + df["AngleBonus"]
     df.drop(columns=["AngleBonus"], inplace=True)
     # --- END ANGLES LOGIC ---
+    
+    # --- SAVANT ENHANCEMENT LOGIC (Jan 2026) ---
+    # NEW: Lasix, Trip Handicapping, Workout Patterns, Pace Figures, Bounce Detection
+    df["SavantBonus"] = 0.0
+    
+    # Extract horse blocks for savant analysis
+    horse_blocks = split_into_horse_chunks(pp_text)
+    block_map = {}
+    for i, name in enumerate(df["Horse"]):
+        if i < len(horse_blocks):
+            block_map[name] = horse_blocks[i]
+    
+    for horse_name, block in block_map.items():
+        savant_bonus = 0.0
+        
+        # 1. Lasix detection
+        savant_bonus += detect_lasix_change(block)
+        
+        # 2. Trip handicapping
+        positions = parse_fractional_positions(block)
+        savant_bonus += calculate_trip_quality(positions, field_size=len(df))
+        
+        # 3. E1/E2/LP pace analysis
+        pace_data = parse_e1_e2_lp_values(block)
+        savant_bonus += analyze_pace_figures(pace_data['e1'], pace_data['e2'], pace_data['lp'])
+        
+        # 4. Bounce detection
+        speed_figs = parse_speed_figures_for_block(block)
+        savant_bonus += detect_bounce_risk(speed_figs)
+        
+        # 5. Workout pattern bonus (from enhanced workout parsing)
+        workout_data = parse_workout_data(block)
+        savant_bonus += workout_data.get('pattern_bonus', 0.0)
+        
+        df.loc[df["Horse"] == horse_name, "SavantBonus"] = savant_bonus
+    
+    df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"] + df["SavantBonus"]
+    df.drop(columns=["SavantBonus"], inplace=True)
+    # --- END SAVANT LOGIC ---
 
     # Apply the final adjustment
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0) # Ensure no NaNs
@@ -1446,33 +1619,81 @@ def calculate_form_trend(recent_finishes: List[int]) -> float:
 
 def parse_workout_data(block: str) -> dict:
     """
-    Extract recent workout information.
-    Returns dict with best_time, num_works, recency
+    ENHANCED: Extract workout information with pattern analysis.
+    Returns dict with best_time, num_works, recency, pattern_bonus
     """
     workouts = {
         'best_time': None,
         'num_recent': 0,
-        'days_since_last': 999
+        'days_since_last': 999,
+        'pattern_bonus': 0.0
     }
 
-    # Pattern for workouts: "4f :48.2" or "5f 1:00.4"
-    pattern = r'(\d)f\s+:?(\d+)[:\.](\d+)'
-
-    times = []
+    # Enhanced pattern: captures bullet (×), distance, time, grade, rank
+    pattern = r'([×]?)(\d{1,2}[A-Z][a-z]{2})\s+\w+\s+(\d+)f\s+\w+\s+([\d:.«©ª¬®¯°¨]+)\s+([HBG]g?)(?:\s+(\d+)/(\d+))?'
+    
+    work_details = []
     for match in re.finditer(pattern, block):
-        distance = int(match.group(1))
-        seconds = int(match.group(2))
-        fraction = int(match.group(3))
-
-        # Normalize to 4f equivalent for comparison
-        total_seconds = seconds + (fraction / 100.0)
-        normalized_time = total_seconds * (4.0 / distance) if distance > 0 else 999
-
-        times.append(normalized_time)
-        workouts['num_recent'] += 1
-
-    if times:
-        workouts['best_time'] = min(times)
+        try:
+            bullet = match.group(1) == '×'
+            distance = int(match.group(3))
+            time_str = match.group(4)
+            grade = match.group(5)
+            rank = int(match.group(6)) if match.group(6) else None
+            total = int(match.group(7)) if match.group(7) else None
+            
+            time_clean = re.sub(r'[«©ª¬®¯°¨]', '', time_str)
+            if ':' in time_clean:
+                parts = time_clean.split(':')
+                time_seconds = float(parts[0]) * 60 + float(parts[1]) if len(parts) == 2 else float(parts[1])
+            else:
+                time_seconds = float(time_clean)
+            
+            normalized_time = time_seconds * (4.0 / distance) if distance > 0 else 999
+            
+            work_details.append({
+                'bullet': bullet,
+                'distance': distance,
+                'time': normalized_time,
+                'grade': grade,
+                'rank': rank,
+                'total': total
+            })
+        except:
+            pass
+    
+    workouts['num_recent'] = len(work_details)
+    
+    if work_details:
+        workouts['best_time'] = min(w['time'] for w in work_details)
+        
+        # SAVANT: Workout pattern analysis
+        bonus = 0.0
+        if len(work_details) >= 3:
+            times = [w['time'] for w in work_details[:3]]
+            if times[0] < times[1] < times[2]:
+                bonus += 0.08  # Sharp pattern
+            elif times[0] > times[1] > times[2]:
+                bonus -= 0.06  # Dull pattern
+        
+        if work_details[0]['bullet']:
+            bonus += 0.03  # Recent bullet
+        
+        if 'g' in work_details[0]['grade'].lower():
+            bonus += 0.03  # Gate work
+        
+        if work_details[0]['rank'] and work_details[0]['total']:
+            percentile = work_details[0]['rank'] / work_details[0]['total']
+            if percentile <= 0.25:
+                bonus += 0.04  # Elite work
+            elif percentile <= 0.50:
+                bonus += 0.02
+        
+        bullet_count = sum(1 for w in work_details[:5] if w['bullet'])
+        if bullet_count >= 2:
+            bonus += 0.05  # Consistent quality
+        
+        workouts['pattern_bonus'] = bonus
 
     return workouts
 
@@ -1738,7 +1959,13 @@ def calculate_comprehensive_class_rating(
         if 'shipper' in angle_text:
             class_rating += 0.2  # Shipper often means stepping up
 
-    # 5. ABSOLUTE PURSE LEVEL BASELINE
+    # 5. CLAIMING PRICE GRANULARITY (if claiming race)
+    claiming_bonus = 0.0
+    if 'clm' in today_type_norm or 'claiming' in today_type_norm:
+        recent_claiming = parse_claiming_prices(horse_block)
+        claiming_bonus = analyze_claiming_price_movement(recent_claiming, today_purse)
+    
+    # 6. ABSOLUTE PURSE LEVEL BASELINE
     # High purse races = better horses overall
     if today_purse >= 100000:
         purse_baseline = 1.0
@@ -1748,6 +1975,8 @@ def calculate_comprehensive_class_rating(
         purse_baseline = 0.0
     else:
         purse_baseline = -0.5
+    
+    class_rating += claiming_bonus
 
     class_rating += purse_baseline
 
