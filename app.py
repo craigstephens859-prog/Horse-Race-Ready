@@ -2046,6 +2046,9 @@ with col_reset:
 if reset_clicked:
     st.session_state["parsed"] = False
     st.session_state["pp_text_cache"] = ""
+    # Clear Classic Report from previous race
+    st.session_state.pop('classic_report_generated', None)
+    st.session_state.pop('classic_report', None)
     _safe_rerun()
 
 if parse_clicked:
@@ -2063,6 +2066,9 @@ if parse_clicked:
         
         st.session_state["pp_text_cache"] = text_now
         st.session_state["parsed"] = True
+        # Clear Classic Report from previous race
+        st.session_state.pop('classic_report_generated', None)
+        st.session_state.pop('classic_report', None)
         _safe_rerun()
 
 if not st.session_state["parsed"]:
@@ -3261,6 +3267,10 @@ else:
         st.info("💡 To generate a new report, click 'Analyze This Race' again below.")
     
     if st.button("Analyze This Race", type="primary", key="analyze_button"):
+        # Clear previous Classic Report before generating new one
+        st.session_state.pop('classic_report_generated', None)
+        st.session_state.pop('classic_report', None)
+        
         with st.spinner("Handicapping Race..."):
             try:
                 # ============================================================
