@@ -2213,11 +2213,40 @@ angles_per_horse: Dict[str, pd.DataFrame] = {}
 pedigree_per_horse: Dict[str, dict] = {}
 figs_per_horse: Dict[str, List[int]] = {}
 
+# Try to use elite parser first for better accuracy
+elite_parser_used = False
+if ELITE_PARSER_AVAILABLE and len(pp_text.strip()) > 100:
+    try:
+        from elite_parser import GoldStandardBRISNETParser
+        parser = GoldStandardBRISNETParser()
+        horses = parser.parse_full_pp(pp_text, debug=False)
+        validation = parser.validate_parsed_data(horses, min_confidence=0.5)
+        
+        if validation.get('overall_confidence', 0.0) >= 0.6:
+            # Use elite parser data
+            elite_parser_used = True
+            for horse_name, horse_obj in horses.items():
+                if horse_name in df_editor["Horse"].values:
+                    # Store speed figures
+                    if horse_obj.speed_figures and len(horse_obj.speed_figures) > 0:
+                        figs_per_horse[horse_name] = horse_obj.speed_figures
+                    
+                    # Note: angles and pedigree can still use traditional parsing
+                    # as elite parser may not have all that data structured the same way
+    except Exception as e:
+        st.caption(f"Elite parser unavailable: {str(e)[:50]}")
+        pass
+
+# Fall back to traditional parsing if elite parser wasn't used or for missing data
 for _post, name, block in split_into_horse_chunks(pp_text):
     if name in df_editor["Horse"].values:
+        # Always parse angles and pedigree traditionally
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
-        figs_per_horse[name] = parse_speed_figures_for_block(block)
+        
+        # Only parse figs if not already parsed by elite parser
+        if name not in figs_per_horse:
+            figs_per_horse[name] = parse_speed_figures_for_block(block)
 
 # Create the figs_df
 figs_data = []
@@ -2618,6 +2647,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         return pd.DataFrame(columns=cols)
 
     # ===== ULTRATHINK V2: Try unified engine first if available =====
+    use_unified_engine = False
     if UNIFIED_ENGINE_AVAILABLE and ELITE_PARSER_AVAILABLE and pp_text and len(pp_text.strip()) > 100:
         try:
             # Parse with elite parser
@@ -2656,6 +2686,22 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         # All horses from unified engine were scratched, fall back to traditional
                         st.warning("⚠️ All unified engine horses are scratched (using fallback)")
                     else:
+                        # Build figs_df from elite parser speed figures
+                        figs_data = []
+                        for _, row in results_df_filtered.iterrows():
+                            horse_name = row['Horse']
+                            # Get speed figures from elite parser's horses dict
+                            if hasattr(parser, 'horses') and horse_name in parser.horses:
+                                horse_obj = parser.horses[horse_name]
+                                if horse_obj.speed_figures and len(horse_obj.speed_figures) > 0:
+                                    figs_data.append({
+                                        "Horse": horse_name,
+                                        "Figures": horse_obj.speed_figures,
+                                        "BestFig": max(horse_obj.speed_figures),
+                                        "AvgTop2": horse_obj.avg_top2
+                                    })
+                        figs_df = pd.DataFrame(figs_data) if figs_data else pd.DataFrame()
+                        
                         # Convert unified engine output to app.py format
                         unified_ratings = pd.DataFrame({
                             "#": range(1, len(results_df_filtered) + 1),
@@ -2669,7 +2715,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             "Cspeed": results_df_filtered.get('Cspeed', 0.0),
                             "Cclass": results_df_filtered.get('Cclass', 0.0),
                             "Cform": results_df_filtered.get('Cform', 0.0),
-                            "Atrack": 0.0,
+                            "Atrack": results_df_filtered.get('A_Track', 0.0),  # Use actual track advantage
                             "Arace": results_df_filtered['Rating'],
                             "R": results_df_filtered['Rating'],
                             "Parsing_Confidence": results_df_filtered.get('Parsing_Confidence', avg_confidence)
@@ -2682,12 +2728,19 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         else:
                             st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%})")
 
-                        return unified_ratings
+                        # Continue to apply enhancements instead of returning early
+                        df_styles = unified_ratings.copy()
+                        use_unified_engine = True
         except Exception as e:
             # Fallback to traditional method if unified engine fails
             st.warning(f"⚠️ Unified engine error (using fallback): {str(e)[:100]}")
+            use_unified_engine = False
             pass
     # ===== End ULTRATHINK V2 integration =====
+
+    # Skip traditional rating calculation if unified engine was used successfully
+    if use_unified_engine:
+        return df_styles
 
     # Ensure class and form columns present
     if "Cclass" not in df_styles.columns:
