@@ -3623,10 +3623,9 @@ else:
         stats = gold_db.get_accuracy_stats()
         pending_races = gold_db.get_pending_races(limit=20)
         
-        # Create tabs with explicit key to ensure proper rendering
+        # Create tabs for Gold High-IQ System
         tab_overview, tab_results, tab_retrain = st.tabs(
-            ["📊 Dashboard", "🏁 Submit Actual Top 5", "🚀 Retrain Model"],
-            key="gold_system_tabs"
+            ["📊 Dashboard", "🏁 Submit Actual Top 5", "🚀 Retrain Model"]
         )
         
         # Tab 1: Dashboard
