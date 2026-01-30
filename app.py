@@ -2959,6 +2959,15 @@ else:
                     st.error("❌ CRITICAL ERROR: Primary ratings dataframe is empty. Check field entries.")
                     st.stop()
                 
+                # GOLD STANDARD FIX: Ensure Post and ML columns are in primary_df for classic report
+                if df_final_field is not None and not df_final_field.empty:
+                    if 'Post' not in primary_df.columns or 'ML' not in primary_df.columns:
+                        # Merge Post and ML from df_final_field into primary_df
+                        post_ml_data = df_final_field[['Horse', 'Post', 'ML']].copy()
+                        primary_df = primary_df.merge(post_ml_data, on='Horse', how='left')
+                        # Update session state with enriched primary_df
+                        st.session_state['primary_d'] = primary_df
+                
                 # VALIDATION: Check required columns exist
                 required_cols = ['Horse', 'R', 'Fair %', 'Fair Odds']
                 missing_cols = [col for col in required_cols if col not in primary_df.columns]
