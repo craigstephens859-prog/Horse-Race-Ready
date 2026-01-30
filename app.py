@@ -1824,8 +1824,8 @@ st.session_state['track_name'] = track_name
 default_surface = st.session_state['surface_type']
 if re.search(r'(?i)\bturf|trf\b', first_line): default_surface = "Turf"
 if re.search(r'(?i)\baw|tap|synth|poly\b', first_line): default_surface = "Synthetic"
-surface_type = st.selectbox("Surface:", ["Dirt","Tur","Synthetic"],
-                            index=["Dirt","Tur","Synthetic"].index(default_surface) if default_surface in ["Dirt", "Tur", "Synthetic"] else 0) # Added check
+surface_type = st.selectbox("Surface:", ["Dirt","Turf","Synthetic"],
+                            index=["Dirt","Turf","Synthetic"].index(default_surface) if default_surface in ["Dirt", "Turf", "Synthetic"] else 0)
 st.session_state['surface_type'] = surface_type
 
 # Condition
