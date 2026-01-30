@@ -861,10 +861,14 @@ def parse_pedigree_snips(block: str) -> dict:
 
 # ========== SAVANT-LEVEL ENHANCEMENTS (Jan 2026) ==========
 
-def parse_claiming_prices(block: str) -> List[int]:
+def parse_claiming_prices(block) -> List[int]:
     """Extract claiming prices from race lines. Returns list of prices (most recent first)."""
     prices = []
-    for m in re.finditer(r'Clm\s+(\d+)', block or ""):
+    if not block:
+        return prices
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
+    for m in re.finditer(r'Clm\s+(\d+)', block_str):
         try:
             prices.append(int(m.group(1)))
         except:
@@ -887,10 +891,14 @@ def analyze_claiming_price_movement(recent_prices: List[int], today_price: int) 
         bonus -= 0.05
     return bonus
 
-def detect_lasix_change(block: str) -> float:
+def detect_lasix_change(block) -> float:
     """SAVANT ANGLE: Lasix/medication changes. Returns bonus from -0.12 to +0.18"""
     bonus = 0.0
-    race_lines = [line for line in (block or "").split('\n') if re.search(r'\d{2}[A-Za-z]{3}\d{2}', line)]
+    if not block:
+        return bonus
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
+    race_lines = [line for line in block_str.split('\n') if re.search(r'\d{2}[A-Za-z]{3}\d{2}', line)]
     lasix_pattern = []
     for line in race_lines[:5]:
         if re.search(r'\s+L\s+\d+\.\d+\s*$', line):
@@ -906,11 +914,15 @@ def detect_lasix_change(block: str) -> float:
             bonus += 0.02  # Consistent user
     return bonus
 
-def parse_fractional_positions(block: str) -> List[List[int]]:
+def parse_fractional_positions(block) -> List[List[int]]:
     """Extract running positions: PP, Start, 1C, 2C, Stretch, Finish."""
     positions = []
+    if not block:
+        return positions
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
     pattern = r'(\d{2}[A-Za-z]{3}\d{2}).*?\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*'
-    for m in re.finditer(pattern, block or "", re.MULTILINE):
+    for m in re.finditer(pattern, block_str, re.MULTILINE):
         try:
             pos = [int(m.group(i)) for i in range(2, 8)]
             positions.append(pos)
@@ -938,10 +950,14 @@ def calculate_trip_quality(positions: List[List[int]], field_size: int = 10) -> 
         bonus += 0.06  # Steadied but recovered
     return bonus
 
-def parse_e1_e2_lp_values(block: str) -> dict:
+def parse_e1_e2_lp_values(block) -> dict:
     """Extract E1, E2, and LP pace figures."""
     e1_vals, e2_vals, lp_vals = [], [], []
-    for m in re.finditer(r'(\d{2,3})\s+(\d{2,3})/\s*(\d{2,3})', block or ""):
+    if not block:
+        return {'e1': e1_vals, 'e2': e2_vals, 'lp': lp_vals}
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
+    for m in re.finditer(r'(\d{2,3})\s+(\d{2,3})/\s*(\d{2,3})', block_str):
         try:
             e1_vals.append(int(m.group(1)))
             e2_vals.append(int(m.group(2)))
@@ -1617,7 +1633,7 @@ def calculate_form_trend(recent_finishes: List[int]) -> float:
     else:  # Consistently poor
         return -1.0
 
-def parse_workout_data(block: str) -> dict:
+def parse_workout_data(block) -> dict:
     """
     ENHANCED: Extract workout information with pattern analysis.
     Returns dict with best_time, num_works, recency, pattern_bonus
@@ -1629,11 +1645,17 @@ def parse_workout_data(block: str) -> dict:
         'pattern_bonus': 0.0
     }
 
+    if not block:
+        return workouts
+    
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
+
     # Enhanced pattern: captures bullet (×), distance, time, grade, rank
     pattern = r'([×]?)(\d{1,2}[A-Z][a-z]{2})\s+\w+\s+(\d+)f\s+\w+\s+([\d:.«©ª¬®¯°¨]+)\s+([HBG]g?)(?:\s+(\d+)/(\d+))?'
     
     work_details = []
-    for match in re.finditer(pattern, block):
+    for match in re.finditer(pattern, block_str):
         try:
             bullet = match.group(1) == '×'
             distance = int(match.group(3))
