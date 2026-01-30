@@ -3869,29 +3869,34 @@ else:
                         # Validation and submit
                         finish_order = [pos1, pos2, pos3, pos4, pos5]
                         
+                        # Show preview
+                        st.markdown("---")
+                        st.markdown("**Preview:**")
+                        preview_parts = []
+                        for i, pos in enumerate(finish_order):
+                            if i == 0:
+                                preview_parts.append(f"🥇 {horse_names_dict[pos]}")
+                            elif i == 1:
+                                preview_parts.append(f"🥈 {horse_names_dict[pos]}")
+                            elif i == 2:
+                                preview_parts.append(f"🥉 {horse_names_dict[pos]}")
+                            elif i == 3:
+                                preview_parts.append(f"4th {horse_names_dict[pos]}")
+                            else:
+                                preview_parts.append(f"5th {horse_names_dict[pos]}")
+                        preview_text = " → ".join(preview_parts)
+                        st.info(preview_text)
+                        
+                        # Validation check
                         if len(set(finish_order)) != 5:
                             st.error("❌ Each position must be unique! Please select 5 different horses.")
-                        else:
-                            # Show preview
-                            st.markdown("---")
-                            st.markdown("**Preview:**")
-                            preview_parts = []
-                            for i, pos in enumerate(finish_order):
-                                if i == 0:
-                                    preview_parts.append(f"🥇 {horse_names_dict[pos]}")
-                                elif i == 1:
-                                    preview_parts.append(f"🥈 {horse_names_dict[pos]}")
-                                elif i == 2:
-                                    preview_parts.append(f"🥉 {horse_names_dict[pos]}")
-                                elif i == 3:
-                                    preview_parts.append(f"4th {horse_names_dict[pos]}")
-                                else:
-                                    preview_parts.append(f"5th {horse_names_dict[pos]}")
-                            preview_text = " → ".join(preview_parts)
-                            st.info(preview_text)
-                            
-                            # Submit button
-                            if st.button("✅ Submit Top 5 Results", type="primary", key=f"submit_{race_id}"):
+                        
+                        # Submit button (always show, but validate before submitting)
+                        if st.button("✅ Submit Top 5 Results", type="primary", key=f"submit_{race_id}"):
+                            # Re-validate on submit
+                            if len(set(finish_order)) != 5:
+                                st.error("❌ Cannot submit: Each position must be unique!")
+                            else:
                                 with st.spinner("Saving results..."):
                                     success = gold_db.submit_race_results(
                                         race_id=race_id,
