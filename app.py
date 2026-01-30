@@ -2096,6 +2096,14 @@ if SECURITY_VALIDATORS_AVAILABLE and track_name:
 
 st.session_state['track_name'] = track_name
 
+# Race Number
+if 'race_num' not in st.session_state:
+    st.session_state['race_num'] = 1
+auto_race_num = detect_race_number(pp_text)
+default_race_num = int(auto_race_num) if auto_race_num else st.session_state['race_num']
+race_num = st.number_input("Race Number:", min_value=1, max_value=15, step=1, value=default_race_num)
+st.session_state['race_num'] = race_num
+
 # Surface auto from header, but allow override
 default_surface = st.session_state['surface_type']
 if re.search(r'(?i)\bturf|trf\b', first_line): default_surface = "Turf"
@@ -2139,6 +2147,18 @@ distance_txt = st.selectbox("Distance:", DISTANCE_OPTIONS, index=idx)
 st.session_state['distance_txt'] = distance_txt
 
 # Purse
+def detect_race_number(pp_text: str) -> Optional[int]:
+    """Extract race number from PP text header (e.g., 'Race 6')."""
+    s = pp_text or ""
+    # Look for "Race N" pattern in first few lines
+    m = re.search(r'(?mi)\bRace\s+(\d+)\b', s[:500])
+    if m:
+        try:
+            return int(m.group(1))
+        except:
+            pass
+    return None
+
 def detect_purse_amount(pp_text: str) -> Optional[int]:
     s = pp_text or ""
     m = re.search(r'(?mi)\bPurse\b[^$\n\r]*\$\s*([\d,]+)', s)
@@ -3438,11 +3458,13 @@ else:
                 st.session_state['strategy_report'] = strategy_report_md
 
                 # --- 3. Update the LLM Prompt ---
+                race_num = st.session_state.get('race_num', 1)
                 prompt = f"""
 Act as a professional horse racing analyst writing a clear, concise, and actionable betting report suitable for handicappers of all levels.
 
 --- RACE CONTEXT ---
 - Track: {track_name}
+- Race Number: {race_num}
 - Surface: {surface_type} ({condition_txt}) • Distance: {distance_txt}
 - Race Type: {race_type_detected}
 - Purse: ${purse_val:,}
