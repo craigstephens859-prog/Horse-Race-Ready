@@ -2685,8 +2685,27 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
                 if not results_df.empty:
                     # Filter to only include horses that are NOT scratched (i.e., in df_styles)
-                    horses_in_field = set(df_styles['Horse'].tolist())
-                    results_df_filtered = results_df[results_df['Horse'].isin(horses_in_field)].copy()
+                    # Use normalized names for matching to handle apostrophes and spacing differences
+                    def normalize_horse_name(name):
+                        """Normalize horse name for matching: remove apostrophes, extra spaces, lowercase"""
+                        return ' '.join(str(name).replace("'", "").replace("`", "").lower().split())
+                    
+                    # Build mapping of normalized names to original names from Section A
+                    section_a_names = {normalize_horse_name(h): h for h in df_styles['Horse'].tolist()}
+                    
+                    # Filter and rename horses to match Section A names
+                    results_df_filtered = results_df.copy()
+                    matched_horses = []
+                    for idx, row in results_df_filtered.iterrows():
+                        parsed_name = row['Horse']
+                        normalized = normalize_horse_name(parsed_name)
+                        if normalized in section_a_names:
+                            # Use the exact name from Section A
+                            results_df_filtered.at[idx, 'Horse'] = section_a_names[normalized]
+                            matched_horses.append(idx)
+                    
+                    # Keep only matched horses
+                    results_df_filtered = results_df_filtered.loc[matched_horses].copy()
                     
                     if results_df_filtered.empty:
                         # All horses from unified engine were scratched, fall back to traditional
