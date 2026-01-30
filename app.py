@@ -3359,24 +3359,38 @@ else:
             - Model predictions (probabilities, ratings, confidence)
             - Race metadata (track, conditions, purse, etc.)
             
-            After the race completes, submit the actual top 5 finishers.
+            After the race completes, submit the actual top 5 finishers below.
             The system learns from real outcomes to reach 90%+ accuracy.
+            
+            🔒 **Data Persistence:** All analyzed races are permanently saved to the database. 
+            You can safely close your browser and return anytime - your data persists!
             """)
+            
+            # Calculate total analyzed races (completed + pending)
+            completed_races = stats.get('total_races', 0)
+            total_analyzed = completed_races + len(pending_races)
             
             # Metrics
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Completed Races", stats.get('total_races', 0))
+                st.metric("Total Analyzed", total_analyzed, help="All races saved (completed + pending results)")
             with col2:
-                ready = stats.get('total_races', 0) >= 50
-                st.metric("Training Ready", "✅ Yes" if ready else "⏳ Need 50+")
+                st.metric("With Results", completed_races, help="Races with actual results entered - used for accuracy tracking")
             with col3:
-                st.metric("Pending Results", len(pending_races))
+                st.metric("Pending Results", len(pending_races), help="Races analyzed but awaiting actual finishers")
             with col4:
-                if stats.get('total_races', 0) > 0:
+                if completed_races > 0:
                     st.metric("Winner Accuracy", f"{stats.get('winner_accuracy', 0.0):.1%}")
                 else:
-                    st.metric("Winner Accuracy", "N/A")
+                    st.metric("Winner Accuracy", "N/A", help="Submit results to track accuracy")
+            
+            # Training readiness indicator
+            st.markdown("#### Training Readiness")
+            ready = completed_races >= 50
+            if ready:
+                st.success(f"✅ Ready to retrain! You have {completed_races} completed races.")
+            else:
+                st.info(f"⏳ Need 50 completed races to retrain model. Current progress: {completed_races}/50")
             
             # Progress bars
             st.markdown("#### Progress to Milestones")
@@ -3389,10 +3403,10 @@ else:
             ]
             
             for target, label, expected_acc in milestones:
-                progress = min(stats.get('total_races', 0) / target, 1.0)
+                progress = min(completed_races / target, 1.0)
                 st.progress(
                     progress, 
-                    text=f"{label} ({expected_acc} expected): {stats.get('total_races', 0)}/{target} races"
+                    text=f"{label} ({expected_acc} expected): {completed_races}/{target} races"
                 )
             
             # System performance
