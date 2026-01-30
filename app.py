@@ -835,26 +835,34 @@ def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
 ANGLE_LINE_RE = re.compile(
     r'(?mi)^\s*(\d{4}\s+)?(1st\s*time\s*str|Debut\s*MdnSpWt|Maiden\s*Sp\s*Wt|2nd\s*career\s*race|Turf\s*to\s*Dirt|Dirt\s*to\s*Turf|Shipper|Blinkers\s*(?:on|off)|(?:\d+(?:-\d+)?)\s*days?Away|JKYw/\s*Sprints|JKYw/\s*Trn\s*L(?:30|45|60)\b|JKYw/\s*[EPS]|JKYw/\s*NA\s*types)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$'
 )
-def parse_angles_for_block(block: str) -> pd.DataFrame:
+def parse_angles_for_block(block) -> pd.DataFrame:
     rows = []
-    for m in ANGLE_LINE_RE.finditer(block or ""):
+    if not block:
+        return pd.DataFrame(rows)
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
+    for m in ANGLE_LINE_RE.finditer(block_str):
         _yr, cat, starts, win, itm, roi = m.groups()
         rows.append({"Category": re.sub(r"\s+", " ", cat.strip()),
                      "Starts": int(starts), "Win%": float(win),
                      "ITM%": float(itm), "ROI": float(roi)})
     return pd.DataFrame(rows)
 
-def parse_pedigree_snips(block: str) -> dict:
+def parse_pedigree_snips(block) -> dict:
     out = {"sire_awd": np.nan, "sire_1st": np.nan,
            "damsire_awd": np.nan, "damsire_1st": np.nan,
            "dam_dpi": np.nan}
-    s = re.search(r'(?mi)^\s*Sire\s*Stats:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi', block or "")
+    if not block:
+        return out
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
+    s = re.search(r'(?mi)^\s*Sire\s*Stats:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi', block_str)
     if s:
         out["sire_awd"] = float(s.group(1)); out["sire_1st"] = float(s.group(3))
-    ds = re.search(r'(?mi)^\s*Dam\'s Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi', block or "")
+    ds = re.search(r'(?mi)^\s*Dam\'s Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi', block_str)
     if ds:
         out["damsire_awd"] = float(ds.group(1)); out["damsire_1st"] = float(ds.group(3))
-    d = re.search(r'(?mi)^\s*Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%', block or "")
+    d = re.search(r'(?mi)^\s*Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%', block_str)
     if d:
         out["dam_dpi"] = float(d.group(1))
     return out
@@ -1016,15 +1024,18 @@ SPEED_FIG_RE = re.compile(
     r".*?\s+(\d{2,3})\s+" # The first 2-3 digit number after the type
 )
 
-def parse_speed_figures_for_block(block: str) -> List[int]:
+def parse_speed_figures_for_block(block) -> List[int]:
     """
     Parses a horse's PP text block and extracts all main speed figures.
     """
     figs = []
     if not block:
         return figs
+    
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
 
-    for m in SPEED_FIG_RE.finditer(block):
+    for m in SPEED_FIG_RE.finditer(block_str):
         try:
             # The speed figure is the third capture group
             fig_val = int(m.group(3))
@@ -1548,19 +1559,23 @@ def calculate_final_rating(race_type,
 
 # ===================== Form Cycle & Recency Analysis =====================
 
-def parse_recent_races_detailed(block: str) -> List[dict]:
+def parse_recent_races_detailed(block) -> List[dict]:
     """
     Extract detailed recent race history with dates, finishes, beaten lengths.
     Returns list of dicts with date, finish, beaten_lengths, days_ago
     """
     races = []
+    if not block:
+        return races
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
     # Pattern: date, finish position, beaten lengths
     # Example: "23Dec23 Aqu 3rd 2¼"
     pattern = r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+.*?(\d+)(?:st|nd|rd|th)\s*(\d+)?'
 
     today = datetime.now()
 
-    for match in re.finditer(pattern, block):
+    for match in re.finditer(pattern, block_str):
         date_str = match.group(1)
         finish = match.group(2)
 
@@ -1862,16 +1877,20 @@ def calculate_form_cycle_rating(
 
 # ===================== Class Rating Calculator (Comprehensive) =====================
 
-def parse_recent_class_levels(block: str) -> List[dict]:
+def parse_recent_class_levels(block) -> List[dict]:
     """
     Parse recent races to extract class progression data.
     Returns list of dicts with purse, race_type, finish_position
     """
     races = []
+    if not block:
+        return races
+    # Ensure block is string
+    block_str = str(block) if not isinstance(block, str) else block
     # Pattern: date track race_type purse  (e.g., "23Sep23 Bel Alw 85000")
     pattern = r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+\s+(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G1|G2|G3|Hcp)\s+(\d+)'
 
-    for match in re.finditer(pattern, block):
+    for match in re.finditer(pattern, block_str):
         race_type = match.group(2)
         purse_str = match.group(3)
         try:
