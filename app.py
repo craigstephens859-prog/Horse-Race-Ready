@@ -3374,6 +3374,19 @@ else:
                         df_final_field["ML"].values,
                         index=df_final_field["Horse"]
                     ).to_dict()
+                    
+                    # VALIDATION: Ensure all horses in primary_df have post/ML mappings
+                    missing_horses = []
+                    for horse in primary_df["Horse"]:
+                        if horse not in name_to_post:
+                            missing_horses.append(horse)
+                    
+                    if missing_horses:
+                        st.error(f"❌ CRITICAL ERROR: Horse name mismatch between ratings and Section A")
+                        st.error(f"Missing horses: {', '.join(missing_horses)}")
+                        st.error("This usually means horse names were modified after Section A")
+                        st.stop()
+                        
                 except KeyError as e:
                     st.error(f"❌ CRITICAL ERROR: Missing required column in final field: {e}")
                     st.stop()
