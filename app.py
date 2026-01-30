@@ -3567,10 +3567,10 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                                     angle_debut = 1.0
                             
                             horse_dict = {
-                                'program_number': int(safe_float(row.get('Post', idx + 1), idx + 1)),
+                                'program_number': int(safe_float(name_to_post.get(horse_name, idx + 1), idx + 1)),
                                 'horse_name': horse_name,
-                                'post_position': int(safe_float(row.get('Post', idx + 1), idx + 1)),
-                                'morning_line_odds': safe_float(row.get('ML', 99.0), 99.0),
+                                'post_position': int(safe_float(name_to_post.get(horse_name, idx + 1), idx + 1)),
+                                'morning_line_odds': safe_float(name_to_ml.get(horse_name, '99'), 99.0),
                                 'jockey': str(row.get('Jockey', '')),
                                 'trainer': str(row.get('Trainer', '')),
                                 'owner': str(row.get('Owner', '')),
