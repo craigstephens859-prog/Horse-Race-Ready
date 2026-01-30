@@ -3865,7 +3865,9 @@ else:
                                 "Winner",
                                 program_numbers,
                                 key=f"pos1_{race_id}",
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                                index=0,
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
+                                label_visibility="collapsed"
                             )
                         
                         with col2:
@@ -3875,7 +3877,8 @@ else:
                                 program_numbers,
                                 key=f"pos2_{race_id}",
                                 index=min(1, len(program_numbers)-1),
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
+                                label_visibility="collapsed"
                             )
                         
                         with col3:
@@ -3885,7 +3888,8 @@ else:
                                 program_numbers,
                                 key=f"pos3_{race_id}",
                                 index=min(2, len(program_numbers)-1),
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
+                                label_visibility="collapsed"
                             )
                         
                         with col4:
@@ -3895,7 +3899,8 @@ else:
                                 program_numbers,
                                 key=f"pos4_{race_id}",
                                 index=min(3, len(program_numbers)-1),
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
+                                label_visibility="collapsed"
                             )
                         
                         with col5:
@@ -3905,7 +3910,8 @@ else:
                                 program_numbers,
                                 key=f"pos5_{race_id}",
                                 index=min(4, len(program_numbers)-1),
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}"
+                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
+                                label_visibility="collapsed"
                             )
                         
                         # Validation and submit
