@@ -2038,6 +2038,42 @@ def calculate_comprehensive_class_rating(
 
 # ===================== 1. Paste PPs & Parse (durable) =====================
 
+# Workflow Progress Indicator
+step1_done = st.session_state.get("parsed", False)
+step2_done = 'primary_d' in st.session_state and 'primary_probs' in st.session_state
+step3_done = st.session_state.get('classic_report_generated', False)
+
+progress_col1, progress_col2, progress_col3, progress_col4 = st.columns(4)
+with progress_col1:
+    if step1_done:
+        st.success("✅ Step 1: Parsed")
+    else:
+        st.info("⏳ Step 1: Parse Race")
+with progress_col2:
+    if step2_done:
+        st.success("✅ Step 2: Rated")
+    else:
+        st.info("⏳ Step 2: Set Biases")
+with progress_col3:
+    if step3_done:
+        st.success("✅ Step 3: Analyzed")
+    else:
+        st.info("⏳ Step 3: Generate Report")
+with progress_col4:
+    if GOLD_DB_AVAILABLE:
+        try:
+            stats = gold_db.get_accuracy_stats()
+            saved_count = stats.get('total_races', 0) + len(gold_db.get_pending_races(limit=1000))
+            if saved_count > 0:
+                st.success(f"💾 {saved_count} Saved")
+            else:
+                st.info("💾 No Races Yet")
+        except:
+            st.info("💾 Database Ready")
+    else:
+        st.info("💾 Database Ready")
+
+st.markdown("---")
 st.header("1. Paste PPs & Parse")
 
 pp_text_widget = st.text_area(
@@ -2208,7 +2244,9 @@ st.session_state['race_type'] = race_type_detected  # Store for Classic Report
 
 # ===================== A. Race Setup: Scratches, ML & Styles =====================
 
+st.markdown("---")
 st.header("A. Race Setup: Scratches, ML & Live Odds, Styles")
+st.caption("📝 Review auto-detected data below. Edit any horse's ML odds or style, then check 'Scratch?' to remove horses.")
 
 df_styles = extract_horses_and_styles(pp_text)
 if df_styles.empty:
@@ -2438,7 +2476,9 @@ df_final_field["Cform"] = Cform_vals
 
 # ===================== B. Bias-Adjusted Ratings =====================
 
+st.markdown("---")
 st.header("B. Bias-Adjusted Ratings")
+st.caption("⚙️ Select your strategy profile and bias preferences. Ratings calculate automatically based on your selections.")
 b_col1, b_col2, b_col3 = st.columns(3)
 with b_col1:
     strategy_profile = st.selectbox(
@@ -3057,7 +3097,9 @@ else:
 
 # ===================== C. Overlays & Betting Strategy =====================
 
+st.markdown("---")
 st.header("C. Overlays Table")
+st.caption("💰 Overlays = horses whose fair odds are better than morning line odds. These represent betting value.")
 
 # Offered odds map
 offered_odds_map = {}
@@ -3271,7 +3313,9 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     return final_report
 
 
+st.markdown("---")
 st.header("D. Classic Report")
+st.caption("📊 Generate a comprehensive handicapping analysis with pace projections, contender groups, and betting strategy blueprints.")
 
 # Only show button if race has been parsed
 if not st.session_state.get("parsed", False):
@@ -3502,6 +3546,7 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                 st.session_state['classic_report'] = report
                 st.session_state['classic_report_generated'] = True
                 
+                st.success("✅ Analysis Complete! See full report below.")
                 st.markdown(report)
 
                 # ---- Save to disk (optional) ----
