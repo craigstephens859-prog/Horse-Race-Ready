@@ -698,6 +698,33 @@ TRACK_BIAS_PROFILES = {
             "8f+":    {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                          "post":     {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
         }
+    },
+    # Default fallback profile for tracks not specifically listed
+    "_DEFAULT": {
+        "Dirt": {
+            "≤6f":    {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                         "post":     {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.08, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                         "post":     {"rail": 0.03, "inner": 0.03, "mid": 0.00, "outside": -0.03}},
+            "8f+":    {"runstyle": {"E": 0.03, "E/P": 0.03, "P": 0.03, "S": -0.03},
+                         "post":     {"rail": 0.03, "inner": 0.03, "mid": 0.00, "outside": -0.03}}
+        },
+        "Turf": {
+            "≤6f":    {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.08},
+                         "post":     {"rail": 0.00, "inner": 0.03, "mid": 0.00, "outside": -0.03}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.03, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.03, "mid": 0.03, "outside": -0.03}},
+            "8f+":    {"runstyle": {"E": 0.00, "E/P": 0.03, "P": 0.05, "S": -0.03},
+                         "post":     {"rail": 0.00, "inner": 0.03, "mid": 0.03, "outside": -0.03}}
+        },
+        "Synthetic": {
+            "≤6f":    {"runstyle": {"E": 0.08, "E/P": 0.05, "P": 0.03, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.03, "outside": 0.00}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.03, "S": -0.05},
+                         "post":     {"rail": 0.00, "inner": 0.00, "mid": 0.03, "outside": 0.00}},
+            "8f+":    {"runstyle": {"E": 0.03, "E/P": 0.05, "P": 0.05, "S": -0.03},
+                         "post":     {"rail": 0.00, "inner": 0.03, "mid": 0.03, "outside": 0.00}}
+        }
     }
 }
 
@@ -734,11 +761,22 @@ def _get_track_bias_delta(track_name: str, surface_type: str, distance_txt: str,
     canon = _canonical_track(track_name)
     surf  = (surface_type or "Dirt").strip().title()
     buck  = distance_bucket(distance_txt)  # ≤6f / 6.5–7f / 8f+
+    
+    # Try to get specific track profile first
     cfg   = (TRACK_BIAS_PROFILES.get(canon, {})
                                 .get(surf, {})
                                 .get(buck, {}))
+    
+    # If no specific profile found, use default fallback
+    if not cfg:
+        cfg = (TRACK_BIAS_PROFILES.get("_DEFAULT", {})
+                                  .get(surf, {})
+                                  .get(buck, {}))
+    
+    # If still no config (shouldn't happen with default), return 0
     if not cfg:
         return 0.0
+    
     s_norm = _style_norm(style)
     runstyle_delta = float((cfg.get("runstyle", {}) or {}).get(s_norm, 0.0))
     post_delta     = float((cfg.get("post", {}) or {}).get(_post_bucket(post_str), 0.0))
