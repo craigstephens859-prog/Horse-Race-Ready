@@ -3017,6 +3017,11 @@ final_weights = apply_purse_scaling(racetype_weights, purse_val)
 
 for i, (rbias, pbias) in enumerate(scenarios):
     with tabs[i]:
+        # Debug info for track bias detection
+        canon_track = _canonical_track(track_name)
+        dist_bucket = distance_bucket(distance_txt)
+        st.caption(f"🔍 Track Bias Detection: {canon_track} • {surface_type} • {dist_bucket}")
+        
         ratings_df = compute_bias_ratings(
             df_styles=df_final_field.copy(), # Pass a copy to avoid modifying original
             surface_type=surface_type,
