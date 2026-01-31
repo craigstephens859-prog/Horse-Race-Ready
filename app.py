@@ -163,7 +163,7 @@ def call_openai_messages(messages: List[Dict]) -> str:
     # SECURITY: Check rate limit before making API call
     if openai_rate_limiter is not None and not openai_rate_limiter.allow_call():
         return "(Rate limit exceeded. Please wait before generating another report. Max 10 reports per minute.)"
-    
+
     if not OPENAI_API_KEY or (client is None and openai is None):
         return "(Narrative generation disabled — set OPENAI_API_KEY as environment variable)"
     if use_sdk_v1 and client is not None:
@@ -761,22 +761,22 @@ def _get_track_bias_delta(track_name: str, surface_type: str, distance_txt: str,
     canon = _canonical_track(track_name)
     surf  = (surface_type or "Dirt").strip().title()
     buck  = distance_bucket(distance_txt)  # ≤6f / 6.5–7f / 8f+
-    
+
     # Try to get specific track profile first
     cfg   = (TRACK_BIAS_PROFILES.get(canon, {})
                                 .get(surf, {})
                                 .get(buck, {}))
-    
+
     # If no specific profile found, use default fallback
     if not cfg:
         cfg = (TRACK_BIAS_PROFILES.get("_DEFAULT", {})
                                   .get(surf, {})
                                   .get(buck, {}))
-    
+
     # If still no config (shouldn't happen with default), return 0
     if not cfg:
         return 0.0
-    
+
     s_norm = _style_norm(style)
     runstyle_delta = float((cfg.get("runstyle", {}) or {}).get(s_norm, 0.0))
     post_delta     = float((cfg.get("post", {}) or {}).get(_post_bucket(post_str), 0.0))
@@ -1081,7 +1081,7 @@ def parse_speed_figures_for_block(block) -> List[int]:
     figs = []
     if not block:
         return figs
-    
+
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -1102,7 +1102,7 @@ def parse_speed_figures_for_block(block) -> List[int]:
 def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
     """
     MATHEMATICALLY RIGOROUS softmax with overflow protection and validation.
-    
+
     Guarantees:
     1. No NaN/Inf in output
     2. Probabilities sum to exactly 1.0 (within floating point precision)
@@ -1112,7 +1112,7 @@ def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.
     # VALIDATION: Empty array
     if ratings.size == 0:
         return np.array([])
-    
+
     # VALIDATION: Remove NaN/Inf from input
     ratings_clean = np.array(ratings, dtype=float)
     if np.any(~np.isfinite(ratings_clean)):
@@ -1123,48 +1123,48 @@ def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.
         else:
             median_val = 0.0
         ratings_clean[~finite_mask] = median_val
-    
+
     # GOLD STANDARD: Temperature parameter with strict bounds
     _tau = tau if tau is not None else MODEL_CONFIG['softmax_tau']
     _tau = max(_tau, 1e-6)  # Prevent division by zero
     _tau = min(_tau, 1e6)   # Prevent numerical instability
-    
+
     # NUMERICAL STABILITY: Subtract max before exp (prevents overflow)
     x = ratings_clean / _tau
     x_max = np.max(x)
     x_shifted = x - x_max
-    
+
     # OVERFLOW PROTECTION: Clip extreme values
     x_shifted = np.clip(x_shifted, -700, 700)  # exp(±700) is within float64 range
-    
+
     # COMPUTE: Exponential
     ex = np.exp(x_shifted)
-    
+
     # VALIDATION: Check for zero sum (should never happen with above protections)
     ex_sum = np.sum(ex)
     if ex_sum <= 1e-12:
         # Fallback: uniform distribution
         return np.ones_like(ex) / len(ex)
-    
+
     # NORMALIZE: Guaranteed sum to 1.0
     p = ex / ex_sum
-    
+
     # FINAL VALIDATION: Ensure all values are valid probabilities
     p = np.clip(p, 0.0, 1.0)
-    
+
     # GOLD STANDARD: Exact normalization (eliminate floating point drift)
     p_sum = np.sum(p)
     if p_sum > 0:
         p = p / p_sum
-    
+
     return p
 
 def compute_ppi(df_styles: pd.DataFrame) -> dict:
     """
     GOLD STANDARD Pace Pressure Index calculation with mathematical rigor.
-    
+
     PPI Formula: (E + EP - P - S) * multiplier / field_size
-    
+
     Guarantees:
     1. Always returns valid numeric PPI
     2. Per-horse tailwinds are bounded and validated
@@ -1174,57 +1174,57 @@ def compute_ppi(df_styles: pd.DataFrame) -> dict:
     # VALIDATION: Input checks
     if df_styles is None or df_styles.empty:
         return {"ppi": 0.0, "by_horse": {}}
-    
+
     # EXTRACT: Styles, names, strengths with validation
     styles, names, strengths = [], [], []
     for _, row in df_styles.iterrows():
         stl = row.get("Style") or row.get("OverrideStyle") or row.get("DetectedStyle") or ""
         stl = _normalize_style(stl)
         styles.append(stl)
-        
+
         # VALIDATION: Ensure horse name exists
         horse_name = row.get("Horse", "")
         if not horse_name or pd.isna(horse_name):
             horse_name = f"Unknown_{len(names)+1}"
         names.append(str(horse_name))
-        
+
         strengths.append(row.get("StyleStrength", "Solid"))
-    
+
     # COUNT: Style distribution
     counts = {"E": 0, "E/P": 0, "P": 0, "S": 0}
     for stl in styles:
         if stl in counts:
             counts[stl] += 1
-    
+
     # VALIDATION: Prevent division by zero
     total = sum(counts.values())
     if total == 0:
         return {"ppi": 0.0, "by_horse": {}}
-    
+
     # GOLD STANDARD: PPI calculation with bounds checking
     ppi_multiplier = MODEL_CONFIG.get('ppi_multiplier', 1.0)
     ppi_numerator = (counts["E"] + counts["E/P"] - counts["P"] - counts["S"])
     ppi_val = (ppi_numerator * ppi_multiplier) / total
-    
+
     # VALIDATION: Ensure PPI is finite
     if not np.isfinite(ppi_val):
         ppi_val = 0.0
-    
+
     # COMPUTE: Per-horse tailwinds with validation
     by_horse = {}
     strength_weights = MODEL_CONFIG.get('style_strength_weights', {})
     tailwind_factor = MODEL_CONFIG.get('ppi_tailwind_factor', 1.0)
-    
+
     # VALIDATION: Ensure factors are finite
     if not np.isfinite(tailwind_factor):
         tailwind_factor = 1.0
-    
+
     for stl, nm, strength in zip(styles, names, strengths):
         # VALIDATION: Get weight with fallback
         wt = strength_weights.get(str(strength), 0.8)
         if not np.isfinite(wt) or wt < 0:
             wt = 0.8
-        
+
         # COMPUTE: Tailwind adjustment
         if stl in ("E", "E/P"):
             tailwind = tailwind_factor * wt * ppi_val
@@ -1232,14 +1232,14 @@ def compute_ppi(df_styles: pd.DataFrame) -> dict:
             tailwind = -tailwind_factor * wt * ppi_val
         else:
             tailwind = 0.0
-        
+
         # VALIDATION: Ensure finite and bounded
         if not np.isfinite(tailwind):
             tailwind = 0.0
         tailwind = np.clip(tailwind, -10.0, 10.0)  # Reasonable bounds
-        
+
         by_horse[nm] = round(tailwind, 3)
-    
+
     return {"ppi": round(ppi_val, 3), "by_horse": by_horse}
 
 def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: Dict[str,float],
@@ -1294,42 +1294,42 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"] + df["AngleBonus"]
     df.drop(columns=["AngleBonus"], inplace=True)
     # --- END ANGLES LOGIC ---
-    
+
     # --- SAVANT ENHANCEMENT LOGIC (Jan 2026) ---
     # NEW: Lasix, Trip Handicapping, Workout Patterns, Pace Figures, Bounce Detection
     df["SavantBonus"] = 0.0
-    
+
     # Extract horse blocks for savant analysis
     horse_blocks = split_into_horse_chunks(pp_text)
     block_map = {}
     for i, name in enumerate(df["Horse"]):
         if i < len(horse_blocks):
             block_map[name] = horse_blocks[i]
-    
+
     for horse_name, block in block_map.items():
         savant_bonus = 0.0
-        
+
         # 1. Lasix detection
         savant_bonus += detect_lasix_change(block)
-        
+
         # 2. Trip handicapping
         positions = parse_fractional_positions(block)
         savant_bonus += calculate_trip_quality(positions, field_size=len(df))
-        
+
         # 3. E1/E2/LP pace analysis
         pace_data = parse_e1_e2_lp_values(block)
         savant_bonus += analyze_pace_figures(pace_data['e1'], pace_data['e2'], pace_data['lp'])
-        
+
         # 4. Bounce detection
         speed_figs = parse_speed_figures_for_block(block)
         savant_bonus += detect_bounce_risk(speed_figs)
-        
+
         # 5. Workout pattern bonus (from enhanced workout parsing)
         workout_data = parse_workout_data(block)
         savant_bonus += workout_data.get('pattern_bonus', 0.0)
-        
+
         df.loc[df["Horse"] == horse_name, "SavantBonus"] = savant_bonus
-    
+
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"] + df["SavantBonus"]
     df.drop(columns=["SavantBonus"], inplace=True)
     # --- END SAVANT LOGIC ---
@@ -1374,7 +1374,7 @@ def str_to_decimal_odds(s: str) -> Optional[float]:
 def overlay_table(fair_probs: Dict[str,float], offered: Dict[str,float]) -> pd.DataFrame:
     """
     GOLD STANDARD overlay calculation with mathematical rigor.
-    
+
     Guarantees:
     1. No division by zero
     2. All calculations are finite
@@ -1384,41 +1384,41 @@ def overlay_table(fair_probs: Dict[str,float], offered: Dict[str,float]) -> pd.D
     # VALIDATION: Input checks
     if not fair_probs or not offered:
         return pd.DataFrame()
-    
+
     rows = []
     for h, p in fair_probs.items():
         # VALIDATION: Ensure probability is valid
         if not np.isfinite(p) or p < 0 or p > 1:
             continue
-        
+
         off_dec = offered.get(h)
         if off_dec is None:
             continue
-        
+
         # VALIDATION: Ensure odds are positive and finite
         if not np.isfinite(off_dec) or off_dec <= 0:
             continue
-        
+
         # GOLD STANDARD: Safe probability calculation
         if off_dec > 1e-9:
             off_prob = 1.0 / off_dec
         else:
             off_prob = 0.0
-        
+
         # VALIDATION: Ensure off_prob is valid
         if not np.isfinite(off_prob):
             off_prob = 0.0
         off_prob = min(off_prob, 1.0)  # Cap at 100%
-        
+
         # GOLD STANDARD: Expected Value calculation
         # EV = (odds × win_prob) - (1 × loss_prob)
         # EV = (off_dec - 1) × p - (1 - p)
         ev = (off_dec - 1) * p - (1 - p)
-        
+
         # VALIDATION: Ensure EV is finite
         if not np.isfinite(ev):
             ev = 0.0
-        
+
         rows.append({
             "Horse": h,
             "Fair %": round(p * 100, 2),
@@ -1429,7 +1429,7 @@ def overlay_table(fair_probs: Dict[str,float], offered: Dict[str,float]) -> pd.D
             "EV per $1": round(ev, 3),
             "Overlay?": "YES" if off_prob < p else "NO"
         })
-    
+
     return pd.DataFrame(rows)
 
 # ---------- Exotics (Harville + bias anchors) ----------
@@ -1712,13 +1712,13 @@ def parse_workout_data(block) -> dict:
 
     if not block:
         return workouts
-    
+
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
 
     # Enhanced pattern: captures bullet (×), distance, time, grade, rank
     pattern = r'([×]?)(\d{1,2}[A-Z][a-z]{2})\s+\w+\s+(\d+)f\s+\w+\s+([\d:.«©ª¬®¯°¨]+)\s+([HBG]g?)(?:\s+(\d+)/(\d+))?'
-    
+
     work_details = []
     for match in re.finditer(pattern, block_str):
         try:
@@ -1728,16 +1728,16 @@ def parse_workout_data(block) -> dict:
             grade = match.group(5)
             rank = int(match.group(6)) if match.group(6) else None
             total = int(match.group(7)) if match.group(7) else None
-            
+
             time_clean = re.sub(r'[«©ª¬®¯°¨]', '', time_str)
             if ':' in time_clean:
                 parts = time_clean.split(':')
                 time_seconds = float(parts[0]) * 60 + float(parts[1]) if len(parts) == 2 else float(parts[1])
             else:
                 time_seconds = float(time_clean)
-            
+
             normalized_time = time_seconds * (4.0 / distance) if distance > 0 else 999
-            
+
             work_details.append({
                 'bullet': bullet,
                 'distance': distance,
@@ -1748,12 +1748,12 @@ def parse_workout_data(block) -> dict:
             })
         except:
             pass
-    
+
     workouts['num_recent'] = len(work_details)
-    
+
     if work_details:
         workouts['best_time'] = min(w['time'] for w in work_details)
-        
+
         # SAVANT: Workout pattern analysis
         bonus = 0.0
         if len(work_details) >= 3:
@@ -1762,24 +1762,24 @@ def parse_workout_data(block) -> dict:
                 bonus += 0.08  # Sharp pattern
             elif times[0] > times[1] > times[2]:
                 bonus -= 0.06  # Dull pattern
-        
+
         if work_details[0]['bullet']:
             bonus += 0.03  # Recent bullet
-        
+
         if 'g' in work_details[0]['grade'].lower():
             bonus += 0.03  # Gate work
-        
+
         if work_details[0]['rank'] and work_details[0]['total']:
             percentile = work_details[0]['rank'] / work_details[0]['total']
             if percentile <= 0.25:
                 bonus += 0.04  # Elite work
             elif percentile <= 0.50:
                 bonus += 0.02
-        
+
         bullet_count = sum(1 for w in work_details[:5] if w['bullet'])
         if bullet_count >= 2:
             bonus += 0.05  # Consistent quality
-        
+
         workouts['pattern_bonus'] = bonus
 
     return workouts
@@ -2055,7 +2055,7 @@ def calculate_comprehensive_class_rating(
     if 'clm' in today_type_norm or 'claiming' in today_type_norm:
         recent_claiming = parse_claiming_prices(horse_block)
         claiming_bonus = analyze_claiming_price_movement(recent_claiming, today_purse)
-    
+
     # 6. ABSOLUTE PURSE LEVEL BASELINE
     # High purse races = better horses overall
     if today_purse >= 100000:
@@ -2066,7 +2066,7 @@ def calculate_comprehensive_class_rating(
         purse_baseline = 0.0
     else:
         purse_baseline = -0.5
-    
+
     class_rating += claiming_bonus
 
     class_rating += purse_baseline
@@ -2149,7 +2149,7 @@ if parse_clicked:
             except ValueError as e:
                 st.error(f"Invalid PP text: {e}")
                 st.stop()
-        
+
         st.session_state["pp_text_cache"] = text_now
         st.session_state["parsed"] = True
         # Clear Classic Report from previous race
@@ -2322,7 +2322,7 @@ if ELITE_PARSER_AVAILABLE and GoldStandardBRISNETParser is not None and len(pp_t
         parser = GoldStandardBRISNETParser()
         horses = parser.parse_full_pp(pp_text, debug=False)
         validation = parser.validate_parsed_data(horses, min_confidence=0.5)
-        
+
         if validation.get('overall_confidence', 0.0) >= 0.6:
             # Use elite parser data
             elite_parser_used = True
@@ -2331,7 +2331,7 @@ if ELITE_PARSER_AVAILABLE and GoldStandardBRISNETParser is not None and len(pp_t
                     # Store speed figures
                     if horse_obj.speed_figures and len(horse_obj.speed_figures) > 0:
                         figs_per_horse[horse_name] = horse_obj.speed_figures
-                    
+
                     # Note: angles and pedigree can still use traditional parsing
                     # as elite parser may not have all that data structured the same way
     except Exception as e:
@@ -2344,7 +2344,7 @@ for _post, name, block in split_into_horse_chunks(pp_text):
         # Always parse angles and pedigree traditionally
         angles_per_horse[name] = parse_angles_for_block(block)
         pedigree_per_horse[name] = parse_pedigree_snips(block)
-        
+
         # Only parse figs if not already parsed by elite parser
         if name not in figs_per_horse:
             figs_per_horse[name] = parse_speed_figures_for_block(block)
@@ -2728,23 +2728,23 @@ def _parse_post_number(post_str: str) -> Optional[int]:
 def calculate_weather_impact(weather_data: Dict[str, Any], style: str, distance_txt: str) -> float:
     """
     ELITE: Weather impact calculation based on racing research.
-    
+
     Args:
         weather_data: Dict with keys 'condition', 'wind_mph', 'temp_f'
         style: Running style ('E', 'E/P', 'P', 'S')
         distance_txt: Race distance (e.g., '6F', '1 1/16M')
-    
+
     Returns:
         float: Adjustment to rating (-0.3 to +0.3)
     """
     if not weather_data:
         return 0.0
-    
+
     bonus = 0.0
     track_condition = str(weather_data.get('condition', 'Fast')).lower()
     wind_mph = float(weather_data.get('wind_mph', 0))
     temp_f = float(weather_data.get('temp_f', 70))
-    
+
     # 1. Track Condition Impact
     if 'mud' in track_condition or 'slop' in track_condition:
         # Mud favors early speed that can secure position
@@ -2752,12 +2752,12 @@ def calculate_weather_impact(weather_data: Dict[str, Any], style: str, distance_
             bonus += 0.20  # Early speed advantage in mud
         elif style == 'S':
             bonus -= 0.15  # Closers struggle in mud
-    
+
     elif 'wet' in track_condition or 'yield' in track_condition:
         # Wet track: Moderate advantage to stalkers
         if style == 'E/P':
             bonus += 0.10
-    
+
     # 2. Wind Impact (>12 mph affects race significantly)
     if wind_mph >= 15:
         # Strong headwinds favor closers (pace collapses)
@@ -2765,7 +2765,7 @@ def calculate_weather_impact(weather_data: Dict[str, Any], style: str, distance_
             bonus += 0.12
         elif style == 'E':
             bonus -= 0.08  # Early speed tires faster
-    
+
     # 3. Temperature Impact on Stamina (distance races)
     is_route = any(d in distance_txt.upper() for d in ['M', 'MILE']) if distance_txt else False
     if is_route:
@@ -2776,85 +2776,85 @@ def calculate_weather_impact(weather_data: Dict[str, Any], style: str, distance_
             # Cold weather: Slight advantage to closers (slower pace)
             if style == 'S':
                 bonus += 0.05
-    
+
     return float(np.clip(bonus, -0.30, 0.30))
 
 def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     """
     ELITE: Calculate impact of jockey/trainer performance based on BRISNET PP stats.
-    
+
     BRISNET Format: "Jockey: J. Castellano (15-3-2-2)" = 15 starts, 3 wins, 2 places, 2 shows
     """
     if not pp_text or not horse_name:
         return 0.0
-    
+
     bonus = 0.0
-    
+
     # Extract jockey stats from PP text for this horse
     # Pattern: Horse section followed by "Jockey:" then stats
     import re
-    
+
     # Find horse section and extract jockey/trainer stats
     # More flexible pattern that captures stats near the horse name
     jockey_pattern = r'Jockey:?\s*[A-Z][^(]*\((\d+)-(\d+)-(\d+)-(\d+)\)'
     trainer_pattern = r'Trainer:?\s*[A-Z][^(]*\((\d+)-(\d+)-(\d+)-(\d+)\)'
-    
+
     # Search within reasonable window after horse name
     horse_section_start = pp_text.find(horse_name)
     if horse_section_start != -1:
         # Search next 500 chars for jockey/trainer stats
         section = pp_text[horse_section_start:horse_section_start + 500]
-        
+
         jockey_match = re.search(jockey_pattern, section)
         if jockey_match:
             starts, wins, places, shows = map(int, jockey_match.groups())
-            
+
             if starts >= 10:  # Minimum sample size
                 win_pct = wins / starts
                 itm_pct = (wins + places + shows) / starts  # In-the-money %
-                
+
                 # Elite jockey (>25% win rate) = +0.15 bonus
                 if win_pct >= 0.25:
                     bonus += 0.15
                 elif win_pct >= 0.20:
                     bonus += 0.10
-                
+
                 # Hot jockey (>60% ITM) = additional +0.05
                 if itm_pct >= 0.60:
                     bonus += 0.05
-        
+
         trainer_match = re.search(trainer_pattern, section)
         if trainer_match:
             t_starts, t_wins, t_places, t_shows = map(int, trainer_match.groups())
-            
+
             if t_starts >= 20:
                 t_win_pct = t_wins / t_starts
-                
+
                 # Elite trainer (>28% win rate) = +0.12 bonus
                 if t_win_pct >= 0.28:
                     bonus += 0.12
                 elif t_win_pct >= 0.22:
                     bonus += 0.08
-    
+
     return float(np.clip(bonus, 0, 0.35))
 
 def calculate_track_condition_granular(track_info: Dict[str, Any], style: str, post: int) -> float:
     """
     ELITE: Track condition analysis beyond basic Fast/Muddy.
-    
+
     Args:
         track_info: Dict with 'condition', 'rail_position', 'moisture_level'
         style: Running style
         post: Post position
-    
+
     Returns:
         Adjustment to rating
     """
     if not track_info:
         return 0.0
-    
+
     bonus = 0.0
-    
+
     # 1. Rail Position Impact
     rail_position = str(track_info.get('rail_position', 'normal')).lower()
     if '10ft' in rail_position or '15ft' in rail_position or 'out' in rail_position:
@@ -2863,28 +2863,28 @@ def calculate_track_condition_granular(track_info: Dict[str, Any], style: str, p
             bonus += 0.25
         elif post <= 2:
             bonus -= 0.15  # Inside posts penalized
-    
+
     # 2. Track Seal/Harrowing
     condition_detail = str(track_info.get('condition', '')).lower()
     if 'sealed' in condition_detail or 'harrowed' in condition_detail:
         # Sealed track favors early speed
         if style in ['E', 'E/P']:
             bonus += 0.18
-    
+
     elif 'cuppy' in condition_detail or 'tiring' in condition_detail:
         # Cuppy/tiring track favors closers
         if style == 'S':
             bonus += 0.15
         elif style == 'E':
             bonus -= 0.10
-    
+
     # 3. Moisture Content (even on "Fast" tracks)
     moisture = str(track_info.get('moisture_level', 'normal')).lower()
     if 'tacky' in moisture or 'holding' in moisture:
         # Tacky track: Grip advantage to stalkers
         if style == 'E/P':
             bonus += 0.08
-    
+
     return float(np.clip(bonus, -0.25, 0.25))
 
 
@@ -2894,15 +2894,15 @@ def is_marathon_distance(distance_txt: str) -> bool:
     """
     Detect if race is marathon distance (1½ miles+ / 12 furlongs+).
     Marathon distances require different weighting strategy.
-    
+
     Based on McKnight G3 post-race analysis where standard weights failed.
     """
     if not distance_txt:
         return False
-    
+
     # Convert to furlongs for comparison
     distance_lower = distance_txt.lower().strip()
-    
+
     # Direct furlong matches
     if 'f' in distance_lower:
         try:
@@ -2910,7 +2910,7 @@ def is_marathon_distance(distance_txt: str) -> bool:
             return furlongs >= 12.0
         except:
             pass
-    
+
     # Mile conversions
     if 'mile' in distance_lower or 'm' in distance_lower:
         # 1½ miles = 12f, 1⅝ = 13f, 1¾ = 14f, 2 miles = 16f
@@ -2922,26 +2922,26 @@ def is_marathon_distance(distance_txt: str) -> bool:
             return True
         if '2' in distance_txt and 'mile' in distance_lower:
             return True
-    
+
     return False
 
 
 def calculate_workout_bonus_v2(workout_data: Dict[str, Any], is_marathon: bool = False) -> float:
     """
     CALIBRATED: Improved workout bonus emphasizing percentile rankings.
-    
+
     Key Learning from McKnight G3:
-    - Layabout (WINNER): Bullet 1/2 (Top 50%) 
+    - Layabout (WINNER): Bullet 1/2 (Top 50%)
     - Summer Cause (4th): Bullet 15/16 (Top 94%)
     - Zverev (5th): Bullet 30/44 (Top 68%)
-    
+
     Percentile matters MORE than just having a bullet work!
     """
     bonus = 0.0
-    
+
     if not workout_data:
         return 0.0
-    
+
     # Calculate percentile if rank/total available
     percentile = workout_data.get('percentile', 100)
     if percentile is None and workout_data.get('work_rank') and workout_data.get('work_total'):
@@ -2951,45 +2951,45 @@ def calculate_workout_bonus_v2(workout_data: Dict[str, Any], is_marathon: bool =
             percentile = (rank / total) * 100
         except:
             percentile = 100
-    
+
     # ELITE PERCENTILE BONUSES (from post-race analysis)
     if percentile <= 10:
         bonus += 0.25  # TOP 10% = elite work
     elif percentile <= 25:
-        bonus += 0.15  # TOP 25% = strong work  
+        bonus += 0.15  # TOP 25% = strong work
     elif percentile <= 50:
         bonus += 0.10  # TOP 50% = solid work (WINNER range!)
     elif percentile <= 75:
         bonus += 0.05  # Top 75%
     else:
         bonus += 0.02  # Below 75%
-    
+
     # Additional bullet work bonus (but smaller than before)
     quality = workout_data.get('quality', 'none')
     if quality == 'bullet':
         bonus += 0.05  # Reduced from 0.10
     elif quality == 'handily':
         bonus += 0.03  # Reduced from 0.05
-    
+
     # Marathon bonus for recent sharp works
     if is_marathon:
         days_since = workout_data.get('days_since', 999)
         if days_since <= 7 and percentile <= 50:
             bonus += 0.05  # Very recent sharp work
-    
+
     return float(np.clip(bonus, 0.0, 0.35))
 
 
 def calculate_layoff_bonus(days_off: int, is_marathon: bool = False) -> float:
     """
     CALIBRATED: Layoff evaluation adjusted for marathon distances.
-    
+
     Key Learning: 30-60 day layoffs can HELP at marathon distances (freshening effect).
     Layabout (WINNER) and Padiddle (2nd) both had ~45-50 day layoffs.
     """
     if days_off is None:
         return 0.0
-    
+
     if is_marathon:
         # Marathon distances favor fresher horses
         if 30 <= days_off <= 60:
@@ -3012,20 +3012,20 @@ def calculate_layoff_bonus(days_off: int, is_marathon: bool = False) -> float:
             return -0.05  # Slight concern
         elif days_off > 60:
             return -0.10  # Extended layoff
-    
+
     return 0.0
 
 
 def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) -> float:
     """
     CALIBRATED: Lightly-raced improver bonus.
-    
+
     Key Learning: Layabout (WINNER) had only 9 career starts.
     Fresh legs advantage at marathon distances!
     """
     if career_starts is None or career_starts <= 0:
         return 0.0
-    
+
     if is_marathon:
         # Marathons favor fresh legs
         if career_starts <= 10:
@@ -3044,7 +3044,7 @@ def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) ->
             return 0.0   # Normal
         else:
             return 0.0   # Experienced
-    
+
     return 0.0
 
 
@@ -3119,135 +3119,10 @@ def calculate_hot_combo_bonus(trainer_pct: float, jockey_pct: float, combo_pct: 
     return float(np.clip(bonus, 0.0, 0.25))
 
 
-def parse_workout_data(pp_text: str, horse_name: str) -> Dict[str, Any]:
-    """
-    COMPREHENSIVE: Parse workout data from BRISNET PP.
-    
-    BRISNET Format: "Workouts: 12/15 GP 4f ft :48.2 B 15/67"
-    Returns: Latest work date, distance, time, track, condition, rating, rank
-    """
-    if not pp_text or not horse_name:
-        return {}
-    
-    import re
-    from datetime import datetime
-    
-    # Find horse section
-    horse_idx = pp_text.find(horse_name)
-    if horse_idx == -1:
-        return {}
-    
-    # Search for workout section (next 800 chars)
-    section = pp_text[horse_idx:horse_idx + 800]
-    
-    # Pattern: Date Track Distance Surface Time Rating Rank
-    # Example: "12/15 GP 4f ft :48.2 B 15/67" or "1/5 CD 5f ft 1:00.3 Bg 3/45"
-    work_pattern = r'(\d{1,2}/\d{1,2})\s+([A-Z]{2,3})\s+(\d+)f\s+(ft|my|gd|sly|yl)\s+:?(\d+:\d+\.\d+|\d+\.\d+)\s+([BHg]+)\s+(\d+)/(\d+)'
-    
-    matches = re.findall(work_pattern, section)
-    
-    if not matches:
-        return {}
-    
-    # Get most recent workout (first match)
-    latest = matches[0]
-    work_date, track, distance, condition, time, rating, rank, total = latest
-    
-    # Parse time to seconds
-    time_seconds = 0.0
-    if ':' in time:
-        parts = time.split(':')
-        time_seconds = float(parts[0]) * 60 + float(parts[1])
-    else:
-        time_seconds = float(time)
-    
-    return {
-        'date': work_date,
-        'track': track,
-        'distance': f"{distance}f",
-        'condition': condition,
-        'time_seconds': time_seconds,
-        'time_display': time,
-        'rating': rating,
-        'rank': int(rank),
-        'total_works': int(total),
-        'percentile': int(rank) / int(total) if int(total) > 0 else 0.0,
-        'days_since': None  # Could calculate if we had current date
-    }
-
-def parse_race_history(pp_text: str, horse_name: str) -> List[Dict[str, Any]]:
-    """
-    COMPREHENSIVE: Parse past performance lines from BRISNET PP.
-    
-    Returns list of past races with:
-    - Date, track, distance, surface, condition
-    - Class level, purse
-    - Finish position, beaten lengths
-    - Speed figure
-    - Running line (positions at calls)
-    """
-    if not pp_text or not horse_name:
-        return []
-    
-    import re
-    
-    # Find horse section
-    horse_idx = pp_text.find(horse_name)
-    if horse_idx == -1:
-        return []
-    
-    # Past performances are typically the largest block of data per horse
-    section = pp_text[horse_idx:horse_idx + 2000]
-    
-    races = []
-    
-    # BRISNET PP Line Pattern (simplified - captures key elements)
-    # Date Track Cnd Distance Surface Class Finish/Starters BeatenLengths SpeedFig
-    # Example: "12Jan24 GP ft 6f :22.1 :45.2 1:10.3 3/Alw35000N1X 2/8 1.25 89"
-    
-    # Pattern for date: DDMonYY format
-    pp_pattern = r'(\d{1,2}[A-Za-z]{3}\d{2})\s+([A-Z]{2,3})\s+(ft|my|gd|sly|yl)\s+(\d+(?:\.\d+)?[fmFM]|\d+\s*[Mm])'
-    
-    lines = section.split('\n')
-    
-    for line in lines[:10]:  # Check first 10 lines for PP data
-        match = re.search(pp_pattern, line)
-        if match:
-            date_str, track, condition, distance = match.groups()
-            
-            # Extract finish position (look for N/N pattern like "3/8" = 3rd of 8)
-            finish_pattern = r'(\d+)/(\d+)'
-            finish_match = re.search(finish_pattern, line)
-            finish_pos = int(finish_match.group(1)) if finish_match else 0
-            starters = int(finish_match.group(2)) if finish_match else 0
-            
-            # Extract speed figure (last 2-3 digit number)
-            fig_pattern = r'\s(\d{2,3})\s*$'
-            fig_match = re.search(fig_pattern, line)
-            speed_fig = int(fig_match.group(1)) if fig_match else 0
-            
-            # Extract class/race type (Alw, Clm, Stk, Mcl, etc.)
-            class_pattern = r'(Alw|Clm|Stk|Mcl|Msw|Aoc|Str)\s*(\d+)?'
-            class_match = re.search(class_pattern, line, re.IGNORECASE)
-            race_class = class_match.group(0) if class_match else 'Unknown'
-            
-            races.append({
-                'date': date_str,
-                'track': track,
-                'condition': condition,
-                'distance': distance.strip(),
-                'class': race_class,
-                'finish_pos': finish_pos,
-                'starters': starters,
-                'speed_fig': speed_fig
-            })
-    
-    return races
-
 def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse: int) -> Dict[str, Any]:
     """
     COMPREHENSIVE: Analyze if horse is stepping up or down in class.
-    
+
     Returns:
     - class_change: 'up', 'down', 'same', 'unknown'
     - class_delta: numeric change estimate
@@ -3256,7 +3131,7 @@ def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse
     """
     if not past_races or len(past_races) < 2:
         return {'class_change': 'unknown', 'class_delta': 0, 'pattern': 'unknown', 'bonus': 0.0}
-    
+
     # Class hierarchy (higher = better class)
     class_hierarchy = {
         'Msw': 1,    # Maiden special weight
@@ -3270,17 +3145,17 @@ def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse
         'G2': 10,    # Grade 2
         'G1': 11     # Grade 1
     }
-    
+
     # Get today's class level
     today_level = 0
     for key in class_hierarchy:
         if key.lower() in today_class.lower():
             today_level = class_hierarchy[key]
             break
-    
+
     if today_level == 0:
         today_level = 5  # Default to allowance
-    
+
     # Get recent class levels
     recent_levels = []
     for race in past_races[:5]:  # Last 5 races
@@ -3289,13 +3164,13 @@ def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse
             if key.lower() in race_class.lower():
                 recent_levels.append(class_hierarchy[key])
                 break
-    
+
     if not recent_levels:
         return {'class_change': 'unknown', 'class_delta': 0, 'pattern': 'unknown', 'bonus': 0.0}
-    
+
     avg_recent = sum(recent_levels) / len(recent_levels)
     class_delta = today_level - avg_recent
-    
+
     # Determine change
     if class_delta > 1:
         class_change = 'up'
@@ -3306,7 +3181,7 @@ def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse
     else:
         class_change = 'same'
         bonus = 0.0
-    
+
     # Determine pattern (last 3 races)
     pattern = 'stable'
     if len(recent_levels) >= 3:
@@ -3316,7 +3191,7 @@ def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse
         elif recent_levels[0] < recent_levels[1] < recent_levels[2]:
             pattern = 'dropping'
             bonus += 0.08  # Finding easier spots
-    
+
     return {
         'class_change': class_change,
         'class_delta': class_delta,
@@ -3327,7 +3202,7 @@ def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse
 def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dict[str, Any]:
     """
     COMPREHENSIVE: Analyze distance changes and patterns.
-    
+
     Returns:
     - distance_change: 'stretch_out', 'cut_back', 'same', 'unknown'
     - distance_delta: Numeric change in furlongs
@@ -3337,7 +3212,7 @@ def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dic
     """
     if not past_races or not today_distance:
         return {'distance_change': 'unknown', 'distance_delta': 0, 'bonus': 0.0}
-    
+
     # Convert distance to furlongs
     def distance_to_furlongs(dist_str: str) -> float:
         dist_str = dist_str.lower().strip()
@@ -3356,31 +3231,31 @@ def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dic
             else:
                 return 8.0  # Default 1 mile
         return 6.0  # Default
-    
+
     today_furlongs = distance_to_furlongs(today_distance)
-    
+
     # Analyze past distances
     past_distances = []
     experience_count = 0
     figs_at_distance = []
-    
+
     for race in past_races[:8]:  # Last 8 races
         race_dist = race.get('distance', '')
         race_furlongs = distance_to_furlongs(race_dist)
         past_distances.append(race_furlongs)
-        
+
         # Count experience at today's distance (within 0.5F)
         if abs(race_furlongs - today_furlongs) <= 0.5:
             experience_count += 1
             if race.get('speed_fig', 0) > 0:
                 figs_at_distance.append(race['speed_fig'])
-    
+
     if not past_distances:
         return {'distance_change': 'unknown', 'distance_delta': 0, 'bonus': 0.0}
-    
+
     avg_past_dist = sum(past_distances) / len(past_distances)
     distance_delta = today_furlongs - avg_past_dist
-    
+
     # Determine change type
     bonus = 0.0
     if distance_delta > 1.5:
@@ -3390,19 +3265,19 @@ def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dic
             bonus = +0.05  # Has experience at distance
         else:
             bonus = -0.08  # Unproven at distance
-    
+
     elif distance_delta < -1.5:
         distance_change = 'cut_back'
         # Cutting back in distance usually helps speed horses
         bonus = +0.08
-    
+
     else:
         distance_change = 'same'
         if experience_count >= 3:
             bonus = +0.05  # Comfortable at distance
-    
+
     best_fig = max(figs_at_distance) if figs_at_distance else 0
-    
+
     return {
         'distance_change': distance_change,
         'distance_delta': distance_delta,
@@ -3415,7 +3290,7 @@ def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dic
 def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
     """
     COMPREHENSIVE: Analyze form cycle (improving/declining).
-    
+
     Returns:
     - cycle: 'improving', 'declining', 'peaking', 'bottoming', 'stable'
     - trend_score: -1.0 to +1.0 (negative = declining, positive = improving)
@@ -3425,15 +3300,15 @@ def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
     """
     if not past_races or len(past_races) < 3:
         return {'cycle': 'unknown', 'trend_score': 0.0, 'bonus': 0.0}
-    
+
     # Get last 3-5 races
     recent = past_races[:5]
     finishes = [r.get('finish_pos', 0) for r in recent if r.get('finish_pos', 0) > 0]
     figs = [r.get('speed_fig', 0) for r in recent if r.get('speed_fig', 0) > 0]
-    
+
     if len(finishes) < 3 or len(figs) < 3:
         return {'cycle': 'unknown', 'trend_score': 0.0, 'bonus': 0.0}
-    
+
     # Calculate trends
     # Finish trend (lower is better)
     finish_trend = 0.0
@@ -3445,7 +3320,7 @@ def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
         finish_trend = +0.5  # Generally improving
     elif finishes[0] > finishes[-1]:
         finish_trend = -0.5  # Generally declining
-    
+
     # Figure trend (higher is better)
     fig_trend = 0.0
     if figs[0] > figs[1] > figs[2]:
@@ -3456,14 +3331,14 @@ def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
         fig_trend = +0.5  # Generally improving
     elif figs[0] < figs[-1]:
         fig_trend = -0.5  # Generally declining
-    
+
     # Combined trend score
     trend_score = (finish_trend + fig_trend) / 2.0
-    
+
     # Determine cycle
     cycle = 'stable'
     bonus = 0.0
-    
+
     if trend_score >= 0.75:
         cycle = 'improving'
         bonus = +0.15  # Strong positive form
@@ -3476,11 +3351,11 @@ def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
     elif trend_score <= -0.25:
         cycle = 'bottoming'
         bonus = -0.08  # Weak form
-    
+
     # Bonus for consistency (all recent finishes in top 3)
     if all(f <= 3 for f in finishes[:3]):
         bonus += 0.05  # Consistent runner
-    
+
     return {
         'cycle': cycle,
         'trend_score': trend_score,
@@ -3495,23 +3370,23 @@ def calculate_workout_bonus(workout_data: Dict[str, Any]) -> float:
     """
     if not workout_data:
         return 0.0
-    
+
     bonus = 0.0
-    
+
     # Rating bonus (B = bullet work = fastest of day)
     rating = workout_data.get('rating', '')
     if 'B' in rating or 'b' in rating:
         bonus += 0.10  # Bullet work
     elif 'H' in rating or 'h' in rating:
         bonus += 0.05  # Handily
-    
+
     # Rank/percentile bonus (top 20% of works)
     percentile = workout_data.get('percentile', 0.5)
     if percentile <= 0.20:
         bonus += 0.08  # Top 20% work
     elif percentile <= 0.40:
         bonus += 0.05  # Top 40% work
-    
+
     return float(np.clip(bonus, 0, 0.15))
 
 # ======================== End ELITE ENHANCEMENTS ========================
@@ -3591,10 +3466,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     def normalize_horse_name(name):
                         """Normalize horse name for matching: remove apostrophes, extra spaces, lowercase"""
                         return ' '.join(str(name).replace("'", "").replace("`", "").lower().split())
-                    
+
                     # Build mapping of normalized names to original names from Section A
                     section_a_names = {normalize_horse_name(h): h for h in df_styles['Horse'].tolist()}
-                    
+
                     # Filter and rename horses to match Section A names
                     results_df_filtered = results_df.copy()
                     matched_horses = []
@@ -3605,10 +3480,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             # Use the exact name from Section A
                             results_df_filtered.at[idx, 'Horse'] = section_a_names[normalized]
                             matched_horses.append(idx)
-                    
+
                     # Keep only matched horses
                     results_df_filtered = results_df_filtered.loc[matched_horses].copy()
-                    
+
                     if results_df_filtered.empty:
                         # All horses from unified engine were scratched, fall back to traditional
                         st.warning("⚠️ All unified engine horses are scratched (using fallback)")
@@ -3628,7 +3503,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                                         "AvgTop2": horse_obj.avg_top2
                                     })
                         figs_df = pd.DataFrame(figs_data) if figs_data else pd.DataFrame()
-                        
+
                         # Convert unified engine output to app.py format
                         unified_ratings = pd.DataFrame({
                             "#": range(1, len(results_df_filtered) + 1),
@@ -3722,19 +3597,19 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         weather_data = st.session_state.get('weather_data', None)
         if weather_data:
             tier2_bonus += calculate_weather_impact(weather_data, style, distance_txt)
-        
+
         # ELITE: Jockey/Trainer Performance Impact
         tier2_bonus += calculate_jockey_trainer_impact(name, pp_text)
-        
+
         # ELITE: Track Condition Granularity
         track_info = st.session_state.get('track_condition_detail', None)
         if track_info:
             tier2_bonus += calculate_track_condition_granular(track_info, style, post)
-        
+
         # ======================== DISTANCE CATEGORY DETECTION ========================
         is_marathon = is_marathon_distance(distance_txt)
         is_sprint = is_sprint_distance(distance_txt)
-        
+
         # Parse distance as furlongs for numeric comparisons
         race_furlongs = 8.0  # Default assumption
         try:
@@ -3742,41 +3617,37 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 race_furlongs = float(distance_txt.lower().replace('f', '').strip())
         except:
             pass
-        
+
         # COMPREHENSIVE: Workout Analysis (V2 with marathon awareness)
-        workout_data = parse_workout_data(pp_text, name)
-        if workout_data:
-            # Use calibrated V2 workout bonus (percentile-based)
-            tier2_bonus += calculate_workout_bonus_v2(workout_data, is_marathon)
-        
+        # TODO: Implement parse_workout_data for BRISNET format
+        # workout_data = parse_workout_data(pp_text, name)
+        # if workout_data:
+        #     tier2_bonus += calculate_workout_bonus_v2(workout_data, is_marathon)
+
         # COMPREHENSIVE: Race History & Pattern Analysis
-        race_history = parse_race_history(pp_text, name)
-        if race_history:
-            # Class movement analysis
-            class_analysis = analyze_class_movement(race_history, race_type, purse_val)
-            tier2_bonus += class_analysis.get('bonus', 0.0)
-            
-            # Distance pattern analysis
-            distance_analysis = analyze_distance_pattern(race_history, distance_txt)
-            tier2_bonus += distance_analysis.get('bonus', 0.0)
-            
-            # Form cycle analysis
-            form_analysis = analyze_form_cycle(race_history)
-            tier2_bonus += form_analysis.get('bonus', 0.0)
-        
+        # TODO: Implement parse_race_history for BRISNET format
+        # race_history = parse_race_history(pp_text, name)
+        # if race_history:
+        #     class_analysis = analyze_class_movement(race_history, race_type, purse_val)
+        #     tier2_bonus += class_analysis.get('bonus', 0.0)
+        #     distance_analysis = analyze_distance_pattern(race_history, distance_txt)
+        #     tier2_bonus += distance_analysis.get('bonus', 0.0)
+        #     form_analysis = analyze_form_cycle(race_history)
+        #     tier2_bonus += form_analysis.get('bonus', 0.0)
+
         # ======================== MARATHON CALIBRATION (12f+) ========================
         if is_marathon:
             # Layoff adjustment (freshening can help at marathons)
-            if race_history:
-                tier2_bonus += calculate_layoff_bonus(49, is_marathon)
-            
+            # TODO: Calculate actual days off from PP text
+            tier2_bonus += calculate_layoff_bonus(49, is_marathon)
+
             # Lightly-raced improver bonus (fresh legs at marathons)
             life_pattern = r'Life:\s+(\d+)\s+'
             life_match = re.search(life_pattern, pp_text)
             if life_match:
                 career_starts = int(life_match.group(1))
                 tier2_bonus += calculate_experience_bonus(career_starts, is_marathon)
-        
+
         # ======================== SPRINT CALIBRATION (≤6.5f) ========================
         elif is_sprint:
             # Post position CRITICAL at turf sprints (inside good, outside death!)
@@ -3785,10 +3656,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 tier2_bonus += calculate_sprint_post_position_bonus(post_num, race_furlongs, surface_type)
             except:
                 pass
-            
+
             # Running style bias (early speed 2.05 impact!)
             tier2_bonus += calculate_sprint_running_style_bonus(style, race_furlongs)
-            
+
             # Hot trainer/jockey combo (40% L60 was KEY!)
             # TODO: Parse actual stats from PP text when available
             tier2_bonus += calculate_hot_combo_bonus(0.0, 0.0, 0.0)
@@ -3830,7 +3701,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         )
         arace = weighted_components + a_track + tier2_bonus
         R     = arace
-        
+
         # ELITE: Single-pass outlier clipping with data quality monitoring
         # Typical racing range: -5 to +20. Values beyond suggest parsing errors or unrealistic bonuses
         if R > 30 or R < -10:
@@ -3852,7 +3723,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dict[str, float]] = None) -> Dict[str, float]:
     """
     GOLD STANDARD probability calculation with comprehensive validation and ML odds reality check.
-    
+
     Guarantees:
     1. Always returns valid probability distribution
     2. Probabilities sum to exactly 1.0
@@ -3864,13 +3735,13 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dic
         return {}
     if "R" not in ratings_df.columns or "Horse" not in ratings_df.columns:
         return {}
-    
+
     # SAFETY: Work on copy to avoid side effects
     df = ratings_df.copy()
-    
+
     # VALIDATION: Ensure 'R' is numeric
     df['R_numeric'] = pd.to_numeric(df['R'], errors='coerce')
-    
+
     # GOLD STANDARD: Handle NaN with intelligent fallback
     median_r = df['R_numeric'].median()
     if pd.isna(median_r) or not np.isfinite(median_r):
@@ -3878,12 +3749,12 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dic
         mean_r = df['R_numeric'].mean()
         median_r = mean_r if np.isfinite(mean_r) else 0.0
     df['R_numeric'].fillna(median_r, inplace=True)
-    
+
     # EXTRACT: Ratings array
     r = df["R_numeric"].values
     if len(r) == 0:
         return {}
-    
+
     # VALIDATION: Final check for invalid values
     if not np.all(np.isfinite(r)):
         # Replace any remaining non-finite with median
@@ -3893,15 +3764,15 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dic
         else:
             median_finite = 0.0
         r[~finite_mask] = median_finite
-    
+
     # COMPUTE: Softmax probabilities (using gold-standard function)
     p = softmax_from_rating(r)
-    
+
     # VALIDATION: Ensure we have valid probabilities
     if len(p) != len(r):
         # Should never happen, but fallback to uniform
         p = np.ones(len(r)) / len(r)
-    
+
     # GOLD STANDARD: Build horse->probability mapping with validation
     horses = df["Horse"].values
     result = {}
@@ -3912,23 +3783,23 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dic
             if not np.isfinite(prob) or prob < 0 or prob > 1:
                 prob = 1.0 / len(horses)  # Fallback to uniform
             result[h] = prob
-    
+
     # FINAL VALIDATION: Ensure probabilities sum to 1.0
     total_prob = sum(result.values())
     if total_prob > 0 and abs(total_prob - 1.0) > 1e-6:
         # Normalize to exactly 1.0
         result = {h: p / total_prob for h, p in result.items()}
-    
+
     # ML ODDS REALITY CHECK: Prevent longshots from getting unrealistic probabilities
     # This adds common sense - the market odds reflect real race experience
     if ml_odds_dict:
         adjusted = False
         for horse, prob in result.items():
             ml_odds = ml_odds_dict.get(horse, 5.0)
-            
+
             # Progressive caps based on ML odds:
             # 10/1 or more: cap at 25%
-            # 15/1 or more: cap at 20%  
+            # 15/1 or more: cap at 20%
             # 20/1 or more: cap at 15%
             # 30/1 or more: cap at 10%
             if ml_odds >= 30.0 and prob > 0.10:
@@ -3943,13 +3814,13 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dic
             elif ml_odds >= 10.0 and prob > 0.25:
                 result[horse] = 0.25
                 adjusted = True
-        
+
         # If we adjusted any probabilities, renormalize
         if adjusted:
             total_prob = sum(result.values())
             if total_prob > 0:
                 result = {h: p / total_prob for h, p in result.items()}
-    
+
     return result
 
 
@@ -3975,7 +3846,7 @@ for i, (rbias, pbias) in enumerate(scenarios):
         canon_track = _canonical_track(track_name)
         dist_bucket = distance_bucket(distance_txt)
         st.caption(f"🔍 Track Bias Detection: {canon_track} • {surface_type} • {dist_bucket}")
-        
+
         ratings_df = compute_bias_ratings(
             df_styles=df_final_field.copy(), # Pass a copy to avoid modifying original
             surface_type=surface_type,
@@ -4012,7 +3883,7 @@ for i, (rbias, pbias) in enumerate(scenarios):
             live_odds = row.get('Live Odds', '')
             ml_odds = row.get('ML', '')
             odds_str = live_odds if live_odds else ml_odds
-            
+
             if horse_name and odds_str:
                 try:
                     # Parse odds string (e.g., "30/1", "5/2", "3.5")
@@ -4026,7 +3897,7 @@ for i, (rbias, pbias) in enumerate(scenarios):
                     ml_odds_dict[horse_name] = 5.0
             else:
                 ml_odds_dict[horse_name] = 5.0
-        
+
         fair_probs = fair_probs_from_ratings(ratings_df, ml_odds_dict)
         if 'Horse' in ratings_df.columns:
             ratings_df["Fair %"] = ratings_df["Horse"].map(lambda h: f"{fair_probs.get(h,0)*100:.1f}%")
@@ -4112,30 +3983,30 @@ st.dataframe(
 def calculate_finishing_order_probabilities(primary_df, primary_probs):
     """
     ELITE: Calculate most probable finishing positions (1st through 5th) using probability theory.
-    
+
     Uses conditional probabilities:
     - P(2nd | not 1st) = probability of finishing 2nd given another horse won
     - P(3rd | not 1st, not 2nd) = probability given other horses finished ahead
-    
-    Returns dict with 'position_1' through 'position_5', each containing 
+
+    Returns dict with 'position_1' through 'position_5', each containing
     [(horse_name, probability), ...] sorted by probability
     """
     horses = list(primary_probs.keys())
     win_probs = np.array([primary_probs.get(h, 0) for h in horses])
-    
+
     # Normalize to ensure sum = 1.0
     if win_probs.sum() > 0:
         win_probs = win_probs / win_probs.sum()
     else:
         win_probs = np.ones(len(horses)) / len(horses)
-    
+
     finishing_positions = {}
-    
+
     # Position 1: Use win probabilities directly
     pos1_probs = list(zip(horses, win_probs))
     pos1_probs.sort(key=lambda x: x[1], reverse=True)
     finishing_positions['position_1'] = pos1_probs[:5]
-    
+
     # Position 2: Conditional probability P(2nd | not 1st)
     # For each horse, calculate probability of finishing 2nd across all scenarios where they didn't win
     pos2_probs = []
@@ -4151,10 +4022,10 @@ def calculate_finishing_order_probabilities(primary_df, primary_probs):
                     idx_in_others = i if i < j else i - 1
                     prob_2nd += win_probs[j] * (other_probs[idx_in_others] / other_horses_sum)
         pos2_probs.append((horse, prob_2nd))
-    
+
     pos2_probs.sort(key=lambda x: x[1], reverse=True)
     finishing_positions['position_2'] = pos2_probs[:5]
-    
+
     # Position 3: Similar logic, accounting for top 2 finishers
     pos3_probs = []
     for i, horse in enumerate(horses):
@@ -4165,43 +4036,43 @@ def calculate_finishing_order_probabilities(primary_df, primary_probs):
         remaining_strength = win_probs[i] / (1.0 - win_probs[i] + 1e-6)
         prob_3rd = remaining_strength * not_in_top2_weight
         pos3_probs.append((horse, prob_3rd))
-    
+
     pos3_probs.sort(key=lambda x: x[1], reverse=True)
     finishing_positions['position_3'] = pos3_probs[:5]
-    
+
     # Positions 4 & 5: Use diminishing probability distribution
     pos4_probs = [(h, p * 0.8) for h, p in pos3_probs]
     pos4_probs.sort(key=lambda x: x[1], reverse=True)
     finishing_positions['position_4'] = pos4_probs[:5]
-    
+
     pos5_probs = [(h, p * 0.6) for h, p in pos3_probs]
     pos5_probs.sort(key=lambda x: x[1], reverse=True)
     finishing_positions['position_5'] = pos5_probs[:5]
-    
+
     return finishing_positions
 
 def build_component_breakdown(primary_df, name_to_post, name_to_ml):
     """
     ELITE: Build detailed component breakdown showing what the system sees in each contender.
-    
+
     Returns markdown table with all rating components for top horses.
     """
     if primary_df.empty:
         return "No component data available."
-    
+
     # Get top 5 horses
     top_horses = primary_df.nlargest(5, 'R')
-    
+
     breakdown = "### Component Breakdown (Top 5 Horses)\n"
     breakdown += "_Shows exactly what the system sees in each horse - all angles and components used_\n\n"
-    
+
     for idx, row in top_horses.iterrows():
         horse_name = row.get('Horse', 'Unknown')
         post = name_to_post.get(horse_name, '?')
         ml = name_to_ml.get(horse_name, '?')
-        
+
         breakdown += f"**#{post} {horse_name}** (ML {ml}) - **Rating: {row.get('R', 0):.2f}**\n"
-        
+
         # Core Components (weighted in final rating)
         breakdown += f"- **Class:** {row.get('Cclass', 0):.2f} (×2.5 weight) - Purse earnings, race level history\n"
         breakdown += f"- **Form:** {row.get('Cform', 0):.2f} (×1.8 weight) - Recent performance trend, consistency\n"
@@ -4210,7 +4081,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_ml):
         breakdown += f"- **Style:** {row.get('Cstyle', 0):.2f} (×1.2 weight) - Running style fit for pace scenario\n"
         breakdown += f"- **Post:** {row.get('Cpost', 0):.2f} (×0.8 weight) - Post position bias for this track/distance\n"
         breakdown += f"- **Track Bias:** {row.get('Atrack', 0):.2f} - Track-specific advantages (style + post combo)\n"
-        
+
         # Calculate component contributions
         total_weighted = (
             row.get('Cclass', 0) * 2.5 +
@@ -4220,11 +4091,11 @@ def build_component_breakdown(primary_df, name_to_post, name_to_ml):
             row.get('Cstyle', 0) * 1.2 +
             row.get('Cpost', 0) * 0.8
         )
-        
+
         breakdown += f"- **Weighted Core Total:** {total_weighted:.2f}\n"
         breakdown += f"- **Quirin Points:** {row.get('Quirin', 'N/A')} - BRISNET pace rating\n"
         breakdown += f"- **Final Rating:** {row.get('R', 0):.2f} (includes all 8 elite angles + tier 2 bonuses)\n\n"
-    
+
     return breakdown
 
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
@@ -4234,7 +4105,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     Builds elite strategy report with finishing order predictions, component transparency,
     A/B/C/D grouping, and $40 bankroll optimization.
     """
-    
+
     import numpy as np
     from itertools import combinations
 
@@ -4243,7 +4114,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         """Calculate probability each horse finishes in positions 1-5."""
         horses = df['Horse'].tolist()
         win_probs = []
-        
+
         for horse in horses:
             prob_str = df[df['Horse'] == horse]['Fair %'].iloc[0]
             try:
@@ -4251,21 +4122,21 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             except:
                 prob = 1.0 / len(horses)
             win_probs.append(prob)
-        
+
         win_probs = np.array(win_probs)
         if win_probs.sum() > 0:
             win_probs = win_probs / win_probs.sum()
-        
+
         # Position probabilities using conditional logic
         position_probs = {horse: {1: win_probs[i]} for i, horse in enumerate(horses)}
-        
+
         # For 2nd-5th: P(finish Nth) = P(not finished yet) × relative strength
         for pos in [2, 3, 4, 5]:
             remaining_strength = {}
             for i, horse in enumerate(horses):
                 prob_still_running = 1.0 - sum(position_probs[horse].get(p, 0) for p in range(1, pos))
                 remaining_strength[horse] = max(0, prob_still_running * win_probs[i])
-            
+
             total = sum(remaining_strength.values())
             if total > 0:
                 for horse in horses:
@@ -4273,12 +4144,12 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             else:
                 for horse in horses:
                     position_probs[horse][pos] = 1.0 / len(horses)
-        
+
         return position_probs
-    
+
     # Calculate position probabilities
     position_probs = calculate_position_probabilities(primary_df)
-    
+
     # Get most likely finishers for each position (top 3)
     most_likely = {}
     for pos in [1, 2, 3, 4, 5]:
@@ -4441,18 +4312,18 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         except:
             prob = 1.0 / len(primary_df)
         primary_probs_dict[horse] = prob
-    
+
     detailed_breakdown = build_component_breakdown(primary_df, name_to_post, name_to_ml)
-    
+
     component_report = "### What Our System Sees in Top Contenders\n\n"
     component_report += detailed_breakdown + "\n"
     component_report += "---\n\n### Quick Summary\n\n"
-    
+
     for i, horse in enumerate(all_horses[:3], 1):  # Top 3 horses
         row = primary_df[primary_df['Horse'] == horse].iloc[0]
         post = name_to_post.get(horse, '?')
         ml = name_to_ml.get(horse, '?')
-        
+
         # Extract component values
         R = row.get('R', 0)
         try:
@@ -4465,7 +4336,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             atrack = float(row.get('A-Track', 0))
         except:
             Cclass = Cform = Cspeed = Cpace = Cstyle = Cpost = atrack = 0
-        
+
         # Find dominant component
         components = [
             ('Speed', Cspeed, 2.0),
@@ -4476,12 +4347,12 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             ('Post Position', Cpost, 0.8)
         ]
         dominant = max(components, key=lambda x: abs(x[1] * x[2]))
-        
+
         component_report += f"**#{post} {horse}** (ML: {ml})\n"
         component_report += f"* **Total Rating**: {R:.2f}\n"
         component_report += f"* **Components**: Class {Cclass:+.2f} | Form {Cform:+.2f} | Speed {Cspeed:+.2f} | Pace {Cpace:+.2f} | Style {Cstyle:+.2f} | Post {Cpost:+.2f} | Track {atrack:+.2f}\n"
         component_report += f"* **Strength**: {dominant[0]} ({dominant[1]:+.2f} × {dominant[1] * dominant[2]:.1f} weighted)\n"
-        
+
         # Explanation based on dominant component
         if dominant[0] == 'Speed':
             component_report += f"* **Why Rated**: Exceptional speed figures - {abs(dominant[1]):.1f} points faster than field average\n"
@@ -4491,18 +4362,18 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             component_report += f"* **Why Rated**: Positive form cycle - improving recent performances\n"
         elif dominant[0] == 'Pace Fit':
             component_report += f"* **Why Rated**: Ideal pace setup - running style matches projected scenario\n"
-        
+
         component_report += "\n"
-    
+
     # --- ELITE: Build Finishing Order Predictions ---
     # Use our elite probability function
     elite_finishing = calculate_finishing_order_probabilities(primary_df, primary_probs_dict)
-    
+
     finishing_order_report = "### Most Likely Finishing Order (Probability-Based)\n\n"
     finishing_order_report += "_Using conditional probability theory: P(2nd | not 1st), P(3rd | not in top 2), etc._\n\n"
-    
+
     position_names = {1: "🥇 Win (1st Place)", 2: "🥈 Place (2nd)", 3: "🥉 Show (3rd)", 4: "📍 4th Place", 5: "📍 5th Place"}
-    
+
     for pos in range(1, 6):
         finishing_order_report += f"**{position_names[pos]}:**\n"
         top_finishers = elite_finishing[f'position_{pos}'][:3]
@@ -4511,51 +4382,51 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             ml = name_to_ml.get(horse, '?')
             finishing_order_report += f"  {rank}. **#{post} {horse}** - {prob*100:.1f}% (ML {ml})\n"
         finishing_order_report += "\n"
-    
+
     finishing_order_report += "_Note: Horses can appear in multiple positions based on probability distribution. This shows the mathematical likelihood for each slot._\n"
-    
+
     # --- ELITE: Build $40 Bankroll Optimization ---
     bankroll_report = "### $40 Bankroll Structure\n\n"
-    
+
     if strategy_profile == "Value Hunter":
         bankroll_report += "**Strategy:** Value Hunter - Focus on overlays with wider coverage\n\n"
-        
+
         # Win bets on A-Group overlays
         win_cost = min(len([h for h in A_group if h in pos_ev_horses]), 3) * 6
         bankroll_report += f"* **Win Bets** (${win_cost}): $6 each on top {min(len([h for h in A_group if h in pos_ev_horses]), 3)} overlay(s) from A-Group\n"
-        
+
         # Exacta part-wheel
         ex_combos = nA * (nB + min(nC, 2))
         ex_cost = min(int(ex_combos * 0.50), 12)
         bankroll_report += f"* **Exacta** (${ex_cost}): A / B,C (top 2 from C) - ${ex_cost/ex_combos:.2f} base × {ex_combos} combos\n"
-        
+
         # Trifecta
         tri_combos = nA * (nB + min(nC, 2)) * (nB + nC + min(nD, 2))
         tri_cost = min(int(tri_combos * 0.30), 10)
         bankroll_report += f"* **Trifecta** (${tri_cost}): A / B,C / B,C,D - ${tri_cost/tri_combos:.2f} base × {tri_combos} combos\n"
-        
+
         # Superfecta
         super_cost = 40 - win_cost - ex_cost - tri_cost
         super_cost = max(super_cost, 6)
         bankroll_report += f"* **Superfecta** (${super_cost}): A / B,C / B,C,D / Top 5 from D+All\n"
-        
+
     else:  # Confident
         bankroll_report += "**Strategy:** Confident - Focus on top pick with deeper coverage\n\n"
-        
+
         # Win bet on top pick
         bankroll_report += f"* **Win Bet** ($15): $15 on #{name_to_post.get(all_horses[0], '?')} {all_horses[0]}\n"
-        
+
         # Exacta
         ex_combos = nA * nB
         bankroll_report += f"* **Exacta** ($8): A / B - $0.50 base × {ex_combos} combos\n"
-        
+
         # Trifecta
         tri_combos = nA * nB * nC
         bankroll_report += f"* **Trifecta** ($10): A / B / C - ${10/max(tri_combos,1):.2f} base × {tri_combos} combos\n"
-        
+
         # Superfecta
         bankroll_report += f"* **Superfecta** ($7): A / B / C / D - scaled to fit budget\n"
-    
+
     bankroll_report += f"\n**Total Investment:** $40 (optimized)\n"
     bankroll_report += f"**Risk Level:** {strategy_profile} approach - {'Wider coverage, value-based' if strategy_profile == 'Value Hunter' else 'Concentrated on top selection'}\n"
     bankroll_report += f"\n💡 **Use Finishing Order Predictions:** The probability rankings above show the most likely finishers for each position. Build your tickets using horses with highest probabilities for each slot.\n"
@@ -4614,14 +4485,14 @@ else:
     if st.session_state.get('classic_report_generated', False):
         st.success("✅ Classic Report Generated")
         st.markdown(st.session_state.get('classic_report', ''))
-        
+
         # Show download buttons for existing report
         if 'classic_report' in st.session_state:
             report_str = st.session_state['classic_report']
             analysis_bytes = report_str.encode("utf-8")
             df_ol = st.session_state.get('df_ol', pd.DataFrame())
             overlays_bytes = df_ol.to_csv(index=False).encode("utf-8-sig") if isinstance(df_ol, pd.DataFrame) else b""
-            
+
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.download_button("⬇️ Download Full Analysis (.txt)", data=analysis_bytes, file_name="analysis.txt", mime="text/plain", key="dl_analysis_persistent")
@@ -4632,35 +4503,35 @@ else:
                 if 'strategy_report' in st.session_state:
                     tickets_bytes = st.session_state['strategy_report'].encode("utf-8")
                     st.download_button("⬇️ Download Strategy Detail (.txt)", data=tickets_bytes, file_name="strategy_detail.txt", mime="text/plain", key="dl_strategy_persistent")
-        
+
         st.info("💡 To generate a new report, click 'Analyze This Race' again below.")
-    
+
     if st.button("Analyze This Race", type="primary", key="analyze_button"):
         # Clear previous Classic Report before generating new one
         st.session_state.pop('classic_report_generated', None)
         st.session_state.pop('classic_report', None)
-        
+
         with st.spinner("Handicapping Race..."):
             try:
                 # ============================================================
                 # GOLD STANDARD: SEQUENTIAL VALIDATION & DATA INTEGRITY CHECK
                 # ============================================================
-                
+
                 # STAGE 1: Critical Data Retrieval with Validation
                 primary_df = st.session_state.get('primary_d')
                 primary_probs = st.session_state.get('primary_probs')
                 df_final_field = st.session_state.get('df_final_field')
                 df_ol = st.session_state.get('df_ol', pd.DataFrame())
-                
+
                 # VALIDATION: Check primary data exists and is valid
                 if primary_df is None or not isinstance(primary_df, pd.DataFrame):
                     st.error("❌ CRITICAL ERROR: Primary ratings dataframe is missing. Please regenerate ratings.")
                     st.stop()
-                
+
                 if primary_df.empty:
                     st.error("❌ CRITICAL ERROR: Primary ratings dataframe is empty. Check field entries.")
                     st.stop()
-                
+
                 # GOLD STANDARD FIX: Ensure Post and ML columns are in primary_df for classic report
                 if df_final_field is not None and not df_final_field.empty:
                     if 'Post' not in primary_df.columns or 'ML' not in primary_df.columns:
@@ -4669,7 +4540,7 @@ else:
                         primary_df = primary_df.merge(post_ml_data, on='Horse', how='left')
                         # Update session state with enriched primary_df
                         st.session_state['primary_d'] = primary_df
-                
+
                 # VALIDATION: Check required columns exist
                 required_cols = ['Horse', 'R', 'Fair %', 'Fair Odds']
                 missing_cols = [col for col in required_cols if col not in primary_df.columns]
@@ -4677,12 +4548,12 @@ else:
                     st.error(f"❌ CRITICAL ERROR: Missing required columns: {missing_cols}")
                     st.error("Required columns: Horse, R, Fair %, Fair Odds")
                     st.stop()
-                
+
                 # VALIDATION: Check Horse column has valid names
                 if primary_df['Horse'].isna().any():
                     st.error("❌ CRITICAL ERROR: Some horses have missing names")
                     st.stop()
-                
+
                 # VALIDATION: Check R (ratings) column is numeric and finite
                 try:
                     primary_df['R_test'] = pd.to_numeric(primary_df['R'], errors='coerce')
@@ -4696,12 +4567,12 @@ else:
                 except Exception as e:
                     st.error(f"❌ CRITICAL ERROR: Rating validation failed: {e}")
                     st.stop()
-                
+
                 # VALIDATION: Check Fair % exists and is valid
                 if primary_df['Fair %'].isna().all():
                     st.error("❌ CRITICAL ERROR: No fair probabilities calculated")
                     st.stop()
-                
+
                 # STAGE 2: Context Data Retrieval with Safe Defaults
                 strategy_profile = st.session_state.get('strategy_profile', 'Balanced')
                 ppi_val = st.session_state.get('ppi_val', 0.0)
@@ -4711,28 +4582,28 @@ else:
                 distance_txt = st.session_state.get('distance_txt', '')
                 race_type_detected = st.session_state.get('race_type', '')
                 purse_val = st.session_state.get('purse_val', 0)
-                
+
                 # VALIDATION: Ensure numeric values are finite
                 if not np.isfinite(ppi_val):
                     ppi_val = 0.0
                 if not np.isfinite(purse_val) or purse_val < 0:
                     purse_val = 0
-                
+
                 # VALIDATION: Ensure text fields are strings
                 track_name = str(track_name) if track_name else 'Unknown'
                 surface_type = str(surface_type) if surface_type else 'Dirt'
                 condition_txt = str(condition_txt) if condition_txt else 'Fast'
                 distance_txt = str(distance_txt) if distance_txt else '6F'
                 race_type_detected = str(race_type_detected) if race_type_detected else 'Unknown'
-                
+
                 # STAGE 3: Sort and Build Mappings with Validation
                 primary_sorted = primary_df.sort_values(by="R", ascending=False)
-                
+
                 # VALIDATION: Ensure final field exists
                 if df_final_field is None or df_final_field.empty:
                     st.error("❌ CRITICAL ERROR: Final field dataframe missing")
                     st.stop()
-                
+
                 # GOLD STANDARD: Build safe mappings with validation
                 try:
                     name_to_post = pd.Series(
@@ -4743,32 +4614,32 @@ else:
                         df_final_field["ML"].values,
                         index=df_final_field["Horse"]
                     ).to_dict()
-                    
+
                     # VALIDATION: Ensure all horses in primary_df have post/ML mappings
                     missing_horses = []
                     for horse in primary_df["Horse"]:
                         if horse not in name_to_post:
                             missing_horses.append(horse)
-                    
+
                     if missing_horses:
                         st.error(f"❌ CRITICAL ERROR: Horse name mismatch between ratings and Section A")
                         st.error(f"Missing horses: {', '.join(missing_horses)}")
                         st.error("This usually means horse names were modified after Section A")
                         st.stop()
-                        
+
                 except KeyError as e:
                     st.error(f"❌ CRITICAL ERROR: Missing required column in final field: {e}")
                     st.stop()
-                
+
                 field_size = len(primary_df)
-                
+
                 # VALIDATION: Field size sanity check
                 if field_size < 2:
                     st.error("❌ CRITICAL ERROR: Field must have at least 2 horses")
                     st.stop()
                 if field_size > 20:
                     st.warning("⚠️ WARNING: Unusually large field size (>20 horses)")
-                
+
                 # ============================================================
                 # SEQUENTIAL EXECUTION: All validations passed, proceed safely
                 # ============================================================
@@ -4783,7 +4654,7 @@ else:
                 strategy_report_md = build_betting_strategy(
                     primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
                 )
-                
+
                 # Store strategy report in session state
                 st.session_state['strategy_report'] = strategy_report_md
 
@@ -4829,7 +4700,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 - Explain the logic behind the bet distribution
 - Show total investment and risk level
 
-**4. Race Summary** 
+**4. Race Summary**
 - Brief 4-6 sentences about race conditions, pace setup, and key angles
 
 **5. Contender Analysis**
@@ -4853,18 +4724,18 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 - **Tone:** Be informative, direct, and easy to understand. Avoid overly complex jargon. Use horse names and post numbers (#) frequently.
 """
                 report = call_openai_messages(messages=[{"role":"user","content":prompt}])
-                
+
                 # Store Classic Report in session state so it persists across reruns
                 st.session_state['classic_report'] = report
                 st.session_state['classic_report_generated'] = True
-                
+
                 st.success("✅ Analysis Complete! Thank you for contributing to our community database.")
-                
+
                 # Wrap report in standard font styling for readability
                 styled_report = f"""
-                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
-                            font-size: 15px; 
-                            line-height: 1.6; 
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                            font-size: 15px;
+                            line-height: 1.6;
                             color: #1f2937;">
                     {report}
                 </div>
@@ -4907,7 +4778,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                         def safe_float(value, default=0.0):
                             """
                             Convert value to float, handling:
-                            - Percentage strings like '75.6%' 
+                            - Percentage strings like '75.6%'
                             - American odds like '+150', '-200'
                             - Regular numbers
                             """
@@ -4921,11 +4792,11 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 return float(value)
                             except (ValueError, TypeError, AttributeError):
                                 return default
-                        
+
                         # Generate race ID
                         race_date = datetime.now().strftime('%Y%m%d')
                         race_id = f"{track_name}_{race_date}_R{st.session_state.get('race_num', 1)}"
-                        
+
                         # Prepare COMPREHENSIVE race metadata with all context
                         race_metadata = {
                             'track': track_name,
@@ -4953,20 +4824,20 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             'is_turf': surface_type.lower() == 'turf',
                             'is_synthetic': surface_type.lower() in ['synthetic', 'tapeta', 'polytrack']
                         }
-                        
+
                         # Prepare horses data with ALL AVAILABLE FEATURES for maximum ML intelligence
                         horses_data = []
                         for idx, row in primary_df.iterrows():
                             horse_name = str(row.get('Horse', f'Horse_{idx+1}'))
-                            
+
                             # Extract Fair % with percentage handling
                             fair_pct_raw = row.get('Fair %', 0.0)
                             fair_pct_value = safe_float(fair_pct_raw) / 100.0  # Convert to probability (0-1)
-                            
+
                             # Get individual horse angles and pedigree data
                             angles_df = angles_per_horse.get(horse_name)
                             pedigree_data = pedigree_per_horse.get(horse_name, {})
-                            
+
                             # Parse individual angle categories for granular ML features
                             angle_early_speed = 0.0
                             angle_class_move = 0.0
@@ -4976,7 +4847,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             angle_surface_switch = 0.0
                             angle_distance_switch = 0.0
                             angle_debut = 0.0
-                            
+
                             if angles_df is not None and not angles_df.empty:
                                 cats_lower = " ".join(angles_df["Category"].astype(str).tolist()).lower()
                                 # Extract specific angle values for intelligent pattern recognition
@@ -4996,7 +4867,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                     angle_distance_switch = 1.0
                                 if "debut" in cats_lower or "1st time" in cats_lower or "maiden sp wt" in cats_lower:
                                     angle_debut = 1.0
-                            
+
                             horse_dict = {
                                 'program_number': int(safe_float(name_to_post.get(horse_name, idx + 1), idx + 1)),
                                 'horse_name': horse_name,
@@ -5058,7 +4929,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 'earnings_lifetime': safe_float(row.get('Earnings', 0.0))
                             }
                             horses_data.append(horse_dict)
-                        
+
                         # Save to gold database
                         pp_text_raw = st.session_state.get('pp_text_cache', '')
                         success = gold_db.save_analyzed_race(
@@ -5067,12 +4938,12 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             horses_data=horses_data,
                             pp_text_raw=pp_text_raw
                         )
-                        
+
                         if success:
                             st.success(f"💾 **Auto-saved to gold database:** {race_id}")
                             st.session_state['last_saved_race_id'] = race_id
                             st.info("🏁 After race completes, submit actual top 5 finishers in **Section E** below!")
-                        
+
                     except Exception as save_error:
                         st.warning(f"Could not auto-save race: {save_error}")
                         # Don't fail the entire analysis if save fails
@@ -5094,7 +4965,7 @@ if GOLD_DB_AVAILABLE and gold_db is not None:
         stats = gold_db.get_accuracy_stats()
         pending_races = gold_db.get_pending_races(limit=1000)  # Get all pending
         total_saved = stats.get('total_races', 0) + len(pending_races)
-        
+
         st.header(f"E. Gold High-IQ System 🏆 - {total_saved} Races Saved")
         if total_saved > 0:
             st.success(f"💾 **Database Active:** {stats.get('total_races', 0)} races with results, {len(pending_races)} pending results")
@@ -5110,7 +4981,7 @@ if not GOLD_DB_AVAILABLE or gold_db is None:
     1. Ensure `gold_database_manager.py` exists
     2. Check that SQLite3 is working
     3. Restart the Streamlit app
-    
+
     Files needed:
     - gold_database_manager.py
     - gold_database_schema.sql
@@ -5121,35 +4992,35 @@ else:
         # Get stats from gold database
         stats = gold_db.get_accuracy_stats()
         pending_races = gold_db.get_pending_races(limit=20)
-        
+
         # Create tabs for Gold High-IQ System
         tab_overview, tab_results, tab_retrain = st.tabs(
             ["📊 Dashboard", "🏁 Submit Actual Top 5", "🚀 Retrain Model"]
         )
-        
+
         # Tab 1: Dashboard
         with tab_overview:
             st.markdown("""
             ### Real Data Learning System
-            
+
             Every time you click "Analyze This Race", the system **auto-saves**:
             - All horse features (speed, class, pace, angles, PhD enhancements)
             - Model predictions (probabilities, ratings, confidence)
             - Race metadata (track, conditions, purse, etc.)
-            
+
             After the race completes, submit the actual top 5 finishers below.
             The system learns from real outcomes to reach 90%+ accuracy.
-            
-            🔒 **Data Persistence:** All analyzed races are permanently saved to the database. 
+
+            🔒 **Data Persistence:** All analyzed races are permanently saved to the database.
             You can safely close your browser and return anytime - your data persists!
-            
+
             📁 **Database Location:** `gold_high_iq.db` (stored in your project folder)
             """)
-            
+
             # Calculate total analyzed races (completed + pending)
             completed_races = stats.get('total_races', 0)
             total_analyzed = completed_races + len(pending_races)
-            
+
             # Metrics
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -5163,7 +5034,7 @@ else:
                     st.metric("Winner Accuracy", f"{stats.get('winner_accuracy', 0.0):.1%}")
                 else:
                     st.metric("Winner Accuracy", "N/A", help="Submit results to track accuracy")
-            
+
             # Training readiness indicator
             st.markdown("#### Training Readiness")
             ready = completed_races >= 50
@@ -5171,24 +5042,24 @@ else:
                 st.success(f"✅ Ready to retrain! You have {completed_races} completed races.")
             else:
                 st.info(f"⏳ Need 50 completed races to retrain model. Current progress: {completed_races}/50")
-            
+
             # Progress bars
             st.markdown("#### Progress to Milestones")
-            
+
             milestones = [
                 (50, "First Retrain", "70-75%"),
                 (100, "Second Retrain", "75-80%"),
                 (500, "Major Improvement", "85-87%"),
                 (1000, "Gold Standard", "90%+")
             ]
-            
+
             for target, label, expected_acc in milestones:
                 progress = min(completed_races / target, 1.0)
                 st.progress(
-                    progress, 
+                    progress,
                     text=f"{label} ({expected_acc} expected): {completed_races}/{target} races"
                 )
-            
+
             # System performance
             if stats.get('total_races', 0) > 0:
                 st.markdown("#### System Performance")
@@ -5199,25 +5070,25 @@ else:
                     st.metric("Top-3 Accuracy", f"{stats.get('top3_accuracy', 0.0):.1%}")
                 with col3:
                     st.metric("Top-5 Accuracy", f"{stats.get('top5_accuracy', 0.0):.1%}")
-        
+
         # Tab 2: Submit Actual Top 5
         with tab_results:
             st.markdown("""
             ### Submit Actual Top 5 Finishers
-            
+
             After a race completes, enter the actual finishing order here.
             **Only the top 5 positions are required** for high-quality ML training.
             """)
-            
+
             if not pending_races:
                 st.success("✅ No pending races! All analyzed races have results entered.")
                 st.info("💡 Analyze more races in Sections 1-4 to build training data.")
             else:
                 st.info(f"📋 {len(pending_races)} races awaiting results")
-                
+
                 # Select race
                 race_options = [
-                    f"{r[1]} R{r[3]} on {r[2]} ({r[4]} horses)" 
+                    f"{r[1]} R{r[3]} on {r[2]} ({r[4]} horses)"
                     for r in pending_races
                 ]
                 selected_idx = st.selectbox(
@@ -5226,46 +5097,46 @@ else:
                     format_func=lambda i: race_options[i],
                     key="select_pending_race"
                 )
-                
+
                 if selected_idx is not None:
                     selected_race = pending_races[selected_idx]
                     race_id, track, date, race_num, field_size = selected_race
-                    
+
                     st.markdown(f"#### 🏇 {race_id}")
                     st.caption(f"{field_size} horses ran in this race")
-                    
+
                     # Get horses for this race
                     horses = gold_db.get_horses_for_race(race_id)
-                    
+
                     if not horses:
                         st.error("No horses found for this race.")
                     else:
                         # Display horses in clean table
                         st.markdown("**Horses in this race:**")
-                        
+
                         horses_df = pd.DataFrame(horses)
-                        display_df = horses_df[['program_number', 'horse_name', 'post_position', 
+                        display_df = horses_df[['program_number', 'horse_name', 'post_position',
                                                'predicted_probability', 'fair_odds']].copy()
                         # Format values BEFORE renaming columns
                         display_df['predicted_probability'] = (display_df['predicted_probability'] * 100).round(1).astype(str) + '%'
                         display_df['fair_odds'] = display_df['fair_odds'].round(2)
                         # Now rename columns for display
                         display_df.columns = ['#', 'Horse Name', 'Post', 'Predicted Win %', 'Fair Odds']
-                        
+
                         st.dataframe(display_df, use_container_width=True, hide_index=True)
-                        
+
                         # Enter top 5
                         st.markdown("---")
                         st.markdown("### 🏆 Enter Actual Top 5 Finishers")
                         st.caption("Select the program numbers that finished 1st through 5th")
-                        
+
                         # Create clean input grid
                         col1, col2, col3, col4, col5 = st.columns(5)
-                        
+
                         # Ensure program numbers are integers for proper sorting
                         program_numbers = sorted([int(h['program_number']) for h in horses])
                         horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
-                        
+
                         with col1:
                             st.markdown("**🥇 1st Place**")
                             pos1 = st.selectbox(
@@ -5275,7 +5146,7 @@ else:
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
-                        
+
                         with col2:
                             st.markdown("**🥈 2nd Place**")
                             pos2 = st.selectbox(
@@ -5285,7 +5156,7 @@ else:
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
-                        
+
                         with col3:
                             st.markdown("**🥉 3rd Place**")
                             pos3 = st.selectbox(
@@ -5295,7 +5166,7 @@ else:
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
-                        
+
                         with col4:
                             st.markdown("**4th Place**")
                             pos4 = st.selectbox(
@@ -5305,7 +5176,7 @@ else:
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
-                        
+
                         with col5:
                             st.markdown("**5th Place**")
                             pos5 = st.selectbox(
@@ -5315,10 +5186,10 @@ else:
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
-                        
+
                         # Validation and submit
                         finish_order = [pos1, pos2, pos3, pos4, pos5]
-                        
+
                         # Show preview
                         st.markdown("---")
                         st.markdown("**Preview:**")
@@ -5336,11 +5207,11 @@ else:
                                 preview_parts.append(f"5th {horse_names_dict[pos]}")
                         preview_text = " → ".join(preview_parts)
                         st.info(preview_text)
-                        
+
                         # Validation check
                         if len(set(finish_order)) != 5:
                             st.error("❌ Each position must be unique! Please select 5 different horses.")
-                        
+
                         # Submit button (always show, but validate before submitting)
                         if st.button("✅ Submit Top 5 Results", type="primary", key=f"submit_{race_id}"):
                             # Re-validate on submit
@@ -5352,47 +5223,47 @@ else:
                                         race_id=race_id,
                                         finish_order_programs=finish_order
                                     )
-                                    
+
                                     if success:
                                         st.success(f"✅ Results saved for {race_id}!")
                                         st.balloons()
-                                        
+
                                         # Show accuracy feedback
                                         predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
                                         predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
-                                        
+
                                         actual_winner = horse_names_dict[pos1]
-                                        
+
                                         if predicted_winner == actual_winner:
                                             st.success(f"🎯 Predicted winner correctly: {actual_winner}")
                                         else:
                                             st.info(f"📊 Predicted: {predicted_winner} | Actual: {actual_winner}")
-                                        
+
                                         st.info("🚀 Go to 'Retrain Model' tab to update predictions with real data!")
-                                        
+
                                         time.sleep(2)
                                         _safe_rerun()
                                     else:
                                         st.error("❌ Error saving results. Please try again.")
-        
+
         # Tab 3: Retrain Model
         with tab_retrain:
             st.markdown("""
             ### Retrain ML Model with Real Data
-            
+
             Once you have **50+ completed races**, retrain the model to learn from real outcomes.
             The model uses PyTorch with Plackett-Luce ranking loss for optimal accuracy.
             """)
-            
+
             # Check if ready
             ready_to_train = stats.get('total_races', 0) >= 50
-            
+
             if not ready_to_train:
                 st.warning(f"⏳ Need at least 50 completed races. Currently: {stats.get('total_races', 0)}")
                 st.info("💡 Complete more races in the 'Submit Actual Top 5' tab.")
             else:
                 st.success(f"✅ Ready to train! {stats.get('total_races', 0)} races available.")
-                
+
                 # Training parameters
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -5405,13 +5276,13 @@ else:
                     )
                 with col3:
                     batch_size = st.selectbox("Batch Size", [4, 8, 16, 32], index=1)
-                
+
                 # Train button
                 if st.button("🚀 Start Retraining", type="primary", key="retrain_btn"):
                     with st.spinner(f"Training model on {stats.get('total_races', 0)} races... This may take 2-5 minutes..."):
                         try:
                             from retrain_model import retrain_model
-                            
+
                             results = retrain_model(
                                 db_path=gold_db.db_path,
                                 epochs=epochs,
@@ -5419,12 +5290,12 @@ else:
                                 batch_size=batch_size,
                                 min_races=50
                             )
-                            
+
                             if 'error' in results:
                                 st.error(f"❌ Training failed: {results['error']}")
                             else:
                                 st.success("✅ Training complete!")
-                                
+
                                 # Display results
                                 col1, col2, col3 = st.columns(3)
                                 with col1:
@@ -5442,26 +5313,26 @@ else:
                                         "Top-5 Accuracy",
                                         f"{results['metrics']['top5_accuracy']:.1%}"
                                     )
-                                
+
                                 st.info(f"⏱️ Training time: {results.get('duration', 0):.1f} seconds")
                                 st.info(f"💾 Model saved: {results.get('model_path', 'N/A')}")
-                                
+
                                 st.balloons()
-                                
+
                         except Exception as e:
                             st.error(f"Training error: {e}")
                             import traceback
                             st.code(traceback.format_exc())
-                
+
                 # Training history
                 st.markdown("---")
                 st.markdown("### Training History")
-                
+
                 try:
                     import sqlite3
                     conn = sqlite3.connect(gold_db.db_path)
                     history_df = pd.read_sql_query("""
-                        SELECT 
+                        SELECT
                             retrain_timestamp,
                             total_races_used,
                             val_winner_accuracy,
@@ -5473,23 +5344,23 @@ else:
                         LIMIT 10
                     """, conn)
                     conn.close()
-                    
+
                     if not history_df.empty:
                         history_df.columns = [
-                            'Timestamp', 'Races Used', 'Winner Acc', 
+                            'Timestamp', 'Races Used', 'Winner Acc',
                             'Top-3 Acc', 'Top-5 Acc', 'Duration (s)'
                         ]
                         history_df['Winner Acc'] = (history_df['Winner Acc'] * 100).round(1).astype(str) + '%'
                         history_df['Top-3 Acc'] = (history_df['Top-3 Acc'] * 100).round(1).astype(str) + '%'
                         history_df['Top-5 Acc'] = (history_df['Top-5 Acc'] * 100).round(1).astype(str) + '%'
                         history_df['Duration (s)'] = history_df['Duration (s)'].round(1)
-                        
+
                         st.dataframe(history_df, use_container_width=True, hide_index=True)
                     else:
                         st.info("No training history yet. Train the model to see results here.")
                 except Exception as e:
                     st.warning("Could not load training history.")
-    
+
     except Exception as e:
         st.error(f"Error in Gold High-IQ System: {e}")
         import traceback
