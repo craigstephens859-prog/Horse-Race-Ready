@@ -3949,7 +3949,6 @@ else:
                                 "Winner",
                                 program_numbers,
                                 key=f"pos1_{race_id}",
-                                index=0,
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
@@ -3960,7 +3959,6 @@ else:
                                 "Second",
                                 program_numbers,
                                 key=f"pos2_{race_id}",
-                                index=min(1, len(program_numbers)-1),
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
@@ -3971,7 +3969,6 @@ else:
                                 "Third",
                                 program_numbers,
                                 key=f"pos3_{race_id}",
-                                index=min(2, len(program_numbers)-1),
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
@@ -3982,7 +3979,6 @@ else:
                                 "Fourth",
                                 program_numbers,
                                 key=f"pos4_{race_id}",
-                                index=min(3, len(program_numbers)-1),
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
@@ -3993,7 +3989,6 @@ else:
                                 "Fifth",
                                 program_numbers,
                                 key=f"pos5_{race_id}",
-                                index=min(4, len(program_numbers)-1),
                                 format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
                                 label_visibility="collapsed"
                             )
