@@ -3719,7 +3719,22 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
 # ===================== E. GOLD HIGH-IQ SYSTEM 🏆 (Real Data → 90%) =====================
 
 st.markdown("---")
-st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
+
+# Show database info prominently before the header
+if GOLD_DB_AVAILABLE and gold_db is not None:
+    try:
+        # Get quick stats for header display
+        stats = gold_db.get_accuracy_stats()
+        pending_races = gold_db.get_pending_races(limit=1000)  # Get all pending
+        total_saved = stats.get('total_races', 0) + len(pending_races)
+        
+        st.header(f"E. Gold High-IQ System 🏆 - {total_saved} Races Saved")
+        if total_saved > 0:
+            st.success(f"💾 **Database Active:** {stats.get('total_races', 0)} races with results, {len(pending_races)} pending results")
+    except:
+        st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
+else:
+    st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
 
 if not GOLD_DB_AVAILABLE or gold_db is None:
     st.error("❌ Gold High-IQ Database not available. Check initialization.")
@@ -3760,6 +3775,8 @@ else:
             
             🔒 **Data Persistence:** All analyzed races are permanently saved to the database. 
             You can safely close your browser and return anytime - your data persists!
+            
+            📁 **Database Location:** `gold_high_iq.db` (stored in your project folder)
             """)
             
             # Calculate total analyzed races (completed + pending)
