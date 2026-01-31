@@ -2950,6 +2950,16 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         )
         arace = weighted_components + a_track + tier2_bonus
         R     = arace
+        
+        # Sanity check: Clip extreme outlier values (indicates potential data quality issues)
+        # Typical racing range: -5 to +20. Values beyond suggest parsing errors or unrealistic bonuses
+        if R > 30 or R < -10:
+            R = np.clip(R, -5, 20)
+        
+        # Sanity check: clip extreme values to prevent unrealistic outliers
+        # Typical range: -5 to +20, extreme outliers indicate data quality issues
+        if R > 30 or R < -10:
+            R = np.clip(R, -5, 20)
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
         quirin_display = quirin if pd.notna(quirin) else None
@@ -2964,9 +2974,9 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
     return out.sort_values(by="R", ascending=False)
 
 
-def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
+def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dict[str, float]] = None) -> Dict[str, float]:
     """
-    GOLD STANDARD probability calculation with comprehensive validation.
+    GOLD STANDARD probability calculation with comprehensive validation and ML odds reality check.
     
     Guarantees:
     1. Always returns valid probability distribution
@@ -3034,6 +3044,23 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame) -> Dict[str, float]:
         # Normalize to exactly 1.0
         result = {h: p / total_prob for h, p in result.items()}
     
+    # ML ODDS REALITY CHECK: Prevent longshots (>20/1) from getting unrealistic probabilities (>30%)
+    # This adds common sense - the market odds reflect real race experience
+    if ml_odds_dict:
+        adjusted = False
+        for horse, prob in result.items():
+            ml_odds = ml_odds_dict.get(horse, 5.0)
+            # If a longshot (>20/1) gets >30% win probability, that's unrealistic
+            if ml_odds > 20.0 and prob > 0.30:
+                result[horse] = min(prob, 0.25)  # Cap at 25%
+                adjusted = True
+        
+        # If we adjusted any probabilities, renormalize
+        if adjusted:
+            total_prob = sum(result.values())
+            if total_prob > 0:
+                result = {h: p / total_prob for h, p in result.items()}
+    
     return result
 
 
@@ -3087,7 +3114,18 @@ for i, (rbias, pbias) in enumerate(scenarios):
             pedigree_per_horse=pedigree_per_horse,
             figs_df=figs_df # <--- PASS THE REAL FIGS_DF
         )
-        fair_probs = fair_probs_from_ratings(ratings_df)
+        # Build ML odds dict from df_final_field for reality check
+        ml_odds_dict = {}
+        for _, row in df_final_field.iterrows():
+            horse_name = row.get('Horse')
+            ml_odds_val = row.get('ML_Odds', 5.0)
+            if horse_name and pd.notna(ml_odds_val):
+                try:
+                    ml_odds_dict[horse_name] = float(ml_odds_val)
+                except:
+                    ml_odds_dict[horse_name] = 5.0
+        
+        fair_probs = fair_probs_from_ratings(ratings_df, ml_odds_dict)
         if 'Horse' in ratings_df.columns:
             ratings_df["Fair %"] = ratings_df["Horse"].map(lambda h: f"{fair_probs.get(h,0)*100:.1f}%")
             ratings_df["Fair Odds"] = ratings_df["Horse"].map(lambda h: fair_to_american_str(fair_probs.get(h,0)))
@@ -3983,8 +4021,9 @@ else:
                         # Create clean input grid
                         col1, col2, col3, col4, col5 = st.columns(5)
                         
-                        program_numbers = [h['program_number'] for h in horses]
-                        horse_names_dict = {h['program_number']: h['horse_name'] for h in horses}
+                        # Ensure program numbers are integers for proper sorting
+                        program_numbers = sorted([int(h['program_number']) for h in horses])
+                        horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
                         
                         with col1:
                             st.markdown("**🥇 1st Place**")
