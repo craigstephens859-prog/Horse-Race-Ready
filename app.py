@@ -3546,7 +3546,7 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                 st.session_state['classic_report'] = report
                 st.session_state['classic_report_generated'] = True
                 
-                st.success("✅ Analysis Complete! See full report below.")
+                st.success("✅ Analysis Complete! Thank you for contributing to our community database.")
                 st.markdown(report)
 
                 # ---- Save to disk (optional) ----
