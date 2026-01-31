@@ -3044,15 +3044,29 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dic
         # Normalize to exactly 1.0
         result = {h: p / total_prob for h, p in result.items()}
     
-    # ML ODDS REALITY CHECK: Prevent longshots (>20/1) from getting unrealistic probabilities (>30%)
+    # ML ODDS REALITY CHECK: Prevent longshots from getting unrealistic probabilities
     # This adds common sense - the market odds reflect real race experience
     if ml_odds_dict:
         adjusted = False
         for horse, prob in result.items():
             ml_odds = ml_odds_dict.get(horse, 5.0)
-            # If a longshot (>20/1) gets >30% win probability, that's unrealistic
-            if ml_odds > 20.0 and prob > 0.30:
-                result[horse] = min(prob, 0.25)  # Cap at 25%
+            
+            # Progressive caps based on ML odds:
+            # 10/1 or more: cap at 25%
+            # 15/1 or more: cap at 20%  
+            # 20/1 or more: cap at 15%
+            # 30/1 or more: cap at 10%
+            if ml_odds >= 30.0 and prob > 0.10:
+                result[horse] = 0.10
+                adjusted = True
+            elif ml_odds >= 20.0 and prob > 0.15:
+                result[horse] = 0.15
+                adjusted = True
+            elif ml_odds >= 15.0 and prob > 0.20:
+                result[horse] = 0.20
+                adjusted = True
+            elif ml_odds >= 10.0 and prob > 0.25:
+                result[horse] = 0.25
                 adjusted = True
         
         # If we adjusted any probabilities, renormalize
@@ -3115,15 +3129,28 @@ for i, (rbias, pbias) in enumerate(scenarios):
             figs_df=figs_df # <--- PASS THE REAL FIGS_DF
         )
         # Build ML odds dict from df_final_field for reality check
+        # Prefer Live Odds (from Section A user input), fall back to ML (parsed morning line)
         ml_odds_dict = {}
         for _, row in df_final_field.iterrows():
             horse_name = row.get('Horse')
-            ml_odds_val = row.get('ML_Odds', 5.0)
-            if horse_name and pd.notna(ml_odds_val):
+            # Try Live Odds first (user input), then ML (parsed)
+            live_odds = row.get('Live Odds', '')
+            ml_odds = row.get('ML', '')
+            odds_str = live_odds if live_odds else ml_odds
+            
+            if horse_name and odds_str:
                 try:
-                    ml_odds_dict[horse_name] = float(ml_odds_val)
+                    # Parse odds string (e.g., "30/1", "5/2", "3.5")
+                    odds_str = str(odds_str).strip()
+                    if '/' in odds_str:
+                        parts = odds_str.split('/')
+                        ml_odds_dict[horse_name] = float(parts[0]) / float(parts[1])
+                    else:
+                        ml_odds_dict[horse_name] = float(odds_str)
                 except:
                     ml_odds_dict[horse_name] = 5.0
+            else:
+                ml_odds_dict[horse_name] = 5.0
         
         fair_probs = fair_probs_from_ratings(ratings_df, ml_odds_dict)
         if 'Horse' in ratings_df.columns:
@@ -3628,7 +3655,17 @@ Your goal is to present the information from the "FULL ANALYSIS & BETTING PLAN" 
                 st.session_state['classic_report_generated'] = True
                 
                 st.success("✅ Analysis Complete! Thank you for contributing to our community database.")
-                st.markdown(report)
+                
+                # Wrap report in standard font styling for readability
+                styled_report = f"""
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+                            font-size: 15px; 
+                            line-height: 1.6; 
+                            color: #1f2937;">
+                    {report}
+                </div>
+                """
+                st.markdown(styled_report, unsafe_allow_html=True)
 
                 # ---- Save to disk (optional) ----
                 report_str = report if isinstance(report, str) else str(report)
