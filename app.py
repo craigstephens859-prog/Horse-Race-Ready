@@ -355,6 +355,18 @@ def parse_track_name_from_pp(pp_text: str) -> str:
                 return canon
     return ""
 
+def detect_race_number(pp_text: str) -> Optional[int]:
+    """Extract race number from PP text header (e.g., 'Race 6')."""
+    s = pp_text or ""
+    # Look for "Race N" pattern in first few lines
+    m = re.search(r'(?mi)\bRace\s+(\d+)\b', s[:500])
+    if m:
+        try:
+            return int(m.group(1))
+        except:
+            pass
+    return None
+
 # -------- Race-type constants + detection --------
 # This dictionary is our constant. It measures the "reliability" of the race type.
 base_class_bias = {
@@ -2147,18 +2159,6 @@ distance_txt = st.selectbox("Distance:", DISTANCE_OPTIONS, index=idx)
 st.session_state['distance_txt'] = distance_txt
 
 # Purse
-def detect_race_number(pp_text: str) -> Optional[int]:
-    """Extract race number from PP text header (e.g., 'Race 6')."""
-    s = pp_text or ""
-    # Look for "Race N" pattern in first few lines
-    m = re.search(r'(?mi)\bRace\s+(\d+)\b', s[:500])
-    if m:
-        try:
-            return int(m.group(1))
-        except:
-            pass
-    return None
-
 def detect_purse_amount(pp_text: str) -> Optional[int]:
     s = pp_text or ""
     m = re.search(r'(?mi)\bPurse\b[^$\n\r]*\$\s*([\d,]+)', s)
