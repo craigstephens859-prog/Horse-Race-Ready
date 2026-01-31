@@ -3048,6 +3048,77 @@ def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) ->
     return 0.0
 
 
+# ======================== ROUTE & SPRINT CALIBRATION ========================
+# Based on Pegasus WC G1 (9f route) and GP Turf Sprint (5f sprint) validation
+
+def is_sprint_distance(distance_txt: str) -> bool:
+    """Detect sprint distances (≤6.5f)"""
+    if not distance_txt:
+        return False
+    try:
+        if 'f' in distance_txt.lower():
+            furlongs = float(distance_txt.lower().replace('f', '').strip())
+            return furlongs <= 6.5
+    except:
+        pass
+    return False
+
+
+def calculate_sprint_post_position_bonus(post: int, distance: float, surface: str) -> float:
+    """Inside posts dominate turf sprints (Rail 1.65 impact, Outside 8+ 0.44 death!)"""
+    if distance > 6.5:
+        return 0.0
+    bonus = 0.0
+    if surface.lower() in ['turf', 'tur', 't'] and distance <= 6.0:
+        if post == 1:
+            bonus += 0.15
+        elif post <= 3:
+            bonus += 0.12
+        elif post <= 7:
+            bonus += 0.05
+        else:
+            bonus -= 0.25  # Death zone!
+    return bonus
+
+
+def calculate_sprint_running_style_bonus(style: str, distance: float) -> float:
+    """Early speed 2.05 impact at sprints, pressers 0.00, stalkers 0.20 (death!)"""
+    if distance > 6.5:
+        return 0.0
+    bonus = 0.0
+    style_upper = style.upper() if style else ''
+    if distance <= 5.5:
+        if 'E' in style_upper and '/' not in style_upper:
+            bonus += 0.20
+        elif 'E' in style_upper and 'P' in style_upper:
+            bonus += 0.10
+        elif 'P' in style_upper:
+            bonus -= 0.10
+        elif 'S' in style_upper:
+            bonus -= 0.20
+    return bonus
+
+
+def calculate_hot_combo_bonus(trainer_pct: float, jockey_pct: float, combo_pct: float) -> float:
+    """Hot trainer/jockey combos (40% L60 was KEY to Litigation win!)"""
+    bonus = 0.0
+    if combo_pct >= 0.40:
+        bonus += 0.20
+    elif combo_pct >= 0.30:
+        bonus += 0.15
+    elif combo_pct >= 0.20:
+        bonus += 0.10
+    if trainer_pct >= 0.30:
+        bonus += 0.10
+    elif trainer_pct >= 0.20:
+        bonus += 0.05
+    if jockey_pct >= 0.25:
+        bonus += 0.08
+    elif jockey_pct >= 0.15:
+        bonus += 0.05
+    return float(np.clip(bonus, 0.0, 0.25))
+
+
 def parse_workout_data(pp_text: str, horse_name: str) -> Dict[str, Any]:
     """
     COMPREHENSIVE: Parse workout data from BRISNET PP.
@@ -3660,8 +3731,19 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         if track_info:
             tier2_bonus += calculate_track_condition_granular(track_info, style, post)
         
-        # COMPREHENSIVE: Workout Analysis (V2 with marathon awareness)
+        # ======================== DISTANCE CATEGORY DETECTION ========================
         is_marathon = is_marathon_distance(distance_txt)
+        is_sprint = is_sprint_distance(distance_txt)
+        
+        # Parse distance as furlongs for numeric comparisons
+        race_furlongs = 8.0  # Default assumption
+        try:
+            if 'f' in distance_txt.lower():
+                race_furlongs = float(distance_txt.lower().replace('f', '').strip())
+        except:
+            pass
+        
+        # COMPREHENSIVE: Workout Analysis (V2 with marathon awareness)
         workout_data = parse_workout_data(pp_text, name)
         if workout_data:
             # Use calibrated V2 workout bonus (percentile-based)
@@ -3682,20 +3764,34 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             form_analysis = analyze_form_cycle(race_history)
             tier2_bonus += form_analysis.get('bonus', 0.0)
         
-        # MARATHON CALIBRATION: Additional bonuses based on McKnight G3 learnings
-        # Layoff adjustment (freshening can help at marathons)
-        if race_history:
-            # Estimate days off from most recent race
-            # (Simplified - would parse actual race dates in production)
-            tier2_bonus += calculate_layoff_bonus(49, is_marathon)  # Placeholder: 49 days
+        # ======================== MARATHON CALIBRATION (12f+) ========================
+        if is_marathon:
+            # Layoff adjustment (freshening can help at marathons)
+            if race_history:
+                tier2_bonus += calculate_layoff_bonus(49, is_marathon)
+            
+            # Lightly-raced improver bonus (fresh legs at marathons)
+            life_pattern = r'Life:\s+(\d+)\s+'
+            life_match = re.search(life_pattern, pp_text)
+            if life_match:
+                career_starts = int(life_match.group(1))
+                tier2_bonus += calculate_experience_bonus(career_starts, is_marathon)
         
-        # Lightly-raced improver bonus (fresh legs at marathons)
-        # Extract career starts from Life record if available
-        life_pattern = r'Life:\s+(\d+)\s+'
-        life_match = re.search(life_pattern, pp_text)
-        if life_match:
-            career_starts = int(life_match.group(1))
-            tier2_bonus += calculate_experience_bonus(career_starts, is_marathon)
+        # ======================== SPRINT CALIBRATION (≤6.5f) ========================
+        elif is_sprint:
+            # Post position CRITICAL at turf sprints (inside good, outside death!)
+            try:
+                post_num = int(post)
+                tier2_bonus += calculate_sprint_post_position_bonus(post_num, race_furlongs, surface_type)
+            except:
+                pass
+            
+            # Running style bias (early speed 2.05 impact!)
+            tier2_bonus += calculate_sprint_running_style_bonus(style, race_furlongs)
+            
+            # Hot trainer/jockey combo (40% L60 was KEY!)
+            # TODO: Parse actual stats from PP text when available
+            tier2_bonus += calculate_hot_combo_bonus(0.0, 0.0, 0.0)
 
         # 1. Track Bias Impact Value bonus
         if style in impact_values:
