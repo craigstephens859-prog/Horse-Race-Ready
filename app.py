@@ -3277,7 +3277,8 @@ st.header("D. Classic Report")
 if not st.session_state.get("parsed", False):
     st.warning("⚠️ Please parse a race first in Section A before analyzing.")
 elif 'primary_d' not in st.session_state or 'primary_probs' not in st.session_state:
-    st.error("❌ Rating data not available. Please ensure Section C completed successfully.")
+    st.error("❌ Rating data not available.")
+    st.info("📋 **Next Steps:** Scroll up to **Section B: Bias-Adjusted Ratings** and make sure you:\n1. Select a Strategy Profile (Confident or Value Hunter)\n2. Select at least one Running Style Bias (E, E/P, P, or S)\n3. Select at least one Post Position Bias\n\nOnce you make your selections, the ratings will calculate automatically and the 'Analyze This Race' button will appear below.")
 else:
     # Display existing Classic Report if it exists (before the button)
     if st.session_state.get('classic_report_generated', False):
