@@ -5128,123 +5128,108 @@ else:
                         # Enter top 5
                         st.markdown("---")
                         st.markdown("### 🏆 Enter Actual Top 5 Finishers")
-                        st.caption("Select the program numbers that finished 1st through 5th")
+                        st.caption("Enter program numbers separated by commas (e.g., 11,8,5,4,2)")
 
-                        # Create clean input grid
-                        col1, col2, col3, col4, col5 = st.columns(5)
-
-                        # Ensure program numbers are integers for proper sorting
+                        # Get horse data for validation and display
                         program_numbers = sorted([int(h['program_number']) for h in horses])
                         horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
 
-                        with col1:
-                            st.markdown("**🥇 1st Place**")
-                            pos1 = st.selectbox(
-                                "Winner",
-                                program_numbers,
-                                key=f"pos1_{race_id}",
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
-                                label_visibility="collapsed"
-                            )
+                        # Single text input for all positions
+                        finish_input = st.text_input(
+                            "Finishing order (1st through 5th)",
+                            placeholder="Example: 11,8,5,4,2",
+                            key=f"finish_input_{race_id}",
+                            help="Enter the program numbers in order from 1st to 5th place, separated by commas"
+                        )
 
-                        with col2:
-                            st.markdown("**🥈 2nd Place**")
-                            pos2 = st.selectbox(
-                                "Second",
-                                program_numbers,
-                                key=f"pos2_{race_id}",
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
-                                label_visibility="collapsed"
-                            )
-
-                        with col3:
-                            st.markdown("**🥉 3rd Place**")
-                            pos3 = st.selectbox(
-                                "Third",
-                                program_numbers,
-                                key=f"pos3_{race_id}",
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
-                                label_visibility="collapsed"
-                            )
-
-                        with col4:
-                            st.markdown("**4th Place**")
-                            pos4 = st.selectbox(
-                                "Fourth",
-                                program_numbers,
-                                key=f"pos4_{race_id}",
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
-                                label_visibility="collapsed"
-                            )
-
-                        with col5:
-                            st.markdown("**5th Place**")
-                            pos5 = st.selectbox(
-                                "Fifth",
-                                program_numbers,
-                                key=f"pos5_{race_id}",
-                                format_func=lambda x: f"#{x} - {horse_names_dict[x][:20]}",
-                                label_visibility="collapsed"
-                            )
-
-                        # Validation and submit
-                        finish_order = [pos1, pos2, pos3, pos4, pos5]
+                        # Parse and validate the input
+                        finish_order = []
+                        validation_errors = []
+                        
+                        if finish_input.strip():
+                            try:
+                                # Parse comma-separated values
+                                raw_values = [x.strip() for x in finish_input.split(',')]
+                                finish_order = [int(x) for x in raw_values if x]
+                                
+                                # Validation checks
+                                if len(finish_order) < 5:
+                                    validation_errors.append(f"Need 5 horses, only got {len(finish_order)}")
+                                elif len(finish_order) > 5:
+                                    validation_errors.append(f"Too many horses ({len(finish_order)}), need exactly 5")
+                                    finish_order = finish_order[:5]  # Take first 5
+                                
+                                # Check for duplicates
+                                if len(finish_order) != len(set(finish_order)):
+                                    validation_errors.append("Cannot use same horse in multiple positions")
+                                
+                                # Check all are valid program numbers
+                                invalid = [x for x in finish_order if x not in program_numbers]
+                                if invalid:
+                                    validation_errors.append(f"Invalid program numbers: {', '.join(map(str, invalid))}")
+                                    
+                            except ValueError as e:
+                                validation_errors.append(f"Invalid format - use numbers separated by commas")
+                                finish_order = []
 
                         # Show preview
                         st.markdown("---")
-                        st.markdown("**Preview:**")
-                        preview_parts = []
-                        for i, pos in enumerate(finish_order):
-                            if i == 0:
-                                preview_parts.append(f"🥇 {horse_names_dict[pos]}")
-                            elif i == 1:
-                                preview_parts.append(f"🥈 {horse_names_dict[pos]}")
-                            elif i == 2:
-                                preview_parts.append(f"🥉 {horse_names_dict[pos]}")
-                            elif i == 3:
-                                preview_parts.append(f"4th {horse_names_dict[pos]}")
-                            else:
-                                preview_parts.append(f"5th {horse_names_dict[pos]}")
-                        preview_text = " → ".join(preview_parts)
-                        st.info(preview_text)
+                        if finish_order and len(finish_order) >= 5 and not validation_errors:
+                            st.markdown("**Preview:**")
+                            preview_parts = []
+                            pos1, pos2, pos3, pos4, pos5 = finish_order[0], finish_order[1], finish_order[2], finish_order[3], finish_order[4]
+                            
+                            for i, pos in enumerate(finish_order[:5]):
+                                horse_name = horse_names_dict.get(pos, 'Unknown')
+                                if i == 0:
+                                    preview_parts.append(f"🥇 {horse_name}")
+                                elif i == 1:
+                                    preview_parts.append(f"🥈 {horse_name}")
+                                elif i == 2:
+                                    preview_parts.append(f"🥉 {horse_name}")
+                                elif i == 3:
+                                    preview_parts.append(f"4th {horse_name}")
+                                else:
+                                    preview_parts.append(f"5th {horse_name}")
+                            preview_text = " → ".join(preview_parts)
+                            st.info(preview_text)
 
-                        # Validation check
-                        if len(set(finish_order)) != 5:
-                            st.error("❌ Each position must be unique! Please select 5 different horses.")
+                        # Show validation errors
+                        if validation_errors:
+                            for error in validation_errors:
+                                st.error(f"❌ {error}")
 
-                        # Submit button (always show, but validate before submitting)
-                        if st.button("✅ Submit Top 5 Results", type="primary", key=f"submit_{race_id}"):
-                            # Re-validate on submit
-                            if len(set(finish_order)) != 5:
-                                st.error("❌ Cannot submit: Each position must be unique!")
-                            else:
-                                with st.spinner("Saving results..."):
-                                    success = gold_db.submit_race_results(
-                                        race_id=race_id,
-                                        finish_order_programs=finish_order
-                                    )
+                        # Submit button (only enable if valid)
+                        can_submit = len(finish_order) == 5 and len(set(finish_order)) == 5 and not validation_errors
+                        
+                        if st.button("✅ Submit Top 5 Results", type="primary", key=f"submit_{race_id}", disabled=not can_submit):
+                            with st.spinner("Saving results..."):
+                                success = gold_db.submit_race_results(
+                                    race_id=race_id,
+                                    finish_order_programs=finish_order
+                                )
 
-                                    if success:
-                                        st.success(f"✅ Results saved for {race_id}!")
-                                        st.balloons()
+                                if success:
+                                    st.success(f"✅ Results saved for {race_id}!")
+                                    st.balloons()
 
-                                        # Show accuracy feedback
-                                        predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
-                                        predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
+                                    # Show accuracy feedback (pos1 is first element of finish_order)
+                                    predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
+                                    predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
 
-                                        actual_winner = horse_names_dict[pos1]
+                                    actual_winner = horse_names_dict[finish_order[0]]
 
-                                        if predicted_winner == actual_winner:
-                                            st.success(f"🎯 Predicted winner correctly: {actual_winner}")
-                                        else:
-                                            st.info(f"📊 Predicted: {predicted_winner} | Actual: {actual_winner}")
-
-                                        st.info("🚀 Go to 'Retrain Model' tab to update predictions with real data!")
-
-                                        time.sleep(2)
-                                        _safe_rerun()
+                                    if predicted_winner == actual_winner:
+                                        st.success(f"🎯 Predicted winner correctly: {actual_winner}")
                                     else:
-                                        st.error("❌ Error saving results. Please try again.")
+                                        st.info(f"📊 Predicted: {predicted_winner} | Actual: {actual_winner}")
+
+                                    st.info("🚀 Go to 'Retrain Model' tab to update predictions with real data!")
+
+                                    time.sleep(2)
+                                    _safe_rerun()
+                                else:
+                                    st.error("❌ Error saving results. Please try again.")
 
         # Tab 3: Retrain Model
         with tab_retrain:
