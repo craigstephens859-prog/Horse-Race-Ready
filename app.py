@@ -2887,6 +2887,401 @@ def calculate_track_condition_granular(track_info: Dict[str, Any], style: str, p
     
     return float(np.clip(bonus, -0.25, 0.25))
 
+def parse_workout_data(pp_text: str, horse_name: str) -> Dict[str, Any]:
+    """
+    COMPREHENSIVE: Parse workout data from BRISNET PP.
+    
+    BRISNET Format: "Workouts: 12/15 GP 4f ft :48.2 B 15/67"
+    Returns: Latest work date, distance, time, track, condition, rating, rank
+    """
+    if not pp_text or not horse_name:
+        return {}
+    
+    import re
+    from datetime import datetime
+    
+    # Find horse section
+    horse_idx = pp_text.find(horse_name)
+    if horse_idx == -1:
+        return {}
+    
+    # Search for workout section (next 800 chars)
+    section = pp_text[horse_idx:horse_idx + 800]
+    
+    # Pattern: Date Track Distance Surface Time Rating Rank
+    # Example: "12/15 GP 4f ft :48.2 B 15/67" or "1/5 CD 5f ft 1:00.3 Bg 3/45"
+    work_pattern = r'(\d{1,2}/\d{1,2})\s+([A-Z]{2,3})\s+(\d+)f\s+(ft|my|gd|sly|yl)\s+:?(\d+:\d+\.\d+|\d+\.\d+)\s+([BHg]+)\s+(\d+)/(\d+)'
+    
+    matches = re.findall(work_pattern, section)
+    
+    if not matches:
+        return {}
+    
+    # Get most recent workout (first match)
+    latest = matches[0]
+    work_date, track, distance, condition, time, rating, rank, total = latest
+    
+    # Parse time to seconds
+    time_seconds = 0.0
+    if ':' in time:
+        parts = time.split(':')
+        time_seconds = float(parts[0]) * 60 + float(parts[1])
+    else:
+        time_seconds = float(time)
+    
+    return {
+        'date': work_date,
+        'track': track,
+        'distance': f"{distance}f",
+        'condition': condition,
+        'time_seconds': time_seconds,
+        'time_display': time,
+        'rating': rating,
+        'rank': int(rank),
+        'total_works': int(total),
+        'percentile': int(rank) / int(total) if int(total) > 0 else 0.0,
+        'days_since': None  # Could calculate if we had current date
+    }
+
+def parse_race_history(pp_text: str, horse_name: str) -> List[Dict[str, Any]]:
+    """
+    COMPREHENSIVE: Parse past performance lines from BRISNET PP.
+    
+    Returns list of past races with:
+    - Date, track, distance, surface, condition
+    - Class level, purse
+    - Finish position, beaten lengths
+    - Speed figure
+    - Running line (positions at calls)
+    """
+    if not pp_text or not horse_name:
+        return []
+    
+    import re
+    
+    # Find horse section
+    horse_idx = pp_text.find(horse_name)
+    if horse_idx == -1:
+        return []
+    
+    # Past performances are typically the largest block of data per horse
+    section = pp_text[horse_idx:horse_idx + 2000]
+    
+    races = []
+    
+    # BRISNET PP Line Pattern (simplified - captures key elements)
+    # Date Track Cnd Distance Surface Class Finish/Starters BeatenLengths SpeedFig
+    # Example: "12Jan24 GP ft 6f :22.1 :45.2 1:10.3 3/Alw35000N1X 2/8 1.25 89"
+    
+    # Pattern for date: DDMonYY format
+    pp_pattern = r'(\d{1,2}[A-Za-z]{3}\d{2})\s+([A-Z]{2,3})\s+(ft|my|gd|sly|yl)\s+(\d+(?:\.\d+)?[fmFM]|\d+\s*[Mm])'
+    
+    lines = section.split('\n')
+    
+    for line in lines[:10]:  # Check first 10 lines for PP data
+        match = re.search(pp_pattern, line)
+        if match:
+            date_str, track, condition, distance = match.groups()
+            
+            # Extract finish position (look for N/N pattern like "3/8" = 3rd of 8)
+            finish_pattern = r'(\d+)/(\d+)'
+            finish_match = re.search(finish_pattern, line)
+            finish_pos = int(finish_match.group(1)) if finish_match else 0
+            starters = int(finish_match.group(2)) if finish_match else 0
+            
+            # Extract speed figure (last 2-3 digit number)
+            fig_pattern = r'\s(\d{2,3})\s*$'
+            fig_match = re.search(fig_pattern, line)
+            speed_fig = int(fig_match.group(1)) if fig_match else 0
+            
+            # Extract class/race type (Alw, Clm, Stk, Mcl, etc.)
+            class_pattern = r'(Alw|Clm|Stk|Mcl|Msw|Aoc|Str)\s*(\d+)?'
+            class_match = re.search(class_pattern, line, re.IGNORECASE)
+            race_class = class_match.group(0) if class_match else 'Unknown'
+            
+            races.append({
+                'date': date_str,
+                'track': track,
+                'condition': condition,
+                'distance': distance.strip(),
+                'class': race_class,
+                'finish_pos': finish_pos,
+                'starters': starters,
+                'speed_fig': speed_fig
+            })
+    
+    return races
+
+def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse: int) -> Dict[str, Any]:
+    """
+    COMPREHENSIVE: Analyze if horse is stepping up or down in class.
+    
+    Returns:
+    - class_change: 'up', 'down', 'same', 'unknown'
+    - class_delta: numeric change estimate
+    - pattern: 'rising', 'dropping', 'stable'
+    - bonus: rating adjustment
+    """
+    if not past_races or len(past_races) < 2:
+        return {'class_change': 'unknown', 'class_delta': 0, 'pattern': 'unknown', 'bonus': 0.0}
+    
+    # Class hierarchy (higher = better class)
+    class_hierarchy = {
+        'Msw': 1,    # Maiden special weight
+        'Mcl': 2,    # Maiden claiming
+        'Clm': 3,    # Claiming
+        'Str': 4,    # Starter allowance
+        'Aoc': 5,    # Allowance optional claiming
+        'Alw': 6,    # Allowance
+        'Stk': 8,    # Stakes
+        'G3': 9,     # Grade 3
+        'G2': 10,    # Grade 2
+        'G1': 11     # Grade 1
+    }
+    
+    # Get today's class level
+    today_level = 0
+    for key in class_hierarchy:
+        if key.lower() in today_class.lower():
+            today_level = class_hierarchy[key]
+            break
+    
+    if today_level == 0:
+        today_level = 5  # Default to allowance
+    
+    # Get recent class levels
+    recent_levels = []
+    for race in past_races[:5]:  # Last 5 races
+        race_class = race.get('class', '')
+        for key in class_hierarchy:
+            if key.lower() in race_class.lower():
+                recent_levels.append(class_hierarchy[key])
+                break
+    
+    if not recent_levels:
+        return {'class_change': 'unknown', 'class_delta': 0, 'pattern': 'unknown', 'bonus': 0.0}
+    
+    avg_recent = sum(recent_levels) / len(recent_levels)
+    class_delta = today_level - avg_recent
+    
+    # Determine change
+    if class_delta > 1:
+        class_change = 'up'
+        bonus = -0.10  # Stepping up = tougher
+    elif class_delta < -1:
+        class_change = 'down'
+        bonus = +0.12  # Dropping down = easier
+    else:
+        class_change = 'same'
+        bonus = 0.0
+    
+    # Determine pattern (last 3 races)
+    pattern = 'stable'
+    if len(recent_levels) >= 3:
+        if recent_levels[0] > recent_levels[1] > recent_levels[2]:
+            pattern = 'rising'
+            bonus += 0.05  # Positive progression
+        elif recent_levels[0] < recent_levels[1] < recent_levels[2]:
+            pattern = 'dropping'
+            bonus += 0.08  # Finding easier spots
+    
+    return {
+        'class_change': class_change,
+        'class_delta': class_delta,
+        'pattern': pattern,
+        'bonus': float(np.clip(bonus, -0.15, 0.20))
+    }
+
+def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dict[str, Any]:
+    """
+    COMPREHENSIVE: Analyze distance changes and patterns.
+    
+    Returns:
+    - distance_change: 'stretch_out', 'cut_back', 'same', 'unknown'
+    - distance_delta: Numeric change in furlongs
+    - experience_at_distance: Number of times raced at this distance
+    - best_fig_at_distance: Best speed fig at today's distance
+    - bonus: Rating adjustment
+    """
+    if not past_races or not today_distance:
+        return {'distance_change': 'unknown', 'distance_delta': 0, 'bonus': 0.0}
+    
+    # Convert distance to furlongs
+    def distance_to_furlongs(dist_str: str) -> float:
+        dist_str = dist_str.lower().strip()
+        if 'f' in dist_str:
+            return float(dist_str.replace('f', '').strip())
+        elif 'm' in dist_str:
+            # 1M = 8F, 1 1/16M = 8.5F, 1 1/8M = 9F
+            if '1/16' in dist_str:
+                return 8.5
+            elif '1/8' in dist_str:
+                return 9.0
+            elif '3/16' in dist_str:
+                return 9.5
+            elif '1/4' in dist_str:
+                return 10.0
+            else:
+                return 8.0  # Default 1 mile
+        return 6.0  # Default
+    
+    today_furlongs = distance_to_furlongs(today_distance)
+    
+    # Analyze past distances
+    past_distances = []
+    experience_count = 0
+    figs_at_distance = []
+    
+    for race in past_races[:8]:  # Last 8 races
+        race_dist = race.get('distance', '')
+        race_furlongs = distance_to_furlongs(race_dist)
+        past_distances.append(race_furlongs)
+        
+        # Count experience at today's distance (within 0.5F)
+        if abs(race_furlongs - today_furlongs) <= 0.5:
+            experience_count += 1
+            if race.get('speed_fig', 0) > 0:
+                figs_at_distance.append(race['speed_fig'])
+    
+    if not past_distances:
+        return {'distance_change': 'unknown', 'distance_delta': 0, 'bonus': 0.0}
+    
+    avg_past_dist = sum(past_distances) / len(past_distances)
+    distance_delta = today_furlongs - avg_past_dist
+    
+    # Determine change type
+    bonus = 0.0
+    if distance_delta > 1.5:
+        distance_change = 'stretch_out'
+        # Stretching out 2+ furlongs
+        if experience_count >= 2:
+            bonus = +0.05  # Has experience at distance
+        else:
+            bonus = -0.08  # Unproven at distance
+    
+    elif distance_delta < -1.5:
+        distance_change = 'cut_back'
+        # Cutting back in distance usually helps speed horses
+        bonus = +0.08
+    
+    else:
+        distance_change = 'same'
+        if experience_count >= 3:
+            bonus = +0.05  # Comfortable at distance
+    
+    best_fig = max(figs_at_distance) if figs_at_distance else 0
+    
+    return {
+        'distance_change': distance_change,
+        'distance_delta': distance_delta,
+        'today_furlongs': today_furlongs,
+        'experience_count': experience_count,
+        'best_fig_at_distance': best_fig,
+        'bonus': float(np.clip(bonus, -0.10, 0.10))
+    }
+
+def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
+    """
+    COMPREHENSIVE: Analyze form cycle (improving/declining).
+    
+    Returns:
+    - cycle: 'improving', 'declining', 'peaking', 'bottoming', 'stable'
+    - trend_score: -1.0 to +1.0 (negative = declining, positive = improving)
+    - last_3_finishes: Recent finish positions
+    - last_3_figs: Recent speed figures
+    - bonus: Rating adjustment
+    """
+    if not past_races or len(past_races) < 3:
+        return {'cycle': 'unknown', 'trend_score': 0.0, 'bonus': 0.0}
+    
+    # Get last 3-5 races
+    recent = past_races[:5]
+    finishes = [r.get('finish_pos', 0) for r in recent if r.get('finish_pos', 0) > 0]
+    figs = [r.get('speed_fig', 0) for r in recent if r.get('speed_fig', 0) > 0]
+    
+    if len(finishes) < 3 or len(figs) < 3:
+        return {'cycle': 'unknown', 'trend_score': 0.0, 'bonus': 0.0}
+    
+    # Calculate trends
+    # Finish trend (lower is better)
+    finish_trend = 0.0
+    if finishes[0] < finishes[1] < finishes[2]:
+        finish_trend = +1.0  # Improving finishes
+    elif finishes[0] > finishes[1] > finishes[2]:
+        finish_trend = -1.0  # Declining finishes
+    elif finishes[0] < finishes[-1]:
+        finish_trend = +0.5  # Generally improving
+    elif finishes[0] > finishes[-1]:
+        finish_trend = -0.5  # Generally declining
+    
+    # Figure trend (higher is better)
+    fig_trend = 0.0
+    if figs[0] > figs[1] > figs[2]:
+        fig_trend = +1.0  # Improving figures
+    elif figs[0] < figs[1] < figs[2]:
+        fig_trend = -1.0  # Declining figures
+    elif figs[0] > figs[-1]:
+        fig_trend = +0.5  # Generally improving
+    elif figs[0] < figs[-1]:
+        fig_trend = -0.5  # Generally declining
+    
+    # Combined trend score
+    trend_score = (finish_trend + fig_trend) / 2.0
+    
+    # Determine cycle
+    cycle = 'stable'
+    bonus = 0.0
+    
+    if trend_score >= 0.75:
+        cycle = 'improving'
+        bonus = +0.15  # Strong positive form
+    elif trend_score >= 0.25:
+        cycle = 'peaking'
+        bonus = +0.10  # Solid form
+    elif trend_score <= -0.75:
+        cycle = 'declining'
+        bonus = -0.15  # Poor form
+    elif trend_score <= -0.25:
+        cycle = 'bottoming'
+        bonus = -0.08  # Weak form
+    
+    # Bonus for consistency (all recent finishes in top 3)
+    if all(f <= 3 for f in finishes[:3]):
+        bonus += 0.05  # Consistent runner
+    
+    return {
+        'cycle': cycle,
+        'trend_score': trend_score,
+        'last_3_finishes': finishes[:3],
+        'last_3_figs': figs[:3],
+        'bonus': float(np.clip(bonus, -0.20, 0.20))
+    }
+
+def calculate_workout_bonus(workout_data: Dict[str, Any]) -> float:
+    """
+    COMPREHENSIVE: Bonus for workout quality and recency.
+    """
+    if not workout_data:
+        return 0.0
+    
+    bonus = 0.0
+    
+    # Rating bonus (B = bullet work = fastest of day)
+    rating = workout_data.get('rating', '')
+    if 'B' in rating or 'b' in rating:
+        bonus += 0.10  # Bullet work
+    elif 'H' in rating or 'h' in rating:
+        bonus += 0.05  # Handily
+    
+    # Rank/percentile bonus (top 20% of works)
+    percentile = workout_data.get('percentile', 0.5)
+    if percentile <= 0.20:
+        bonus += 0.08  # Top 20% work
+    elif percentile <= 0.40:
+        bonus += 0.05  # Top 40% work
+    
+    return float(np.clip(bonus, 0, 0.15))
+
 # ======================== End ELITE ENHANCEMENTS ========================
 
 def post_bias_score(post_bias_pick: str, post_str: str) -> float:
@@ -3103,6 +3498,26 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         track_info = st.session_state.get('track_condition_detail', None)
         if track_info:
             tier2_bonus += calculate_track_condition_granular(track_info, style, post)
+        
+        # COMPREHENSIVE: Workout Analysis
+        workout_data = parse_workout_data(pp_text, name)
+        if workout_data:
+            tier2_bonus += calculate_workout_bonus(workout_data)
+        
+        # COMPREHENSIVE: Race History & Pattern Analysis
+        race_history = parse_race_history(pp_text, name)
+        if race_history:
+            # Class movement analysis
+            class_analysis = analyze_class_movement(race_history, race_type, purse_val)
+            tier2_bonus += class_analysis.get('bonus', 0.0)
+            
+            # Distance pattern analysis
+            distance_analysis = analyze_distance_pattern(race_history, distance_txt)
+            tier2_bonus += distance_analysis.get('bonus', 0.0)
+            
+            # Form cycle analysis
+            form_analysis = analyze_form_cycle(race_history)
+            tier2_bonus += form_analysis.get('bonus', 0.0)
 
         # 1. Track Bias Impact Value bonus
         if style in impact_values:
