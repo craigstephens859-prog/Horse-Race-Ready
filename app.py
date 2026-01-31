@@ -2887,6 +2887,167 @@ def calculate_track_condition_granular(track_info: Dict[str, Any], style: str, p
     
     return float(np.clip(bonus, -0.25, 0.25))
 
+
+# ======================== MARATHON CALIBRATION (McKnight G3 Learning) ========================
+
+def is_marathon_distance(distance_txt: str) -> bool:
+    """
+    Detect if race is marathon distance (1½ miles+ / 12 furlongs+).
+    Marathon distances require different weighting strategy.
+    
+    Based on McKnight G3 post-race analysis where standard weights failed.
+    """
+    if not distance_txt:
+        return False
+    
+    # Convert to furlongs for comparison
+    distance_lower = distance_txt.lower().strip()
+    
+    # Direct furlong matches
+    if 'f' in distance_lower:
+        try:
+            furlongs = float(distance_lower.replace('f', '').strip())
+            return furlongs >= 12.0
+        except:
+            pass
+    
+    # Mile conversions
+    if 'mile' in distance_lower or 'm' in distance_lower:
+        # 1½ miles = 12f, 1⅝ = 13f, 1¾ = 14f, 2 miles = 16f
+        if '½' in distance_txt or '1/2' in distance_txt or '1.5' in distance_txt:
+            return True
+        if '⅝' in distance_txt or '5/8' in distance_txt or '1.625' in distance_txt:
+            return True
+        if '¾' in distance_txt or '3/4' in distance_txt or '1.75' in distance_txt:
+            return True
+        if '2' in distance_txt and 'mile' in distance_lower:
+            return True
+    
+    return False
+
+
+def calculate_workout_bonus_v2(workout_data: Dict[str, Any], is_marathon: bool = False) -> float:
+    """
+    CALIBRATED: Improved workout bonus emphasizing percentile rankings.
+    
+    Key Learning from McKnight G3:
+    - Layabout (WINNER): Bullet 1/2 (Top 50%) 
+    - Summer Cause (4th): Bullet 15/16 (Top 94%)
+    - Zverev (5th): Bullet 30/44 (Top 68%)
+    
+    Percentile matters MORE than just having a bullet work!
+    """
+    bonus = 0.0
+    
+    if not workout_data:
+        return 0.0
+    
+    # Calculate percentile if rank/total available
+    percentile = workout_data.get('percentile', 100)
+    if percentile is None and workout_data.get('work_rank') and workout_data.get('work_total'):
+        try:
+            rank = int(workout_data['work_rank'])
+            total = int(workout_data['work_total'])
+            percentile = (rank / total) * 100
+        except:
+            percentile = 100
+    
+    # ELITE PERCENTILE BONUSES (from post-race analysis)
+    if percentile <= 10:
+        bonus += 0.25  # TOP 10% = elite work
+    elif percentile <= 25:
+        bonus += 0.15  # TOP 25% = strong work  
+    elif percentile <= 50:
+        bonus += 0.10  # TOP 50% = solid work (WINNER range!)
+    elif percentile <= 75:
+        bonus += 0.05  # Top 75%
+    else:
+        bonus += 0.02  # Below 75%
+    
+    # Additional bullet work bonus (but smaller than before)
+    quality = workout_data.get('quality', 'none')
+    if quality == 'bullet':
+        bonus += 0.05  # Reduced from 0.10
+    elif quality == 'handily':
+        bonus += 0.03  # Reduced from 0.05
+    
+    # Marathon bonus for recent sharp works
+    if is_marathon:
+        days_since = workout_data.get('days_since', 999)
+        if days_since <= 7 and percentile <= 50:
+            bonus += 0.05  # Very recent sharp work
+    
+    return float(np.clip(bonus, 0.0, 0.35))
+
+
+def calculate_layoff_bonus(days_off: int, is_marathon: bool = False) -> float:
+    """
+    CALIBRATED: Layoff evaluation adjusted for marathon distances.
+    
+    Key Learning: 30-60 day layoffs can HELP at marathon distances (freshening effect).
+    Layabout (WINNER) and Padiddle (2nd) both had ~45-50 day layoffs.
+    """
+    if days_off is None:
+        return 0.0
+    
+    if is_marathon:
+        # Marathon distances favor fresher horses
+        if 30 <= days_off <= 60:
+            return +0.10  # Freshening bonus (optimal range)
+        elif 20 <= days_off < 30:
+            return +0.05  # Slight freshen
+        elif 60 < days_off <= 90:
+            return 0.0   # Neutral
+        elif days_off > 90:
+            return -0.15  # Too long away
+        else:
+            return 0.0   # Recent race (no bonus)
+    else:
+        # Standard distances prefer recent racing
+        if days_off <= 14:
+            return +0.05  # Sharp form
+        elif days_off <= 30:
+            return 0.0   # Acceptable
+        elif 30 < days_off <= 60:
+            return -0.05  # Slight concern
+        elif days_off > 60:
+            return -0.10  # Extended layoff
+    
+    return 0.0
+
+
+def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) -> float:
+    """
+    CALIBRATED: Lightly-raced improver bonus.
+    
+    Key Learning: Layabout (WINNER) had only 9 career starts.
+    Fresh legs advantage at marathon distances!
+    """
+    if career_starts is None or career_starts <= 0:
+        return 0.0
+    
+    if is_marathon:
+        # Marathons favor fresh legs
+        if career_starts <= 10:
+            return +0.10  # Very lightly raced (fresh!)
+        elif career_starts <= 15:
+            return +0.05  # Lightly raced
+        elif career_starts <= 25:
+            return 0.0   # Normal experience
+        else:
+            return -0.03  # Lots of wear and tear
+    else:
+        # Standard distances
+        if career_starts <= 10:
+            return +0.05  # Improving
+        elif career_starts <= 20:
+            return 0.0   # Normal
+        else:
+            return 0.0   # Experienced
+    
+    return 0.0
+
+
 def parse_workout_data(pp_text: str, horse_name: str) -> Dict[str, Any]:
     """
     COMPREHENSIVE: Parse workout data from BRISNET PP.
@@ -3499,10 +3660,12 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         if track_info:
             tier2_bonus += calculate_track_condition_granular(track_info, style, post)
         
-        # COMPREHENSIVE: Workout Analysis
+        # COMPREHENSIVE: Workout Analysis (V2 with marathon awareness)
+        is_marathon = is_marathon_distance(distance_txt)
         workout_data = parse_workout_data(pp_text, name)
         if workout_data:
-            tier2_bonus += calculate_workout_bonus(workout_data)
+            # Use calibrated V2 workout bonus (percentile-based)
+            tier2_bonus += calculate_workout_bonus_v2(workout_data, is_marathon)
         
         # COMPREHENSIVE: Race History & Pattern Analysis
         race_history = parse_race_history(pp_text, name)
@@ -3518,6 +3681,21 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             # Form cycle analysis
             form_analysis = analyze_form_cycle(race_history)
             tier2_bonus += form_analysis.get('bonus', 0.0)
+        
+        # MARATHON CALIBRATION: Additional bonuses based on McKnight G3 learnings
+        # Layoff adjustment (freshening can help at marathons)
+        if race_history:
+            # Estimate days off from most recent race
+            # (Simplified - would parse actual race dates in production)
+            tier2_bonus += calculate_layoff_bonus(49, is_marathon)  # Placeholder: 49 days
+        
+        # Lightly-raced improver bonus (fresh legs at marathons)
+        # Extract career starts from Life record if available
+        life_pattern = r'Life:\s+(\d+)\s+'
+        life_match = re.search(life_pattern, pp_text)
+        if life_match:
+            career_starts = int(life_match.group(1))
+            tier2_bonus += calculate_experience_bonus(career_starts, is_marathon)
 
         # 1. Track Bias Impact Value bonus
         if style in impact_values:
