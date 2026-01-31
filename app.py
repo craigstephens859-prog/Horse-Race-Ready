@@ -2243,7 +2243,7 @@ figs_per_horse: Dict[str, List[int]] = {}
 elite_parser_used = False
 if ELITE_PARSER_AVAILABLE and len(pp_text.strip()) > 100:
     try:
-        from elite_parser import GoldStandardBRISNETParser
+        from elite_parser_v2_gold import GoldStandardBRISNETParser
         parser = GoldStandardBRISNETParser()
         horses = parser.parse_full_pp(pp_text, debug=False)
         validation = parser.validate_parsed_data(horses, min_confidence=0.5)
