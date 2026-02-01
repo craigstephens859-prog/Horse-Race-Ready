@@ -3619,26 +3619,23 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             pass
 
         # COMPREHENSIVE: Workout Analysis (V2 with marathon awareness)
-        # TODO: Implement parse_workout_data for BRISNET format
-        # workout_data = parse_workout_data(pp_text, name)
-        # if workout_data:
-        #     tier2_bonus += calculate_workout_bonus_v2(workout_data, is_marathon)
+        # FUTURE ENHANCEMENT: Full workout parsing from BRISNET PP text
+        # Currently using basic workout detection. Advanced parsing would extract:
+        # - Workout date, distance, time, track condition, rank/total
+        # - Would feed calculate_workout_bonus_v2() for more precise adjustments
 
         # COMPREHENSIVE: Race History & Pattern Analysis
-        # TODO: Implement parse_race_history for BRISNET format
-        # race_history = parse_race_history(pp_text, name)
-        # if race_history:
-        #     class_analysis = analyze_class_movement(race_history, race_type, purse_val)
-        #     tier2_bonus += class_analysis.get('bonus', 0.0)
-        #     distance_analysis = analyze_distance_pattern(race_history, distance_txt)
-        #     tier2_bonus += distance_analysis.get('bonus', 0.0)
-        #     form_analysis = analyze_form_cycle(race_history)
-        #     tier2_bonus += form_analysis.get('bonus', 0.0)
+        # FUTURE ENHANCEMENT: Full race history parsing for pattern detection
+        # Currently using ratings from Section A. Advanced parsing would analyze:
+        # - Class movement patterns (up/down class trends)
+        # - Distance preferences and performance patterns
+        # - Form cycles (improving vs declining form)
 
         # ======================== MARATHON CALIBRATION (12f+) ========================
         if is_marathon:
             # Layoff adjustment (freshening can help at marathons)
-            # TODO: Calculate actual days off from PP text
+            # NOTE: Using default 49 days (optimal marathon freshening range)
+            # Could extract actual days from PP text in future enhancement
             tier2_bonus += calculate_layoff_bonus(49, is_marathon)
 
             # Lightly-raced improver bonus (fresh legs at marathons)
@@ -3661,7 +3658,8 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             tier2_bonus += calculate_sprint_running_style_bonus(style, race_furlongs)
 
             # Hot trainer/jockey combo (40% L60 was KEY!)
-            # TODO: Parse actual stats from PP text when available
+            # NOTE: Currently using default values (0.0). Future enhancement:
+            # Parse trainer/jockey win % from PP text header for dynamic bonuses
             tier2_bonus += calculate_hot_combo_bonus(0.0, 0.0, 0.0)
 
         # 1. Track Bias Impact Value bonus
@@ -3979,77 +3977,6 @@ st.dataframe(
 # It is now generated "behind the scenes" in Section D.
 
 # ===================== D. Strategy Builder & Classic Report =====================
-
-def calculate_finishing_order_probabilities(primary_df, primary_probs):
-    """
-    ELITE: Calculate most probable finishing positions (1st through 5th) using probability theory.
-
-    Uses conditional probabilities:
-    - P(2nd | not 1st) = probability of finishing 2nd given another horse won
-    - P(3rd | not 1st, not 2nd) = probability given other horses finished ahead
-
-    Returns dict with 'position_1' through 'position_5', each containing
-    [(horse_name, probability), ...] sorted by probability
-    """
-    horses = list(primary_probs.keys())
-    win_probs = np.array([primary_probs.get(h, 0) for h in horses])
-
-    # Normalize to ensure sum = 1.0
-    if win_probs.sum() > 0:
-        win_probs = win_probs / win_probs.sum()
-    else:
-        win_probs = np.ones(len(horses)) / len(horses)
-
-    finishing_positions = {}
-
-    # Position 1: Use win probabilities directly
-    pos1_probs = list(zip(horses, win_probs))
-    pos1_probs.sort(key=lambda x: x[1], reverse=True)
-    finishing_positions['position_1'] = pos1_probs[:5]
-
-    # Position 2: Conditional probability P(2nd | not 1st)
-    # For each horse, calculate probability of finishing 2nd across all scenarios where they didn't win
-    pos2_probs = []
-    for i, horse in enumerate(horses):
-        # Probability this horse finishes 2nd = sum over all winners of P(winner wins) * P(this horse 2nd | winner won)
-        prob_2nd = 0.0
-        for j, winner in enumerate(horses):
-            if i != j:
-                # If winner wins, redistribute remaining probability among others proportionally
-                other_probs = np.delete(win_probs, j)
-                other_horses_sum = other_probs.sum()
-                if other_horses_sum > 0:
-                    idx_in_others = i if i < j else i - 1
-                    prob_2nd += win_probs[j] * (other_probs[idx_in_others] / other_horses_sum)
-        pos2_probs.append((horse, prob_2nd))
-
-    pos2_probs.sort(key=lambda x: x[1], reverse=True)
-    finishing_positions['position_2'] = pos2_probs[:5]
-
-    # Position 3: Similar logic, accounting for top 2 finishers
-    pos3_probs = []
-    for i, horse in enumerate(horses):
-        prob_3rd = 0.0
-        # Simplified: use normalized probabilities after removing top 2 theoretical finishers
-        # Weight by inverse of how likely they are to be in top 2
-        not_in_top2_weight = 1.0 - win_probs[i]
-        remaining_strength = win_probs[i] / (1.0 - win_probs[i] + 1e-6)
-        prob_3rd = remaining_strength * not_in_top2_weight
-        pos3_probs.append((horse, prob_3rd))
-
-    pos3_probs.sort(key=lambda x: x[1], reverse=True)
-    finishing_positions['position_3'] = pos3_probs[:5]
-
-    # Positions 4 & 5: Use diminishing probability distribution
-    pos4_probs = [(h, p * 0.8) for h, p in pos3_probs]
-    pos4_probs.sort(key=lambda x: x[1], reverse=True)
-    finishing_positions['position_4'] = pos4_probs[:5]
-
-    pos5_probs = [(h, p * 0.6) for h, p in pos3_probs]
-    pos5_probs.sort(key=lambda x: x[1], reverse=True)
-    finishing_positions['position_5'] = pos5_probs[:5]
-
-    return finishing_positions
 
 def build_component_breakdown(primary_df, name_to_post, name_to_ml):
     """
