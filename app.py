@@ -4110,11 +4110,17 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     from itertools import combinations
 
     # --- ELITE ADDITION: Calculate Finishing Order Probabilities ---
-    def calculate_position_probabilities(df: pd.DataFrame) -> dict:
-        """Calculate probability each horse finishes in positions 1-5."""
+    def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> List[Tuple[str, float]]:
+        """
+        Calculate most likely finishing order using sequential selection.
+        Each horse can only appear ONCE in the finishing order.
+        
+        Returns: List of (horse_name, probability) tuples for positions 1-5
+        """
         horses = df['Horse'].tolist()
         win_probs = []
 
+        # Extract base probabilities
         for horse in horses:
             prob_str = df[df['Horse'] == horse]['Fair %'].iloc[0]
             try:
@@ -4127,34 +4133,52 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         if win_probs.sum() > 0:
             win_probs = win_probs / win_probs.sum()
 
-        # Position probabilities using conditional logic
-        position_probs = {horse: {1: win_probs[i]} for i, horse in enumerate(horses)}
+        # Sequential selection: pick most likely for each position, removing selected horses
+        finishing_order = []
+        remaining_horses = list(range(len(horses)))
+        remaining_probs = win_probs.copy()
 
-        # For 2nd-5th: P(finish Nth) = P(not finished yet) × relative strength
-        for pos in [2, 3, 4, 5]:
-            remaining_strength = {}
-            for i, horse in enumerate(horses):
-                prob_still_running = 1.0 - sum(position_probs[horse].get(p, 0) for p in range(1, pos))
-                remaining_strength[horse] = max(0, prob_still_running * win_probs[i])
+        for position in range(min(top_n, len(horses))):
+            # Renormalize remaining probabilities
+            if remaining_probs.sum() > 0:
+                remaining_probs = remaining_probs / remaining_probs.sum()
+            
+            # Select horse with highest probability
+            best_idx = np.argmax(remaining_probs)
+            selected_horse_idx = remaining_horses[best_idx]
+            selected_prob = remaining_probs[best_idx]
+            
+            finishing_order.append((horses[selected_horse_idx], selected_prob))
+            
+            # Remove selected horse from remaining pool
+            remaining_horses.pop(best_idx)
+            remaining_probs = np.delete(remaining_probs, best_idx)
 
-            total = sum(remaining_strength.values())
-            if total > 0:
-                for horse in horses:
-                    position_probs[horse][pos] = remaining_strength[horse] / total
-            else:
-                for horse in horses:
-                    position_probs[horse][pos] = 1.0 / len(horses)
+        return finishing_order
 
-        return position_probs
-
-    # Calculate position probabilities
-    position_probs = calculate_position_probabilities(primary_df)
-
-    # Get most likely finishers for each position (top 3)
+    # Calculate most likely finishing order (ensures each horse appears only once)
+    finishing_order = calculate_most_likely_finishing_order(primary_df, top_n=5)
+    
+    # Convert to format expected by rest of code (most_likely dict with alternatives)
+    # For simplicity, we'll show primary prediction plus alternatives from remaining horses
     most_likely = {}
-    for pos in [1, 2, 3, 4, 5]:
-        ranked = sorted(position_probs.items(), key=lambda x: x[1][pos], reverse=True)
-        most_likely[pos] = [(horse, prob[pos]) for horse, prob in ranked[:3]]
+    selected_horses = {horse for horse, _ in finishing_order}
+    
+    for pos_idx, (horse, prob) in enumerate(finishing_order, start=1):
+        # Get alternative horses for this position (not yet selected)
+        alternatives = []
+        for h in primary_df['Horse'].tolist():
+            if h not in selected_horses or h == horse:
+                h_prob_str = primary_df[primary_df['Horse'] == h]['Fair %'].iloc[0]
+                try:
+                    h_prob = float(h_prob_str.strip('%')) / 100.0
+                except:
+                    h_prob = 0.0
+                alternatives.append((h, h_prob))
+        
+        # Sort by probability and take top 3
+        alternatives.sort(key=lambda x: x[1], reverse=True)
+        most_likely[pos_idx] = alternatives[:3]
 
     # --- 1. Helper Functions ---
     def format_horse_list(horse_names: List[str]) -> str:
