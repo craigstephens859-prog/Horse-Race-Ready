@@ -5073,6 +5073,24 @@ else:
 
         # Tab 2: Submit Actual Top 5
         with tab_results:
+            # Show success message if just saved
+            if st.session_state.get('last_save_success'):
+                race_id = st.session_state.get('last_save_race_id', 'Unknown')
+                actual_winner = st.session_state.get('last_save_winner', 'Unknown')
+                predicted_winner = st.session_state.get('last_save_predicted', 'Unknown')
+                
+                if predicted_winner == actual_winner:
+                    st.success(f"🎯 **Prediction Correct!** Winner: {actual_winner}")
+                else:
+                    st.info(f"📊 Predicted: {predicted_winner} | Actual Winner: {actual_winner}")
+                
+                st.success(f"✅ Results successfully saved for {race_id}")
+                st.info("🚀 Go to 'Retrain Model' tab when you have 50+ completed races!")
+                
+                # Clear the flag
+                st.session_state['last_save_success'] = False
+                st.markdown("---")
+            
             st.markdown("""
             ### Submit Actual Top 5 Finishers
 
@@ -5217,34 +5235,30 @@ else:
                                     )
 
                                     if success:
-                                        st.success(f"✅ Results saved to database for {race_id}!")
-                                        st.balloons()
-
-                                        # Show accuracy feedback (pos1 is first element of finish_order)
+                                        # Store success flag in session state to show message after rerun
+                                        st.session_state['last_save_success'] = True
+                                        st.session_state['last_save_race_id'] = race_id
+                                        st.session_state['last_save_winner'] = horse_names_dict[finish_order[0]]
+                                        
+                                        # Check if we predicted correctly
                                         predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
                                         predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
-
-                                        actual_winner = horse_names_dict[finish_order[0]]
-
-                                        if predicted_winner == actual_winner:
-                                            st.success(f"🎯 Predicted winner correctly: {actual_winner}")
-                                        else:
-                                            st.info(f"📊 Predicted: {predicted_winner} | Actual: {actual_winner}")
-
-                                        st.info("🚀 Go to 'Retrain Model' tab to update predictions with real data!")
-                                        st.info(f"💾 **Database updated**: All 5 finishing positions saved with full feature vectors for ML training")
-
-                                        time.sleep(2)
+                                        st.session_state['last_save_predicted'] = predicted_winner
+                                        
+                                        st.success(f"✅ Results saved to database for {race_id}!")
+                                        st.balloons()
+                                        st.info("💾 All 5 finishing positions saved with full feature vectors for ML training")
+                                        st.info("🔄 Refreshing to show updated data...")
+                                        
+                                        time.sleep(1)
                                         _safe_rerun()
                                     else:
-                                        st.error("❌ Failed to save results to database. Check console for errors.")
+                                        st.error("❌ Failed to save results to database. Please check the error details below.")
                                         
                                 except Exception as e:
                                     st.error(f"❌ Error saving results: {str(e)}")
                                     import traceback
-                                    st.code(traceback.format_exc())  # Show full error for debugging
-                                else:
-                                    st.error("❌ Error saving results. Please try again.")
+                                    st.code(traceback.format_exc(), language='python')  # Show full error for debugging
                 
                 # Show recently saved results for verification
                 st.markdown("---")
