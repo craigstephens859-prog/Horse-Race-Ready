@@ -4525,25 +4525,21 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
         component_report += "\n"
 
-    # --- ELITE: Build Finishing Order Predictions ---
-    # Use our elite probability function
-    elite_finishing = calculate_finishing_order_probabilities(primary_df, primary_probs_dict)
+    # --- GOLD STANDARD: Build Finishing Order Predictions (NO DUPLICATES) ---
+    # Use sequential selection algorithm - each horse appears EXACTLY ONCE
+    finishing_order = calculate_most_likely_finishing_order(primary_df, top_n=5)
 
     finishing_order_report = "### Most Likely Finishing Order (Probability-Based)\n\n"
-    finishing_order_report += "_Using conditional probability theory: P(2nd | not 1st), P(3rd | not in top 2), etc._\n\n"
+    finishing_order_report += "**Note:** Horses can appear in multiple positions because these are conditional probabilities (e.g., P(2nd | not 1st), etc.). Consistency across positions signals reliability.\n\n"
 
-    position_names = {1: "🥇 Win (1st Place)", 2: "🥈 Place (2nd)", 3: "🥉 Show (3rd)", 4: "📍 4th Place", 5: "📍 5th Place"}
+    position_names = {1: "Win (1st)", 2: "Place (2nd)", 3: "Show (3rd)", 4: "4th", 5: "5th"}
 
-    for pos in range(1, 6):
-        finishing_order_report += f"**{position_names[pos]}:**\n"
-        top_finishers = elite_finishing[f'position_{pos}'][:3]
-        for rank, (horse, prob) in enumerate(top_finishers, 1):
-            post = name_to_post.get(horse, '?')
-            ml = name_to_ml.get(horse, '?')
-            finishing_order_report += f"  {rank}. **#{post} {horse}** - {prob*100:.1f}% (ML {ml})\n"
-        finishing_order_report += "\n"
+    for pos, (horse, prob) in enumerate(finishing_order, 1):
+        post = name_to_post.get(horse, '?')
+        ml = name_to_ml.get(horse, '?')
+        finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** — {prob*100:.1f}%\n"
 
-    finishing_order_report += "_Note: Horses can appear in multiple positions based on probability distribution. This shows the mathematical likelihood for each slot._\n"
+    finishing_order_report += "\n"
 
     # --- ELITE: Build $50 Bankroll Optimization ---
     bankroll_report = "### $50 Bankroll Structure\n\n"
