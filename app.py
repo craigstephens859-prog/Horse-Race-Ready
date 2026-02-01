@@ -4103,7 +4103,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                            name_to_ml: Dict[str, str], field_size: int, ppi_val: float) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,
-    A/B/C/D grouping, and $40 bankroll optimization.
+    A/B/C/D grouping, and $50 bankroll optimization.
     """
 
     import numpy as np
@@ -4385,49 +4385,49 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
     finishing_order_report += "_Note: Horses can appear in multiple positions based on probability distribution. This shows the mathematical likelihood for each slot._\n"
 
-    # --- ELITE: Build $40 Bankroll Optimization ---
-    bankroll_report = "### $40 Bankroll Structure\n\n"
+    # --- ELITE: Build $50 Bankroll Optimization ---
+    bankroll_report = "### $50 Bankroll Structure\n\n"
 
     if strategy_profile == "Value Hunter":
         bankroll_report += "**Strategy:** Value Hunter - Focus on overlays with wider coverage\n\n"
 
         # Win bets on A-Group overlays
-        win_cost = min(len([h for h in A_group if h in pos_ev_horses]), 3) * 6
-        bankroll_report += f"* **Win Bets** (${win_cost}): $6 each on top {min(len([h for h in A_group if h in pos_ev_horses]), 3)} overlay(s) from A-Group\n"
+        win_cost = min(len([h for h in A_group if h in pos_ev_horses]), 3) * 8
+        bankroll_report += f"* **Win Bets** (${win_cost}): $8 each on top {min(len([h for h in A_group if h in pos_ev_horses]), 3)} overlay(s) from A-Group\n"
 
         # Exacta part-wheel
         ex_combos = nA * (nB + min(nC, 2))
-        ex_cost = min(int(ex_combos * 0.50), 12)
+        ex_cost = min(int(ex_combos * 0.50), 14)
         bankroll_report += f"* **Exacta** (${ex_cost}): A / B,C (top 2 from C) - ${ex_cost/ex_combos:.2f} base × {ex_combos} combos\n"
 
         # Trifecta
         tri_combos = nA * (nB + min(nC, 2)) * (nB + nC + min(nD, 2))
-        tri_cost = min(int(tri_combos * 0.30), 10)
+        tri_cost = min(int(tri_combos * 0.30), 12)
         bankroll_report += f"* **Trifecta** (${tri_cost}): A / B,C / B,C,D - ${tri_cost/tri_combos:.2f} base × {tri_combos} combos\n"
 
         # Superfecta
-        super_cost = 40 - win_cost - ex_cost - tri_cost
-        super_cost = max(super_cost, 6)
+        super_cost = 50 - win_cost - ex_cost - tri_cost
+        super_cost = max(super_cost, 8)
         bankroll_report += f"* **Superfecta** (${super_cost}): A / B,C / B,C,D / Top 5 from D+All\n"
 
     else:  # Confident
         bankroll_report += "**Strategy:** Confident - Focus on top pick with deeper coverage\n\n"
 
         # Win bet on top pick
-        bankroll_report += f"* **Win Bet** ($15): $15 on #{name_to_post.get(all_horses[0], '?')} {all_horses[0]}\n"
+        bankroll_report += f"* **Win Bet** ($20): $20 on #{name_to_post.get(all_horses[0], '?')} {all_horses[0]}\n"
 
         # Exacta
         ex_combos = nA * nB
-        bankroll_report += f"* **Exacta** ($8): A / B - $0.50 base × {ex_combos} combos\n"
+        bankroll_report += f"* **Exacta** ($10): A / B - ${10/max(ex_combos,1):.2f} base × {ex_combos} combos\n"
 
         # Trifecta
         tri_combos = nA * nB * nC
-        bankroll_report += f"* **Trifecta** ($10): A / B / C - ${10/max(tri_combos,1):.2f} base × {tri_combos} combos\n"
+        bankroll_report += f"* **Trifecta** ($12): A / B / C - ${12/max(tri_combos,1):.2f} base × {tri_combos} combos\n"
 
         # Superfecta
-        bankroll_report += f"* **Superfecta** ($7): A / B / C / D - scaled to fit budget\n"
+        bankroll_report += f"* **Superfecta** ($8): A / B / C / D - scaled to fit budget\n"
 
-    bankroll_report += f"\n**Total Investment:** $40 (optimized)\n"
+    bankroll_report += f"\n**Total Investment:** $50 (optimized)\n"
     bankroll_report += f"**Risk Level:** {strategy_profile} approach - {'Wider coverage, value-based' if strategy_profile == 'Value Hunter' else 'Concentrated on top selection'}\n"
     bankroll_report += f"\n💡 **Use Finishing Order Predictions:** The probability rankings above show the most likely finishers for each position. Build your tickets using horses with highest probabilities for each slot.\n"
 
@@ -4695,8 +4695,8 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 - Explain that same horses can appear in multiple positions based on probability analysis
 - Note which horses show consistency across multiple predicted positions
 
-**3. $40 Bankroll Structure**
-- Present the "$40 Bankroll Structure" section with specific ticket allocations
+**3. $50 Bankroll Structure**
+- Present the "$50 Bankroll Structure" section with specific ticket allocations
 - Explain the logic behind the bet distribution
 - Show total investment and risk level
 
@@ -4731,13 +4731,19 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 
                 st.success("✅ Analysis Complete! Thank you for contributing to our community database.")
 
-                # Wrap report in standard font styling for readability
+                # Wrap ENTIRE report in consistent font styling (includes strategy_report_md AND LLM output)
                 styled_report = f"""
                 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
                             font-size: 15px;
                             line-height: 1.6;
                             color: #1f2937;">
-                    {report}
+
+{strategy_report_md}
+
+---
+
+{report}
+
                 </div>
                 """
                 st.markdown(styled_report, unsafe_allow_html=True)
