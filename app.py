@@ -4053,49 +4053,108 @@ def calculate_finishing_order_probabilities(primary_df, primary_probs):
 
 def build_component_breakdown(primary_df, name_to_post, name_to_ml):
     """
-    ELITE: Build detailed component breakdown showing what the system sees in each contender.
-
-    Returns markdown table with all rating components for top horses.
+    GOLD STANDARD: Build detailed component breakdown with complete mathematical transparency.
+    
+    Shows exactly what the rating system sees in each horse, with:
+    - All component values with proper weighting
+    - Calculated weighted contributions
+    - Full traceability of rating calculation
+    - Robust error handling for missing/invalid data
+    
+    Returns: Markdown formatted component breakdown for top 5 horses
     """
-    if primary_df.empty:
+    # VALIDATION: Input checks
+    if primary_df is None or primary_df.empty:
         return "No component data available."
+    
+    if 'Horse' not in primary_df.columns or 'R' not in primary_df.columns:
+        return "Invalid component data structure."
 
-    # Get top 5 horses
-    top_horses = primary_df.nlargest(5, 'R')
+    # EXTRACTION: Get top 5 horses by rating
+    try:
+        top_horses = primary_df.nlargest(5, 'R')
+    except:
+        # Fallback if rating column has issues
+        top_horses = primary_df.head(5)
+    
+    if top_horses.empty:
+        return "No horses to analyze."
+
+    # COMPONENT WEIGHTS: Official system weights (matches rating engine)
+    WEIGHTS = {
+        'Cclass': 2.5,   # Class is most important - long-term quality
+        'Cspeed': 2.0,   # Speed figures - raw ability
+        'Cform': 1.8,    # Form cycle - current condition
+        'Cpace': 1.5,    # Pace advantage - tactical fit
+        'Cstyle': 1.2,   # Running style - bias fit
+        'Cpost': 0.8     # Post position - track bias
+    }
 
     breakdown = "### Component Breakdown (Top 5 Horses)\n"
-    breakdown += "_Shows exactly what the system sees in each horse - all angles and components used_\n\n"
+    breakdown += "_Mathematical transparency: Shows exactly what the system sees in each horse_\n\n"
 
     for idx, row in top_horses.iterrows():
         horse_name = row.get('Horse', 'Unknown')
         post = name_to_post.get(horse_name, '?')
         ml = name_to_ml.get(horse_name, '?')
+        
+        # SAFE EXTRACTION: Get rating with error handling
+        try:
+            final_rating = float(row.get('R', 0))
+        except:
+            final_rating = 0.0
 
-        breakdown += f"**#{post} {horse_name}** (ML {ml}) - **Rating: {row.get('R', 0):.2f}**\n"
+        breakdown += f"**#{post} {horse_name}** (ML {ml}) - **Rating: {final_rating:.2f}**\n"
 
-        # Core Components (weighted in final rating)
-        breakdown += f"- **Class:** {row.get('Cclass', 0):.2f} (×2.5 weight) - Purse earnings, race level history\n"
-        breakdown += f"- **Form:** {row.get('Cform', 0):.2f} (×1.8 weight) - Recent performance trend, consistency\n"
-        breakdown += f"- **Speed:** {row.get('Cspeed', 0):.2f} (×2.0 weight) - Speed figures relative to field average\n"
-        breakdown += f"- **Pace:** {row.get('Cpace', 0):.2f} (×1.5 weight) - Pace advantage/disadvantage vs field\n"
-        breakdown += f"- **Style:** {row.get('Cstyle', 0):.2f} (×1.2 weight) - Running style fit for pace scenario\n"
-        breakdown += f"- **Post:** {row.get('Cpost', 0):.2f} (×0.8 weight) - Post position bias for this track/distance\n"
-        breakdown += f"- **Track Bias:** {row.get('Atrack', 0):.2f} - Track-specific advantages (style + post combo)\n"
+        # CORE COMPONENTS: Extract with validation
+        components = {}
+        component_descriptions = {
+            'Cclass': 'Purse earnings, race level history',
+            'Cform': 'Recent performance trend, consistency',
+            'Cspeed': 'Speed figures relative to field average',
+            'Cpace': 'Pace advantage/disadvantage vs projected pace',
+            'Cstyle': 'Running style fit for pace scenario',
+            'Cpost': 'Post position bias for this track/distance'
+        }
+        
+        weighted_sum = 0.0
+        for comp_name, weight in WEIGHTS.items():
+            try:
+                comp_value = float(row.get(comp_name, 0))
+            except:
+                comp_value = 0.0
+            
+            components[comp_name] = comp_value
+            weighted_contribution = comp_value * weight
+            weighted_sum += weighted_contribution
+            
+            description = component_descriptions.get(comp_name, '')
+            breakdown += f"- **{comp_name[1:]}:** {comp_value:+.2f} (×{weight} weight = {weighted_contribution:+.2f}) - {description}\n"
+        
+        # TRACK BIAS: Additional component
+        try:
+            atrack = float(row.get('Atrack', 0))
+        except:
+            atrack = 0.0
+        breakdown += f"- **Track Bias:** {atrack:+.2f} - Track-specific advantages (style + post combo)\n"
+        
+        # TRANSPARENCY: Show weighted total
+        breakdown += f"- **Weighted Core Total:** {weighted_sum:.2f}\n"
+        
+        # QUIRIN POINTS: BRIS pace rating
+        quirin = row.get('Quirin', 'N/A')
+        if quirin != 'N/A':
+            try:
+                quirin = int(float(quirin))
+            except:
+                quirin = 'N/A'
+        breakdown += f"- **Quirin Points:** {quirin} - BRISNET early pace points\n"
+        
+        # FINAL RATING: Includes all angles and bonuses
+        breakdown += f"- **Final Rating:** {final_rating:.2f} (includes 8 elite angles + tier 2 bonuses + track bias)\n\n"
 
-        # Calculate component contributions
-        total_weighted = (
-            row.get('Cclass', 0) * 2.5 +
-            row.get('Cform', 0) * 1.8 +
-            row.get('Cspeed', 0) * 2.0 +
-            row.get('Cpace', 0) * 1.5 +
-            row.get('Cstyle', 0) * 1.2 +
-            row.get('Cpost', 0) * 0.8
-        )
-
-        breakdown += f"- **Weighted Core Total:** {total_weighted:.2f}\n"
-        breakdown += f"- **Quirin Points:** {row.get('Quirin', 'N/A')} - BRISNET pace rating\n"
-        breakdown += f"- **Final Rating:** {row.get('R', 0):.2f} (includes all 8 elite angles + tier 2 bonuses)\n\n"
-
+    breakdown += "_Note: Positive values = advantages, negative = disadvantages. Weighted contributions show impact on final rating._\n"
+    
     return breakdown
 
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
@@ -4109,74 +4168,132 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     import numpy as np
     from itertools import combinations
 
-    # --- ELITE ADDITION: Calculate Finishing Order Probabilities ---
+    # --- ELITE: Calculate Most Likely Finishing Order (Sequential Selection Algorithm) ---
     def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> List[Tuple[str, float]]:
         """
-        Calculate most likely finishing order using sequential selection.
-        Each horse can only appear ONCE in the finishing order.
+        GOLD STANDARD: Calculate most likely finishing order using mathematically sound sequential selection.
         
-        Returns: List of (horse_name, probability) tuples for positions 1-5
+        Algorithm Guarantees:
+        1. Each horse appears EXACTLY ONCE in finishing order (no duplicates)
+        2. Probabilities are properly renormalized after each selection
+        3. Later positions reflect conditional probabilities given earlier selections
+        4. Handles edge cases (empty df, invalid probabilities, small fields)
+        
+        Mathematical Approach:
+        - Position 1: Horse with highest base probability wins
+        - Position 2: Remove winner, renormalize remaining field, select highest
+        - Position 3-5: Continue sequential removal and selection
+        
+        Returns: List of (horse_name, conditional_probability) for positions 1-N
         """
+        # VALIDATION: Input checks
+        if df is None or df.empty:
+            return []
+        
+        if 'Horse' not in df.columns or 'Fair %' not in df.columns:
+            return []
+        
         horses = df['Horse'].tolist()
+        if len(horses) == 0:
+            return []
+        
+        # EXTRACT: Base win probabilities with robust error handling
         win_probs = []
-
-        # Extract base probabilities
         for horse in horses:
-            prob_str = df[df['Horse'] == horse]['Fair %'].iloc[0]
+            horse_df = df[df['Horse'] == horse]
+            if horse_df.empty:
+                win_probs.append(1.0 / len(horses))  # Fallback to uniform
+                continue
+            
+            prob_str = horse_df['Fair %'].iloc[0]
             try:
-                prob = float(prob_str.strip('%')) / 100.0
+                # Handle various formats: "25.5%", "0.255", 25.5
+                if isinstance(prob_str, str):
+                    prob = float(prob_str.strip('%').strip()) / (100.0 if '%' in str(prob_str) else 1.0)
+                else:
+                    prob = float(prob_str)
+                    if prob > 1.0:  # Assume percentage
+                        prob = prob / 100.0
             except:
                 prob = 1.0 / len(horses)
+            
+            # SANITY CHECK: Probability bounds
+            prob = max(0.0, min(1.0, prob))
             win_probs.append(prob)
 
-        win_probs = np.array(win_probs)
+        win_probs = np.array(win_probs, dtype=np.float64)
+        
+        # NORMALIZATION: Ensure probabilities sum to 1.0
         if win_probs.sum() > 0:
             win_probs = win_probs / win_probs.sum()
+        else:
+            # All probabilities were invalid - use uniform distribution
+            win_probs = np.ones(len(horses), dtype=np.float64) / len(horses)
 
-        # Sequential selection: pick most likely for each position, removing selected horses
+        # SEQUENTIAL SELECTION: Build finishing order one position at a time
         finishing_order = []
-        remaining_horses = list(range(len(horses)))
+        remaining_indices = list(range(len(horses)))
         remaining_probs = win_probs.copy()
 
         for position in range(min(top_n, len(horses))):
-            # Renormalize remaining probabilities
-            if remaining_probs.sum() > 0:
-                remaining_probs = remaining_probs / remaining_probs.sum()
+            # VALIDATION: Check we have horses remaining
+            if len(remaining_indices) == 0:
+                break
             
-            # Select horse with highest probability
-            best_idx = np.argmax(remaining_probs)
-            selected_horse_idx = remaining_horses[best_idx]
-            selected_prob = remaining_probs[best_idx]
+            # RENORMALIZATION: Ensure remaining probabilities sum to 1.0
+            prob_sum = remaining_probs.sum()
+            if prob_sum > 0:
+                remaining_probs = remaining_probs / prob_sum
+            else:
+                # Fallback to uniform for remaining horses
+                remaining_probs = np.ones(len(remaining_indices), dtype=np.float64) / len(remaining_indices)
             
-            finishing_order.append((horses[selected_horse_idx], selected_prob))
+            # SELECTION: Horse with highest conditional probability
+            best_relative_idx = np.argmax(remaining_probs)
+            selected_horse_idx = remaining_indices[best_relative_idx]
+            selected_prob = remaining_probs[best_relative_idx]
             
-            # Remove selected horse from remaining pool
-            remaining_horses.pop(best_idx)
-            remaining_probs = np.delete(remaining_probs, best_idx)
+            # RECORD: Add to finishing order
+            finishing_order.append((horses[selected_horse_idx], float(selected_prob)))
+            
+            # REMOVAL: Eliminate selected horse from remaining pool
+            remaining_indices.pop(best_relative_idx)
+            remaining_probs = np.delete(remaining_probs, best_relative_idx)
 
         return finishing_order
 
-    # Calculate most likely finishing order (ensures each horse appears only once)
+    # EXECUTE: Calculate most likely finishing order (ensures mathematical validity)
     finishing_order = calculate_most_likely_finishing_order(primary_df, top_n=5)
     
-    # Convert to format expected by rest of code (most_likely dict with alternatives)
-    # For simplicity, we'll show primary prediction plus alternatives from remaining horses
+    # BUILD: Alternative horses for each position (for display purposes)
+    # Shows top 3 most likely horses for each position, excluding already-selected horses
     most_likely = {}
     selected_horses = {horse for horse, _ in finishing_order}
     
-    for pos_idx, (horse, prob) in enumerate(finishing_order, start=1):
-        # Get alternative horses for this position (not yet selected)
+    for pos_idx, (primary_horse, primary_prob) in enumerate(finishing_order, start=1):
+        # ALTERNATIVE CANDIDATES: Get probabilities for all horses at this position
+        # Exclude horses already selected for earlier positions
         alternatives = []
         for h in primary_df['Horse'].tolist():
-            if h not in selected_horses or h == horse:
-                h_prob_str = primary_df[primary_df['Horse'] == h]['Fair %'].iloc[0]
-                try:
-                    h_prob = float(h_prob_str.strip('%')) / 100.0
-                except:
-                    h_prob = 0.0
-                alternatives.append((h, h_prob))
+            # Skip horses already selected for earlier positions (except the primary for this position)
+            if h in selected_horses and h != primary_horse:
+                continue
+            
+            h_prob_str = primary_df[primary_df['Horse'] == h]['Fair %'].iloc[0]
+            try:
+                if isinstance(h_prob_str, str):
+                    h_prob = float(h_prob_str.strip('%').strip()) / (100.0 if '%' in str(h_prob_str) else 1.0)
+                else:
+                    h_prob = float(h_prob_str)
+                    if h_prob > 1.0:
+                        h_prob = h_prob / 100.0
+                h_prob = max(0.0, min(1.0, h_prob))
+            except:
+                h_prob = 0.0
+            
+            alternatives.append((h, h_prob))
         
-        # Sort by probability and take top 3
+        # RANKING: Sort by probability (highest first) and take top 3
         alternatives.sort(key=lambda x: x[1], reverse=True)
         most_likely[pos_idx] = alternatives[:3]
 
@@ -4326,16 +4443,35 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         if field_size >= 7: # Only suggest SH5 if 7+ runners
             blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{nB+nC}x{nB+nC+nD}x{nAll}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll, nAll)}\n"
 
-    # --- ELITE: Build Component Breakdown for Top Contenders ---
-    # First, get the detailed breakdown using our elite function
+    # --- GOLD STANDARD: Build probability dictionary with validation ---
     primary_probs_dict = {}
     for horse in primary_df['Horse'].tolist():
-        prob_str = primary_df[primary_df['Horse'] == horse]['Fair %'].iloc[0]
+        horse_df = primary_df[primary_df['Horse'] == horse]
+        if horse_df.empty:
+            primary_probs_dict[horse] = 1.0 / max(len(primary_df), 1)
+            continue
+        
+        prob_str = horse_df['Fair %'].iloc[0]
         try:
-            prob = float(prob_str.strip('%')) / 100.0
+            # Handle multiple formats: "25.5%", "0.255", 25.5
+            if isinstance(prob_str, str):
+                prob = float(prob_str.strip('%').strip()) / (100.0 if '%' in str(prob_str) else 1.0)
+            else:
+                prob = float(prob_str)
+                if prob > 1.0:  # Assume percentage format
+                    prob = prob / 100.0
+            
+            # VALIDATION: Probability bounds [0, 1]
+            prob = max(0.0, min(1.0, prob))
         except:
-            prob = 1.0 / len(primary_df)
+            prob = 1.0 / max(len(primary_df), 1)
+        
         primary_probs_dict[horse] = prob
+    
+    # NORMALIZATION: Ensure probabilities sum to exactly 1.0
+    total_prob = sum(primary_probs_dict.values())
+    if total_prob > 0:
+        primary_probs_dict = {h: p / total_prob for h, p in primary_probs_dict.items()}
 
     detailed_breakdown = build_component_breakdown(primary_df, name_to_post, name_to_ml)
 
