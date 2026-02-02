@@ -1925,6 +1925,48 @@ def calculate_form_cycle_rating(
 
     return float(np.clip(form_rating, -3.0, 3.0))
 
+# ===================== Odds Conversion Utilities =====================
+
+def odds_to_decimal(odds_str: str) -> float:
+    """
+    Convert various odds formats to decimal for comparison.
+    Handles: fractional (5/2), decimal (3.5), American (+250, -150)
+    Returns decimal odds (e.g., 5/2 → 3.5)
+    """
+    if not odds_str or odds_str == '?':
+        return 0.0
+    
+    odds_str = str(odds_str).strip()
+    
+    try:
+        # Fractional format: "5/2", "7/1"
+        if '/' in odds_str:
+            parts = odds_str.split('/')
+            numerator = float(parts[0])
+            denominator = float(parts[1])
+            return (numerator / denominator) + 1.0
+        
+        # American format: "+250", "-150"
+        elif odds_str.startswith(('+', '-')):
+            american = float(odds_str)
+            if american > 0:
+                return (american / 100) + 1.0
+            else:
+                return (100 / abs(american)) + 1.0
+        
+        # Decimal format: "3.5", "2.0"
+        else:
+            decimal = float(odds_str)
+            # If already in decimal format (> 1), return as-is
+            if decimal >= 1.0:
+                return decimal
+            # If looks like fractional without slash (0.5 = 1/2)
+            else:
+                return decimal + 1.0
+    
+    except (ValueError, ZeroDivisionError, IndexError):
+        return 0.0
+
 # ===================== Class Rating Calculator (Comprehensive) =====================
 
 def parse_recent_class_levels(block) -> List[dict]:
@@ -4496,11 +4538,36 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     bankroll_report += f"**Risk Level:** {strategy_profile} approach - {'Wider coverage, value-based' if strategy_profile == 'Value Hunter' else 'Concentrated on top selection'}\n"
     bankroll_report += f"\n💡 **Use Finishing Order Predictions:** The probability rankings above show the most likely finishers for each position. Build your tickets using horses with highest probabilities for each slot.\n"
 
+    # --- Smart Money Alert Section ---
+    smart_money_report = ""
+    if smart_money_horses:
+        smart_money_report = "### 🚨 Smart Money Alert: Significant Odds Movement Detected\n\n"
+        smart_money_report += "The following horses show **major public support** with Live odds dropping significantly from Morning Line. This typically indicates:\n"
+        smart_money_report += "* Trainer/connections betting\n"
+        smart_money_report += "* Informed money from sharp handicappers\n"
+        smart_money_report += "* Positive workout reports or stable buzz\n"
+        smart_money_report += "* Hidden form improvement\n\n"
+        
+        # Sort by biggest movement percentage
+        smart_money_horses.sort(key=lambda x: x['movement_pct'], reverse=True)
+        
+        for horse_data in smart_money_horses:
+            name = horse_data['name']
+            post = horse_data['post']
+            ml = horse_data['ml']
+            live = horse_data['live']
+            movement_pct = horse_data['movement_pct']
+            
+            smart_money_report += f"* **🔥 #{post} {name}** - ML {ml} → Live {live} (📉 {movement_pct:.0f}% drop)\n"
+        
+        smart_money_report += "\n💡 **Action:** These horses are getting **heavy public support**. Consider them seriously even if model doesn't rank them #1. Sharp money often spots angles the numbers miss.\n\n"
+        smart_money_report += "---\n"
+
     # --- 6. Build Final Report String (OPTIMIZED ORDER: Most Important First) ---
     final_report = f"""
 {finishing_order_report}
 ---
-{bankroll_report}
+{smart_money_report}{bankroll_report}
 ---
 {component_report}
 ---
@@ -4678,12 +4745,42 @@ else:
                     
                     # CRITICAL FIX: Prioritize Live Odds over ML odds (just like Fair % calculation does)
                     name_to_odds = {}
+                    smart_money_horses = []  # Track horses with significant odds movement
+                    name_to_ml = {}  # Store ML odds separately for comparison
+                    
                     for _, row in df_final_field.iterrows():
                         horse_name = row.get('Horse')
                         live_odds = row.get('Live Odds', '')
                         ml_odds = row.get('ML', '')
+                        
+                        # Store ML for comparison
+                        name_to_ml[horse_name] = ml_odds
+                        
                         # Use Live Odds if entered by user, otherwise fall back to ML
                         name_to_odds[horse_name] = live_odds if live_odds else ml_odds
+                        
+                        # SMART MONEY DETECTION: Flag horses with significant odds drops
+                        if live_odds and ml_odds:
+                            try:
+                                live_decimal = odds_to_decimal(live_odds)
+                                ml_decimal = odds_to_decimal(ml_odds)
+                                
+                                # Smart money = Live odds < 60% of ML odds
+                                # Example: ML 30/1 → Live 17/1 is 17/30 = 56.7% (ALERT!)
+                                if live_decimal > 0 and ml_decimal > 0:
+                                    ratio = live_decimal / ml_decimal
+                                    if ratio < 0.6:  # Live odds dropped to <60% of ML
+                                        movement_pct = (1 - ratio) * 100
+                                        smart_money_horses.append({
+                                            'name': horse_name,
+                                            'post': row.get('Post'),
+                                            'ml': ml_odds,
+                                            'live': live_odds,
+                                            'ratio': ratio,
+                                            'movement_pct': movement_pct
+                                        })
+                            except Exception:
+                                pass  # Ignore conversion errors
 
                     # VALIDATION: Ensure all horses in primary_df have post/odds mappings
                     missing_horses = []
