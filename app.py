@@ -5459,10 +5459,9 @@ else:
                                         predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
                                         st.session_state['last_save_predicted'] = predicted_winner
                                         
-                                        st.success(f"✅ Results saved! Winner: #{finish_order[0]} {horse_names_dict[finish_order[0]]}")
-                                        st.balloons()
+                                        st.toast(f"🏁 Results saved! Winner: #{finish_order[0]} {horse_names_dict[finish_order[0]]}", icon="✅")
                                         
-                                        time.sleep(1)
+                                        time.sleep(0.5)
                                         _safe_rerun()
                                     else:
                                         st.error("❌ Failed to save to database")
