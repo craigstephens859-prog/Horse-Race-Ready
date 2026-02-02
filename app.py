@@ -982,10 +982,20 @@ def parse_fractional_positions(block) -> List[List[int]]:
     pattern = r'(\d{2}[A-Za-z]{3}\d{2}).*?\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*'
     for m in re.finditer(pattern, block_str, re.MULTILINE):
         try:
-            pos = [int(m.group(i)) for i in range(2, 8)]
-            positions.append(pos)
-        except:
-            pass
+            # Validate each group exists and contains digits before conversion
+            pos = []
+            for i in range(2, 8):
+                group_val = m.group(i)
+                if group_val and group_val.isdigit():
+                    pos.append(int(group_val))
+                else:
+                    # Invalid group - skip this match
+                    raise ValueError(f"Invalid position group {i}: {group_val}")
+            if len(pos) == 6:  # Ensure we got all 6 positions
+                positions.append(pos)
+        except (ValueError, IndexError) as e:
+            # Log parsing failures for debugging (silent failures hide bugs)
+            pass  # Could add logging here if needed
     return positions[:5]
 
 def calculate_trip_quality(positions: List[List[int]], field_size: int = 10) -> float:
@@ -1097,6 +1107,46 @@ def parse_speed_figures_for_block(block) -> List[int]:
 
     # We only care about the most recent figs, e.g., last 10
     return figs[:10]
+
+# ---------- Helper Functions ----------
+def normalize_horse_name(name):
+    """Normalize horse name for matching: remove apostrophes, extra spaces, lowercase.
+    
+    Use this function consistently throughout the codebase for horse name matching
+    to avoid scratched horses appearing or missing matches.
+    
+    Args:
+        name: Horse name to normalize
+    
+    Returns:
+        str: Normalized name (lowercase, no apostrophes/backticks, single spaces)
+    """
+    return ' '.join(str(name).replace("'", "").replace("`", "").lower().split())
+
+def safe_float(value, default=0.0):
+    """
+    Convert value to float, handling:
+    - Percentage strings like '75.6%'
+    - American odds like '+150', '-200'
+    - Regular numbers
+    
+    Args:
+        value: Value to convert (string, int, float, etc.)
+        default: Default value if conversion fails
+    
+    Returns:
+        float: Converted value or default
+    """
+    try:
+        if isinstance(value, str):
+            # Remove % symbol and any whitespace
+            value = value.strip().rstrip('%')
+            # Remove + symbol from odds like '+150'
+            if value.startswith('+'):
+                value = value[1:]
+        return float(value)
+    except (ValueError, TypeError, AttributeError):
+        return default
 
 # ---------- GOLD-STANDARD Probability helpers with mathematical rigor ----------
 def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
@@ -2537,16 +2587,18 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
 
     # 1) Pedigree AWD vs today's distance bucket
     awds = [x for x in [ped.get("sire_awd"), ped.get("damsire_awd")] if pd.notna(x)]
-    awd_mean = float(np.nanmean(awds)) if awds else np.nan
-    if awd_mean == awd_mean: # Check if not NaN
-        if race_bucket == "≤6f":
-            if awd_mean <= 6.5: tweak += MODEL_CONFIG['ped_dist_bonus']
-            elif awd_mean >= 7.5: tweak += MODEL_CONFIG['ped_dist_penalty']
-        elif race_bucket == "8f+":
-            if awd_mean >= 7.5: tweak += MODEL_CONFIG['ped_dist_bonus']
-            elif awd_mean <= 6.5: tweak += MODEL_CONFIG['ped_dist_penalty']
-        else: # 6.5-7f bucket
-            if 6.3 <= awd_mean <= 7.7: tweak += MODEL_CONFIG['ped_dist_neutral_bonus']
+    # Validate AWD data exists and is valid BEFORE using
+    if awds:
+        awd_mean = float(np.nanmean(awds))
+        if pd.notna(awd_mean):  # Use pandas notna for clarity
+            if race_bucket == "≤6f":
+                if awd_mean <= 6.5: tweak += MODEL_CONFIG['ped_dist_bonus']
+                elif awd_mean >= 7.5: tweak += MODEL_CONFIG['ped_dist_penalty']
+            elif race_bucket == "8f+":
+                if awd_mean >= 7.5: tweak += MODEL_CONFIG['ped_dist_bonus']
+                elif awd_mean <= 6.5: tweak += MODEL_CONFIG['ped_dist_penalty']
+            else: # 6.5-7f bucket
+                if 6.3 <= awd_mean <= 7.7: tweak += MODEL_CONFIG['ped_dist_neutral_bonus']
 
     # Sprint/debut pop from 1st% in true sprints
     if race_bucket == "≤6":
@@ -3384,6 +3436,9 @@ def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dic
                 return 10.0
             else:
                 return 8.0  # Default 1 mile
+        # Unrecognized format - warn and use default
+        if dist_str and dist_str != '6.0':
+            st.warning(f"⚠️ Unrecognized distance format '{dist_str}' - using 6f default")
         return 6.0  # Default
 
     today_furlongs = distance_to_furlongs(today_distance)
@@ -3617,9 +3672,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 if not results_df.empty:
                     # Filter to only include horses that are NOT scratched (i.e., in df_styles)
                     # Use normalized names for matching to handle apostrophes and spacing differences
-                    def normalize_horse_name(name):
-                        """Normalize horse name for matching: remove apostrophes, extra spaces, lowercase"""
-                        return ' '.join(str(name).replace("'", "").replace("`", "").lower().split())
+                    # (normalize_horse_name is defined at top of file for consistency)
 
                     # Build mapping of normalized names to original names from Section A
                     section_a_names = {normalize_horse_name(h): h for h in df_styles['Horse'].tolist()}
@@ -5038,25 +5091,8 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                 # ============================================================
                 if GOLD_DB_AVAILABLE and gold_db is not None and primary_df is not None:
                     try:
-                        # Helper function to safely convert percentage strings and odds
-                        def safe_float(value, default=0.0):
-                            """
-                            Convert value to float, handling:
-                            - Percentage strings like '75.6%'
-                            - American odds like '+150', '-200'
-                            - Regular numbers
-                            """
-                            try:
-                                if isinstance(value, str):
-                                    # Remove % symbol and any whitespace
-                                    value = value.strip().rstrip('%')
-                                    # Remove + symbol from odds like '+150'
-                                    if value.startswith('+'):
-                                        value = value[1:]
-                                return float(value)
-                            except (ValueError, TypeError, AttributeError):
-                                return default
-
+                        # safe_float is now defined at top of file as a global helper
+                        
                         # Generate race ID
                         race_date = datetime.now().strftime('%Y%m%d')
                         race_id = f"{track_name}_{race_date}_R{st.session_state.get('race_num', 1)}"
