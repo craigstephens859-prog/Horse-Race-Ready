@@ -77,7 +77,17 @@ class GoldHighIQDatabase:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # 1. Insert race record
+            # CHECK IF RACE ALREADY HAS RESULTS SUBMITTED
+            cursor.execute("""
+                SELECT COUNT(*) FROM gold_high_iq 
+                WHERE race_id = ?
+            """, (race_id,))
+            has_results = cursor.fetchone()[0] > 0
+            
+            if has_results:
+                logger.warning(f"⚠️ Race {race_id} already has results. Updating predictions but preserving results.")
+            
+            # 1. Insert race record (INSERT OR REPLACE updates if exists)
             cursor.execute("""
                 INSERT OR REPLACE INTO races_analyzed 
                 (race_id, track_code, race_date, race_number, race_type, 
@@ -178,6 +188,12 @@ class GoldHighIQDatabase:
             
         except Exception as e:
             logger.error(f"❌ Error saving race {race_id}: {e}")
+            # ROLLBACK ON ERROR - ensures database integrity
+            try:
+                conn.rollback()
+                conn.close()
+            except:
+                pass
             return False
     
     def get_pending_races(self, limit: int = 20) -> List[Tuple]:
@@ -359,6 +375,12 @@ class GoldHighIQDatabase:
             logger.error(f"❌ Error submitting results for {race_id}: {e}")
             import traceback
             traceback.print_exc()
+            # ROLLBACK ON ERROR - ensures database integrity
+            try:
+                conn.rollback()
+                conn.close()
+            except:
+                pass
             return False
     
     def get_training_data(

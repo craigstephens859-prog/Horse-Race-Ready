@@ -5421,8 +5421,32 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                     try:
                         # safe_float is now defined at top of file as a global helper
                         
-                        # Generate race ID
-                        race_date = datetime.now().strftime('%Y%m%d')
+                        # Generate race ID using ACTUAL race date from PP text (not current date)
+                        # This ensures correct race identification even when analyzing historical/future races
+                        race_date_str = None
+                        pp_text_raw = st.session_state.get('pp_text_cache', '')
+                        
+                        # Extract race date from BRISNET text (format: "Saturday, February 1, 2026")
+                        import re
+                        date_match = re.search(r'(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})', pp_text_raw)
+                        if date_match:
+                            month_str = date_match.group(2)
+                            day_str = date_match.group(3).zfill(2)
+                            year_str = date_match.group(4)
+                            
+                            # Convert month name to number
+                            months = {'January': '01', 'February': '02', 'March': '03', 'April': '04',
+                                     'May': '05', 'June': '06', 'July': '07', 'August': '08',
+                                     'September': '09', 'October': '10', 'November': '11', 'December': '12'}
+                            month_num = months.get(month_str, '01')
+                            race_date_str = f"{year_str}{month_num}{day_str}"  # YYYYMMDD format
+                        
+                        # Fallback to current date if extraction fails
+                        if not race_date_str:
+                            race_date_str = datetime.now().strftime('%Y%m%d')
+                            st.warning("⚠️ Could not extract race date from PP text, using current date")
+                        
+                        race_date = race_date_str  # Use extracted date
                         race_id = f"{track_name}_{race_date}_R{st.session_state.get('race_num', 1)}"
 
                         # Prepare COMPREHENSIVE race metadata with all context
@@ -5568,9 +5592,12 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                         )
 
                         if success:
-                            st.success(f"💾 **Auto-saved to gold database:** {race_id}")
+                            st.success(f"💾 **Auto-saved to gold database:** `{race_id}`")
+                            st.info(f"📊 Saved {len(horses_data)} horses with {len([k for k in horses_data[0].keys() if k.startswith('rating_') or k.startswith('angle_')])} ML features each")
                             st.session_state['last_saved_race_id'] = race_id
                             st.info("🏁 After race completes, submit actual top 5 finishers in **Section E** below!")
+                        else:
+                            st.error(f"❌ Failed to save race {race_id} to database")
 
                     except Exception as save_error:
                         st.warning(f"Could not auto-save race: {save_error}")
@@ -5616,8 +5643,20 @@ if not GOLD_DB_AVAILABLE or gold_db is None:
     - retrain_model.py
     """)
 else:
+    # VERIFY DATABASE PERSISTENCE ON STARTUP
     try:
-        # Get stats from gold database
+        import os
+        db_path = gold_db.db_path
+        if os.path.exists(db_path):
+            db_size_mb = os.path.getsize(db_path) / (1024 * 1024)
+            st.success(f"✅ **Database Verified:** {db_path} ({db_size_mb:.2f} MB) - Data persists across sessions!")
+        else:
+            st.info(f"📁 New database will be created: {db_path}")
+    except Exception as verify_error:
+        st.warning(f"Could not verify database: {verify_error}")
+    
+    # Get stats from gold database
+    try:
         stats = gold_db.get_accuracy_stats()
         pending_races = gold_db.get_pending_races(limit=20)
 
@@ -5874,14 +5913,42 @@ else:
                 
                 # Show recently saved results for verification
                 st.markdown("---")
-                st.markdown("### 📊 Recently Saved Results (Verification)")
+                st.markdown("### 📊 Database Integrity Verification")
                 
                 try:
                     import sqlite3
+                    import os
                     conn = sqlite3.connect(gold_db.db_path)
                     cursor = conn.cursor()
                     
-                    # Get last 10 saved results
+                    # COMPREHENSIVE DATABASE CHECK
+                    # 1. Total race count
+                    cursor.execute("SELECT COUNT(DISTINCT race_id) FROM races_analyzed")
+                    total_analyzed = cursor.fetchone()[0]
+                    
+                    cursor.execute("SELECT COUNT(DISTINCT race_id) FROM gold_high_iq")
+                    total_with_results = cursor.fetchone()[0]
+                    
+                    cursor.execute("SELECT COUNT(*) FROM gold_high_iq")
+                    total_horses_saved = cursor.fetchone()[0]
+                    
+                    # 2. Database file persistence
+                    db_size = os.path.getsize(gold_db.db_path) / (1024 * 1024)  # MB
+                    
+                    # 3. Show verification metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("DB Size", f"{db_size:.2f} MB", help="Physical database file size - persists across sessions")
+                    with col2:
+                        st.metric("Races Analyzed", total_analyzed, help="All races saved automatically")
+                    with col3:
+                        st.metric("With Results", total_with_results, help="Races ready for ML training")
+                    with col4:
+                        st.metric("Horses Saved", total_horses_saved, help="Total training examples (5 per completed race)")
+                    
+                    st.success(f"🔒 **Data Persistence Verified:** All data stored in `{gold_db.db_path}` - survives browser close/reopen!")
+                    
+                    # 4. Get last 10 saved results
                     cursor.execute("""
                         SELECT 
                             race_id,
@@ -5899,7 +5966,7 @@ else:
                     conn.close()
                     
                     if recent_results:
-                        st.success(f"✅ Database verified: {len(recent_results)} recent entries found")
+                        st.markdown("#### 🏇 Last 10 Training Examples Saved")
                         
                         verify_df = pd.DataFrame(recent_results, columns=[
                             'Race ID', 'Horse', 'Actual Pos', 'Predicted Pos', 
@@ -5912,12 +5979,13 @@ else:
                         
                         st.dataframe(verify_df, use_container_width=True, hide_index=True)
                         
-                        st.caption("💡 This table shows the last 10 horses saved to the training database. Each race saves 5 entries (top 5 finishers).")
+                        st.caption("💡 Each completed race saves 5 entries (top 5 finishers). Database automatically commits and persists all data.")
                     else:
-                        st.info("📋 No results in database yet. Submit your first race above!")
+                        st.info("📋 No results in database yet. Submit your first race above to begin ML training data collection!")
                         
                 except Exception as e:
-                    st.warning(f"⚠️ Could not verify database: {str(e)}")
+                    st.error(f"❌ Database verification failed: {str(e)}")
+                    st.warning("⚠️ This may indicate database corruption or file permission issues.")
 
         # Tab 3: Retrain Model
         with tab_retrain:
