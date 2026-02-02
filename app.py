@@ -3915,29 +3915,79 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             cpost * 0.8
         )
         
-        # HYBRID MODEL: 8% Components + 92% Prime Power (SA R8 Post-Mortem - Feb 2026)
+        # HYBRID MODEL: Surface-Adaptive PP Weight (SA R8 + GP R1 Learning - Feb 2026)
         # 
-        # SA R8 CRITICAL LEARNING: 85/15 ratio still too component-heavy
-        # Actual finish: #13 (PP 125.3), #12 (PP 127.5), #8 (PP 125.4) - perfect PP correlation!
-        # System predicted #5 (PP 122.3) to win - components (+2.70 form) overrode PP signal
+        # SA R8 (6F Dirt Sprint): Top 3 PP horses = top 3 finishers (PP correlation -0.831)
+        # GP R1 (1M Turf Route): PP 138.3, 137.4, 136.0 DNF top 5 - NO PP correlation!
         # 
-        # NEW 92/8 RATIO: Trusts Prime Power as primary predictor
-        # - Top 3 PP horses finished in top 3 (100% accuracy)
-        # - Prime Power correlation: -0.831 (strongest single predictor)
-        # - Component correlation: -0.4 to -0.7 (supplementary only)
+        # KEY INSIGHT: Prime Power predicts RAW SPEED ABILITY on DIRT
+        # - Dirt sprints: PP = finish order (92% PP weight)
+        # - Turf: PP = raw ability BUT tactics/position >> speed (DISABLE PP, use components only)
         # 
-        # Mathematical validation: 92/8 would have ranked #12, #13, #8 correctly
+        # GP R1 EVIDENCE:
+        #   Winner #8 (PP 130.6) beat #4 (PP 138.3) and #14 (PP 137.4)
+        #   #2 finished 4th with PP 111.0 (15th highest!)
+        #   Conclusion: On turf, components (pace/form/style) >> Prime Power
+        # 
+        # SURFACE-ADAPTIVE RATIOS:
+        # - Dirt ≤7F: 92% PP / 8% Components (speed is king - SA R8 validated)
+        # - Dirt >7F: 80% PP / 20% Components (stamina factors in)
+        # - Turf ALL: 0% PP / 100% Components (tactics/pace dominate - GP R1 validated)
+        # - Synthetic: 75% PP / 25% Components (consistent surface, speed matters)
+        #
+        # This allows PP to dominate on dirt (where it's proven) while using component
+        # analysis for turf (where pace/position/tactics are more predictive than raw speed)
+        
         prime_power_raw = safe_float(row.get('Prime Power', 0.0), 0.0)
         if prime_power_raw > 0:
             # Normalize Prime Power (typical range: 110-130, clip outliers to 0-2 scale)
             pp_normalized = np.clip((prime_power_raw - 110) / 20, 0, 2)  # 0 to 2 scale (allows up to 150)
             pp_contribution = pp_normalized * 10  # Scale to match component range
             
-            # Hybrid: 8% component insights, 92% Prime Power strength (OPTIMIZED)
-            weighted_components = 0.08 * weighted_components + 0.92 * pp_contribution
+            # Determine optimal PP weight based on surface and distance
+            # Parse distance for route vs sprint classification
+            distance_furlongs = 8.0  # Default
+            try:
+                if 'f' in distance_txt.lower():
+                    distance_furlongs = float(distance_txt.lower().replace('f', '').strip())
+                elif 'mile' in distance_txt.lower():
+                    if '1mile' in distance_txt.lower().replace(' ', ''):
+                        distance_furlongs = 8.0
+                    elif '1.5' in distance_txt or '1 1/2' in distance_txt:
+                        distance_furlongs = 12.0
+                    elif '1.25' in distance_txt or '1 1/4' in distance_txt:
+                        distance_furlongs = 10.0
+                    elif '1.125' in distance_txt or '1 1/8' in distance_txt:
+                        distance_furlongs = 9.0
+            except:
+                pass
+            
+            # Surface-adaptive ratio selection
+            surface_lower = (surface_type or "dirt").lower()
+            
+            if 'turf' in surface_lower or 'tur' in surface_lower or 'grass' in surface_lower:
+                # Turf racing: PP has no predictive value (GP R1: highest PP horses lost)
+                # Use pure component model (pace, form, style, jockey are what matter)
+                pp_weight, comp_weight = 0.0, 1.0
+            elif 'synth' in surface_lower or 'aw' in surface_lower or 'all-weather' in surface_lower or 'tapeta' in surface_lower:
+                # Synthetic: Consistent surface, speed matters but not as much as dirt
+                pp_weight, comp_weight = 0.75, 0.25
+            else:  # Dirt (default)
+                if distance_furlongs <= 7.0:  # Sprint
+                    pp_weight, comp_weight = 0.92, 0.08  # Raw speed is king (SA R8 validated)
+                else:  # Route
+                    pp_weight, comp_weight = 0.80, 0.20  # Stamina + pace management
+            
+            # Apply surface-adaptive hybrid model
+            # ALL secondary factors (components + track + bonuses) at component weight
+            # Prime Power at PP weight (dominant on dirt, disabled on turf)
+            components_with_bonuses = weighted_components + a_track + tier2_bonus
+            arace = comp_weight * components_with_bonuses + pp_weight * pp_contribution
+        else:
+            # No Prime Power available - use traditional component model
+            arace = weighted_components + a_track + tier2_bonus
         
-        arace = weighted_components + a_track + tier2_bonus
-        R     = arace
+        R = arace
 
         # ELITE: Single-pass outlier clipping with data quality monitoring
         # Typical racing range: -5 to +20. Values beyond suggest parsing errors or unrealistic bonuses
