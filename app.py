@@ -3925,10 +3925,13 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         # OPTIMIZED: Class reduced to 2.0 (from 3.0) - SA R8 showed class penalties buried high-PP horses
         # #12 & #13 had class adjustments that dropped them despite elite PP (127.5, 125.3)
         # Prime Power already captures class quality - component class was double-counting
+        # CLAIMING BOOST: Increase speed weight in claiming races (TUP R5 winner had highest speed LR)
+        speed_multiplier = 2.5 if race_quality == "low" else 1.8
+        
         weighted_components = (
             c_class * 2.0 +
             c_form * 1.8 +
-            cspeed * 1.8 +
+            cspeed * speed_multiplier +  # Boost speed in claiming races
             cpace * 1.5 +
             cstyle * 1.2 +
             cpost * 0.8
@@ -4144,9 +4147,12 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         elif race_quality == "mid":
                             # Mid-tier: Standard reliability
                             base_pp, base_comp = 0.88, 0.12
-                        else:  # "low"
-                            # Claiming: Cheaper horses, more variance
-                            base_pp, base_comp = 0.85, 0.15
+                        else:  # "low" (Claiming)
+                            # CLAIMING FIX: TUP R4/R5 proved 85% PP weight produces INVERSE correlation
+                            # Winner #3 in R5 had HIGHEST Speed LR (82) and was P style (survived speed duel)
+                            # Winner in R4 had LOWEST PP (76.8) but had Smart Money + post bias
+                            # Claiming races = chaos: Speed LR, tactics, Smart Money matter MORE than PP
+                            base_pp, base_comp = 0.62, 0.38  # Dramatically lower PP, boost components
                         
                         # Class dropper adjustment
                         if class_spread > 1.5:
@@ -4164,8 +4170,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             base_pp, base_comp = 0.82, 0.18
                         elif race_quality == "mid":
                             base_pp, base_comp = 0.78, 0.22
-                        else:  # "low"
-                            base_pp, base_comp = 0.72, 0.28
+                        else:  # "low" (Claiming)
+                            # CLAIMING ROUTE FIX: Even lower PP weight for claiming routes
+                            # Pace stamina and tactics dominate in cheap route races
+                            base_pp, base_comp = 0.55, 0.45  # Favor components heavily
                         
                         # Class dropper adjustment (routes)
                         if class_spread > 2.0:
@@ -4185,6 +4193,25 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         
         R = arace
 
+        # ═══════════════════════════════════════════════════════════════
+        # PACE SCENARIO BONUS: Detect speed duels favoring closers
+        # ═══════════════════════════════════════════════════════════════
+        # TUP R5: 7 E/EP types created speed duel, P runner won from back
+        # Count E/EP types in field to detect likely speed duels
+        pace_scenario_bonus = 0.0
+        if df_styles is not None and not df_styles.empty:
+            speed_types = 0
+            for _, h_row in df_styles.iterrows():
+                h_style = str(h_row.get('Style', '')).upper()
+                if 'E' in h_style:  # E or E/P types
+                    speed_types += 1
+            
+            # If 6+ speed horses and this horse is P or S, boost rating
+            if speed_types >= 6 and (style in ['P', 'S'] or 'P' in style or 'S' in style):
+                pace_scenario_bonus = 1.5  # Significant boost for closers in speed duels
+        
+        R += pace_scenario_bonus
+        
         # ELITE: Single-pass outlier clipping with data quality monitoring
         # Typical racing range: -5 to +20. Values beyond suggest parsing errors or unrealistic bonuses
         if R > 30 or R < -10:
@@ -5252,6 +5279,25 @@ else:
                 # ============================================================
                 # SEQUENTIAL EXECUTION: All validations passed, proceed safely
                 # ============================================================
+                
+                # ═══════════════════════════════════════════════════════════════
+                # SMART MONEY BONUS: Apply rating boost to horses with sharp money
+                # ═══════════════════════════════════════════════════════════════
+                # TUP R4: #6 Your Call had ML 5/1 → Live 3/1 (40% drop) and WON
+                # TUP R5: #8 Naval Escort had ML 5/1 → Live 2/1 (60% drop) detected
+                # System detected smart money but didn't boost ratings - FIX IT
+                
+                if smart_money_horses:
+                    smart_money_names = [h['name'] for h in smart_money_horses]
+                    smart_money_bonus = 2.5  # Significant boost for sharp action
+                    
+                    # Apply bonus to primary_df ratings
+                    for idx, row in primary_df.iterrows():
+                        if row['Horse'] in smart_money_names:
+                            primary_df.at[idx, 'R'] = row['R'] + smart_money_bonus
+                    
+                    # Re-sort after applying Smart Money bonus
+                    primary_sorted = primary_df.sort_values(by="R", ascending=False)
 
                 top_table = primary_sorted[['Horse','R','Fair %','Fair Odds']].head(5).to_markdown(index=False)
 
