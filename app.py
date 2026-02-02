@@ -3959,23 +3959,27 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         # 2. Turf: tactics/position >> speed (DISABLE PP, use components)
         # 3. Maiden races: Many first-timers lack PP data, components predict debut quality
         # 4. Small PP differences (1-2 points) NOT decisive in maiden races
+        # 5. Race Quality (Stakes/Allowance/Claiming): Higher quality = more reliable PP
+        # 6. Purse Amount: Higher purse = better horses = more consistent performance
         # 
-        # SURFACE-ADAPTIVE + MAIDEN-AWARE RATIOS:
+        # DYNAMIC WEIGHTING SYSTEM (Race Quality + Surface + Experience):
         # 
-        # DIRT:
-        #   - Experienced Field ≤7F: 92% PP / 8% Components (speed is king - SA R8)
-        #   - Experienced Field >7F: 80% PP / 20% Components (stamina factors)
-        #   - Maiden Field (mostly first-timers): 50% PP / 50% Components (GP R2)
-        #   - Maiden Field (mostly experienced): 70% PP / 30% Components
+        # RACE QUALITY TIERS (by purse and type):
+        #   ELITE (Stakes G1-G3, $200k+):      PP reliability: HIGHEST (top horses, consistent)
+        #   HIGH (Listed Stakes, Allowance):   PP reliability: HIGH (quality horses)
+        #   MID (AOC, Starter):                PP reliability: MODERATE (mixed quality)
+        #   LOW (Claiming, Maiden Claiming):   PP reliability: VARIABLE (cheaper horses)
         # 
-        # TURF:
-        #   - ALL distances: 0% PP / 100% Components (GP R1 validated)
+        # DIRT (Adjusted by quality):
+        #   Elite Stakes: 95/5 (top horses, PP is king)
+        #   Allowance: 90/10 (quality horses, PP very reliable)
+        #   Claiming: 85/15 (cheaper horses, more variance)
+        #   Maiden: 50/50 to 70/30 (experience-dependent)
         # 
-        # SYNTHETIC:
-        #   - ALL distances: 75% PP / 25% Components (consistent surface)
+        # TURF: 0% PP / 100% Components (all quality levels - validated)
+        # SYNTHETIC: 75% PP / 25% Components (all quality levels)
         #
-        # This allows PP to dominate when it's proven reliable (experienced dirt horses)
-        # while using component analysis when PP is unreliable (turf, maiden first-timers)
+        # This creates an adaptive intelligence that learns race-to-race patterns
         
         prime_power_raw = safe_float(row.get('Prime Power', 0.0), 0.0)
         if prime_power_raw > 0:
@@ -4001,7 +4005,65 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             except:
                 pass
             
-            # Surface-adaptive ratio selection
+            # ═══════════════════════════════════════════════════════════════════════
+            # RACE QUALITY DETECTION (Purse + Type Analysis)
+            # ═══════════════════════════════════════════════════════════════════════
+            
+            # Extract purse amount
+            purse_amount = 0
+            try:
+                if purse_str:
+                    # Parse purse from string like "$100,000" or "100k"
+                    purse_clean = purse_str.replace('$', '').replace(',', '').strip().lower()
+                    if 'k' in purse_clean:
+                        purse_amount = float(purse_clean.replace('k', '')) * 1000
+                    elif 'm' in purse_clean:
+                        purse_amount = float(purse_clean.replace('m', '')) * 1000000
+                    else:
+                        purse_amount = float(purse_clean)
+            except:
+                purse_amount = 0
+            
+            # Classify race quality based on type and purse
+            race_quality = "mid"  # Default
+            race_type_lower = str(race_type).lower() if race_type else ""
+            
+            # ELITE TIER: Stakes races (especially graded)
+            if any(keyword in race_type_lower for keyword in ['g1', 'g2', 'g3', 'grade 1', 'grade 2', 'grade 3']):
+                race_quality = "elite"
+            elif 'stakes' in race_type_lower or 'listed' in race_type_lower:
+                if purse_amount >= 200000:
+                    race_quality = "elite"
+                else:
+                    race_quality = "high"
+            # HIGH TIER: Allowance races
+            elif 'allowance' in race_type_lower or 'alw' in race_type_lower or 'aoc' in race_type_lower:
+                race_quality = "high"
+            # LOW TIER: Claiming races
+            elif 'claiming' in race_type_lower or 'clm' in race_type_lower or 'claim' in race_type_lower:
+                if 'maiden' in race_type_lower:
+                    race_quality = "low-maiden"  # Maiden claiming
+                else:
+                    race_quality = "low"
+            # MID TIER: Maiden Special Weight
+            elif 'maiden' in race_type_lower or 'msw' in race_type_lower:
+                if purse_amount >= 70000:
+                    race_quality = "mid-maiden"
+                else:
+                    race_quality = "low-maiden"
+            # STARTER races (mid-tier)
+            elif 'starter' in race_type_lower:
+                race_quality = "mid"
+            
+            # Purse override: Very high purse = higher quality
+            if purse_amount >= 500000:
+                race_quality = "elite"
+            elif purse_amount >= 150000 and race_quality not in ["elite", "high"]:
+                race_quality = "high"
+            
+            # ═══════════════════════════════════════════════════════════════════════
+            # Surface-adaptive ratio selection (with quality adjustment)
+            # ═══════════════════════════════════════════════════════════════════════
             surface_lower = (surface_type or "dirt").lower()
             
             if 'turf' in surface_lower or 'tur' in surface_lower or 'grass' in surface_lower:
@@ -4052,8 +4114,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         else:
                             pp_weight, comp_weight = 0.60, 0.40  # Route: More balanced
                 else:
-                    # Non-maiden race: Check for class dropper scenario (SA R6)
-                    # When significant class advantage exists, components gain more weight
+                    # Non-maiden race: Apply RACE QUALITY + CLASS DROPPER analysis
+                    # Higher quality races = more reliable PP (better horses, consistent performance)
+                    
+                    # Check for class dropper scenario (SA R6)
                     class_spread = 0.0
                     if df_styles is not None and not df_styles.empty and 'Class Rating' in df_styles.columns:
                         class_ratings = []
@@ -4065,20 +4129,50 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         if len(class_ratings) >= 2:
                             class_spread = max(class_ratings) - min(class_ratings)
                     
+                    # ═══════════════════════════════════════════════════════════════
+                    # DYNAMIC WEIGHTING: Quality + Distance + Class Dropper
+                    # ═══════════════════════════════════════════════════════════════
+                    
                     if distance_furlongs <= 7.0:  # Sprint
+                        # Base weights by race quality
+                        if race_quality == "elite":
+                            # Elite Stakes: Top horses, PP extremely reliable
+                            base_pp, base_comp = 0.95, 0.05
+                        elif race_quality == "high":
+                            # Allowance: Quality horses, PP very reliable
+                            base_pp, base_comp = 0.90, 0.10
+                        elif race_quality == "mid":
+                            # Mid-tier: Standard reliability
+                            base_pp, base_comp = 0.88, 0.12
+                        else:  # "low"
+                            # Claiming: Cheaper horses, more variance
+                            base_pp, base_comp = 0.85, 0.15
+                        
+                        # Class dropper adjustment
                         if class_spread > 1.5:
-                            # Class dropper scenario: Horse with significant class advantage
-                            # SA R6: Winner had +0.45 class adj, spread was 3.0 points
-                            pp_weight, comp_weight = 0.85, 0.15  # More component influence
+                            # Significant class advantage: Shift toward components
+                            pp_weight = base_pp - 0.07  # Reduce PP weight
+                            comp_weight = base_comp + 0.07  # Increase component weight
                         else:
-                            # Standard sprint: Pure speed dominates
-                            pp_weight, comp_weight = 0.92, 0.08  # Raw speed is king (SA R8: 100% accuracy)
+                            pp_weight, comp_weight = base_pp, base_comp
+                    
                     else:  # Route
+                        # Base weights by race quality (routes need more stamina/pace analysis)
+                        if race_quality == "elite":
+                            base_pp, base_comp = 0.88, 0.12
+                        elif race_quality == "high":
+                            base_pp, base_comp = 0.82, 0.18
+                        elif race_quality == "mid":
+                            base_pp, base_comp = 0.78, 0.22
+                        else:  # "low"
+                            base_pp, base_comp = 0.72, 0.28
+                        
+                        # Class dropper adjustment (routes)
                         if class_spread > 2.0:
-                            # Route class dropper: Even more emphasis on stamina/class
-                            pp_weight, comp_weight = 0.70, 0.30
+                            pp_weight = base_pp - 0.10
+                            comp_weight = base_comp + 0.10
                         else:
-                            pp_weight, comp_weight = 0.80, 0.20  # Stamina + pace management
+                            pp_weight, comp_weight = base_pp, base_comp
             
             # Apply surface-adaptive hybrid model
             # ALL secondary factors (components + track + bonuses) at component weight
