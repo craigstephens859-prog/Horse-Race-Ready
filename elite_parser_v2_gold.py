@@ -760,35 +760,63 @@ class GoldStandardBRISNETParser:
     def _parse_form_cycle_with_confidence(self, block: str) -> Tuple[Optional[int], Optional[str], List[int], float]:
         """
         Parse days since last race and recent finishes.
+        CRITICAL FIX: Updated to match actual BRISNET format for finish positions.
         Returns: (days_since_last, last_race_date, recent_finishes, confidence)
         """
-        # Find race lines with dates
-        race_matches = self.RACE_HISTORY_PATTERN.findall(block)
-
-        if not race_matches:
-            return None, None, [], 0.0
-
         finishes = []
         dates = []
 
-        for match in race_matches:
-            date_str = match[0]  # e.g., "23Sep23"
-            finish_str = match[-1]  # e.g., "4"
-
-            # Parse finish position
-            try:
-                finish = int(finish_str)
-                if 1 <= finish <= 20:  # Validate
-                    finishes.append(finish)
-            except Exception:
-                pass
-
-            # Parse date
-            try:
-                date_obj = datetime.strptime(date_str, "%d%b%y")
-                dates.append(date_obj)
-            except Exception:
-                pass
+        # Updated pattern to match actual BRISNET format
+        # Example: "11Jan26SAª 6½ ft :21ª :44¨1:09« 1:16© ¡ ¨¨¨ Clm25000n2L ¨¨© 86 88/ 83 +1 0 81 1 7 7ª‚ 4© 4© 2³"
+        # The finish position appears in the FIN column or at end of race line
+        lines = block.split('\n')
+        
+        for line in lines:
+            # Look for date pattern at start of line (indicates race line)
+            date_match = re.search(r'(\d{2}[A-Za-z]{3}\d{2})', line)
+            if date_match:
+                date_str = date_match.group(1)
+                
+                # Parse date
+                try:
+                    date_obj = datetime.strptime(date_str, "%d%b%y")
+                    dates.append(date_obj)
+                except Exception:
+                    pass
+                
+                # Extract finish position - multiple patterns
+                # Pattern 1: FIN column with position (most reliable)
+                finish_match = re.search(r'FIN\s+(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]', line)
+                if finish_match:
+                    try:
+                        finish = int(finish_match.group(1))
+                        if 1 <= finish <= 20:
+                            finishes.append(finish)
+                            continue
+                    except Exception:
+                        pass
+                
+                # Pattern 2: Look for finish near end of line after jockey/odds
+                # Matches patterns like "2³", "4©", "5«‚", "7¨©"
+                finish_match = re.search(r'\s(\d{1,2})[ƒ®«ª³©¨°¬²‚±]+\s+\w+\s+[\d.]+\s*$', line)
+                if finish_match:
+                    try:
+                        finish = int(finish_match.group(1))
+                        if 1 <= finish <= 20:
+                            finishes.append(finish)
+                            continue
+                    except Exception:
+                        pass
+                
+                # Pattern 3: Simple digit near end (last resort)
+                finish_match = re.search(r'\s(\d{1,2})(?:st|nd|rd|th|[ƒ®«ª³©¨°¬²‚±])\s+\w+\s+', line)
+                if finish_match:
+                    try:
+                        finish = int(finish_match.group(1))
+                        if 1 <= finish <= 20:
+                            finishes.append(finish)
+                    except Exception:
+                        pass
 
         # Calculate days since last race
         days_since = None

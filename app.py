@@ -1969,9 +1969,47 @@ def odds_to_decimal(odds_str: str) -> float:
 
 # ===================== Class Rating Calculator (Comprehensive) =====================
 
+def infer_purse_from_race_type(race_type: str) -> Optional[int]:
+    """
+    CRITICAL: Infer purse from race type names like 'Clm25000n2L' or 'MC50000'.
+    BRISNET embeds purse values in race type strings.
+    
+    Examples:
+    - 'Clm25000n2L' → $25,000
+    - 'MC50000' → $50,000
+    - 'OC20k' → $20,000
+    - 'Alw28000' → $28,000
+    """
+    if not race_type:
+        return None
+    
+    # Pattern 1: Direct numbers (Clm25000, MC50000, Alw28000)
+    match = re.search(r'(\d{4,6})', race_type)
+    if match:
+        return int(match.group(1))
+    
+    # Pattern 2: With 'k' suffix (OC20k, Alw50k)
+    match = re.search(r'(\d+)k', race_type, re.IGNORECASE)
+    if match:
+        return int(match.group(1)) * 1000
+    
+    # Pattern 3: Common defaults by type
+    race_lower = race_type.lower()
+    if 'maiden' in race_lower or 'mdn' in race_lower or 'md sp wt' in race_lower:
+        return 50000  # Typical maiden special weight
+    elif 'claiming' in race_lower or 'clm' in race_lower or 'mc' in race_lower:
+        return 25000  # Typical claiming level
+    elif 'allowance' in race_lower or 'alw' in race_lower:
+        return 50000  # Typical allowance
+    elif 'stake' in race_lower or 'stk' in race_lower or 'g1' in race_lower or 'g2' in race_lower or 'g3' in race_lower:
+        return 100000  # Stakes minimum
+    
+    return None
+
 def parse_recent_class_levels(block) -> List[dict]:
     """
     Parse recent races to extract class progression data.
+    CRITICAL FIX: Infers purses from race type names since BRISNET embeds them.
     Returns list of dicts with purse, race_type, finish_position
     """
     races = []
@@ -1980,15 +2018,22 @@ def parse_recent_class_levels(block) -> List[dict]:
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
     
-    # Enhanced pattern: date track race_type purse ... FIN finish_pos
-    # Matches BRISNET format with finish position
+    # Enhanced pattern to match BRISNET format
+    # Example: "11Jan26SAª 6½ ft :21ª :44¨1:09« 1:16© ¡ ¨¨¨ Clm25000n2L ¨¨©"
     lines = block_str.split('\n')
     for line in lines:
-        # Look for race type and purse pattern
-        race_match = re.search(r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+.*?(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G1|G2|G3|Hcp)\s+(\d+)', line)
+        # Updated pattern to capture embedded race types
+        race_match = re.search(
+            r'(\d{2}[A-Za-z]{3}\d{2})\w+\s+[\d½]+[f]?\s+.*?'
+            r'([A-Z][a-z]{2,}\d+[a-zA-Z0-9\-]*|MC\d+|OC\d+k?|Alw\d+|Stk|G[123]|Hcp)',
+            line
+        )
+        
         if race_match:
             race_type = race_match.group(2)
-            purse_str = race_match.group(3)
+            
+            # CRITICAL: Infer purse from race type name
+            inferred_purse = infer_purse_from_race_type(race_type)
             
             # Extract finish position from same line (look for FIN column)
             # Pattern: FIN followed by position like "1st", "2nd", "3©", "4¬", etc.
@@ -1998,7 +2043,7 @@ def parse_recent_class_levels(block) -> List[dict]:
             try:
                 races.append({
                     'race_type': race_type,
-                    'purse': int(purse_str) if purse_str.isdigit() else 0,
+                    'purse': inferred_purse if inferred_purse else 0,
                     'finish_pos': finish_pos
                 })
             except Exception:
