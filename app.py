@@ -2478,10 +2478,15 @@ for name, fig_list in figs_per_horse.items():
         })
 figs_df = pd.DataFrame(figs_data) # <--- THIS IS THE NEW FIGS DATAFRAME
 
+# CRITICAL: Validate df_editor before operations
+if df_editor is None or df_editor.empty:
+    st.error("❌ No horse data available. Please enter horses in Section A.")
+    st.stop()
+
 # CRITICAL: Explicit False check to handle potential NaN values from data_editor
 df_final_field = df_editor[df_editor["Scratched"].fillna(False) == False].copy()
 if df_final_field.empty:
-    st.warning("All horses are scratched.")
+    st.warning("⚠️ All horses are scratched.")
     st.stop()
 
 # Store in session state for later access
