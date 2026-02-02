@@ -157,7 +157,15 @@ class ParserToRatingBridge:
         today_score = race_type_scores.get(today_race_type.lower(), 3.5)
         rating = 0.0
         
-        # Purse comparison
+        # CRITICAL FIX: Check if horse was COMPETITIVE in recent races
+        # Don't reward class drops if horse was losing at higher level
+        was_competitive = False
+        if horse.recent_finishes:
+            # Consider competitive if finished in top 3 in any of last 3 races
+            recent_top3_count = sum(1 for finish in horse.recent_finishes[:3] if finish <= 3)
+            was_competitive = recent_top3_count >= 1
+        
+        # Purse comparison (FORM-ADJUSTED)
         if horse.recent_purses and today_purse > 0:
             avg_recent = np.mean(horse.recent_purses)
             purse_ratio = today_purse / avg_recent if avg_recent > 0 else 1.0
@@ -168,10 +176,18 @@ class ParserToRatingBridge:
                 rating -= 0.6
             elif 0.8 <= purse_ratio <= 1.2:  # Same class
                 rating += 0.8
-            elif purse_ratio >= 0.6:  # Class drop
-                rating += 1.5
-            else:  # Major drop
-                rating += 2.5
+            elif purse_ratio >= 0.6:  # Class drop (FORM-ADJUSTED)
+                # Only give full bonus if horse was competitive at higher level
+                if was_competitive:
+                    rating += 0.8  # Legitimate class drop advantage
+                else:
+                    rating += 0.2  # Minimal bonus - just cheaper competition
+            else:  # Major drop (FORM-ADJUSTED)
+                # Red flag: Horse dropping significantly
+                if was_competitive:
+                    rating += 1.0  # Was good higher, should dominate here
+                else:
+                    rating -= 0.3  # Warning: Couldn't win higher, dropping desperately
         
         # Race type progression
         if horse.race_types:

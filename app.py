@@ -1937,19 +1937,30 @@ def parse_recent_class_levels(block) -> List[dict]:
         return races
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
-    # Pattern: date track race_type purse  (e.g., "23Sep23 Bel Alw 85000")
-    pattern = r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+\s+(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G1|G2|G3|Hcp)\s+(\d+)'
-
-    for match in re.finditer(pattern, block_str):
-        race_type = match.group(2)
-        purse_str = match.group(3)
-        try:
-            races.append({
-                'race_type': race_type,
-                'purse': int(purse_str) if purse_str.isdigit() else 0
-            })
-        except Exception:
-            pass
+    
+    # Enhanced pattern: date track race_type purse ... FIN finish_pos
+    # Matches BRISNET format with finish position
+    lines = block_str.split('\n')
+    for line in lines:
+        # Look for race type and purse pattern
+        race_match = re.search(r'(\d{2}[A-Za-z]{3}\d{2})\s+\w+.*?(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G1|G2|G3|Hcp)\s+(\d+)', line)
+        if race_match:
+            race_type = race_match.group(2)
+            purse_str = race_match.group(3)
+            
+            # Extract finish position from same line (look for FIN column)
+            # Pattern: FIN followed by position like "1st", "2nd", "3©", "4¬", etc.
+            finish_match = re.search(r'FIN\s+(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]', line)
+            finish_pos = int(finish_match.group(1)) if finish_match else 0
+            
+            try:
+                races.append({
+                    'race_type': race_type,
+                    'purse': int(purse_str) if purse_str.isdigit() else 0,
+                    'finish_pos': finish_pos
+                })
+            except Exception:
+                pass
 
     return races[:5]  # Last 5 races
 
@@ -1992,8 +2003,18 @@ def calculate_comprehensive_class_rating(
     recent_races = parse_recent_class_levels(horse_block)
 
     class_rating = 0.0
+    
+    # CRITICAL FIX: Check if horse was COMPETITIVE in recent races
+    # Don't reward class drops if horse was losing at higher level
+    was_competitive = False
+    if recent_races:
+        finishes = [r.get('finish_pos', 0) for r in recent_races[:3] if r.get('finish_pos', 0) > 0]
+        if finishes:
+            # Consider competitive if finished in top 3 in any of last 3 races
+            recent_top3_count = sum(1 for f in finishes if f <= 3)
+            was_competitive = recent_top3_count >= 1
 
-    # 1. PURSE COMPARISON (weight: heavy)
+    # 1. PURSE COMPARISON (weight: heavy) - FORM-ADJUSTED
     if recent_races and today_purse > 0:
         recent_purses = [r['purse'] for r in recent_races if r['purse'] > 0]
         if recent_purses:
@@ -2007,10 +2028,18 @@ def calculate_comprehensive_class_rating(
                 class_rating -= 0.6
             elif purse_ratio >= 0.8 and purse_ratio <= 1.2:  # Same class
                 class_rating += 0.8
-            elif purse_ratio >= 0.6:  # Slight drop
-                class_rating += 1.5
-            else:  # Major drop (class relief)
-                class_rating += 2.5
+            elif purse_ratio >= 0.6:  # Class drop (FORM-ADJUSTED)
+                # Only give full bonus if horse was competitive at higher level
+                if was_competitive:
+                    class_rating += 0.8  # Legitimate class drop advantage
+                else:
+                    class_rating += 0.2  # Minimal bonus - just cheaper competition
+            else:  # Major drop (FORM-ADJUSTED)
+                # Red flag: Horse dropping significantly
+                if was_competitive:
+                    class_rating += 1.0  # Was good higher, should dominate here
+                else:
+                    class_rating -= 0.3  # Warning: Couldn't win higher, dropping desperately
 
     # 2. RACE TYPE PROGRESSION
     if recent_races:
