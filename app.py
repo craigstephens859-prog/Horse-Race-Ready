@@ -3978,7 +3978,7 @@ st.dataframe(
 
 # ===================== D. Strategy Builder & Classic Report =====================
 
-def build_component_breakdown(primary_df, name_to_post, name_to_ml):
+def build_component_breakdown(primary_df, name_to_post, name_to_odds):
     """
     GOLD STANDARD: Build detailed component breakdown with complete mathematical transparency.
     
@@ -4023,7 +4023,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_ml):
     for idx, row in top_horses.iterrows():
         horse_name = row.get('Horse', 'Unknown')
         post = name_to_post.get(horse_name, '?')
-        ml = name_to_ml.get(horse_name, '?')
+        ml = name_to_odds.get(horse_name, '?')
         
         # SAFE EXTRACTION: Get rating with error handling
         try:
@@ -4086,7 +4086,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_ml):
 
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                            strategy_profile: str, name_to_post: Dict[str, str],
-                           name_to_ml: Dict[str, str], field_size: int, ppi_val: float) -> str:
+                           name_to_odds: Dict[str, str], field_size: int, ppi_val: float) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,
     A/B/C/D grouping, and $50 bankroll optimization.
@@ -4234,7 +4234,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         sorted_horses = sorted(horse_names, key=lambda name: int(name_to_post.get(name, '999')))
         for name in sorted_horses:
             post = name_to_post.get(name, '??')
-            ml = name_to_ml.get(name, 'N/A')
+            ml = name_to_odds.get(name, 'N/A')
             lines.append(f"* **#{post} - {name}** (ML: {ml})")
         return "\n".join(lines)
 
@@ -4307,7 +4307,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
     top_rated_horse = all_horses[0]
     is_overlay = top_rated_horse in pos_ev_horses
-    top_ml_str = name_to_ml.get(top_rated_horse, '100')
+    top_ml_str = name_to_odds.get(top_rated_horse, '100')
     top_ml_dec = str_to_decimal_odds(top_ml_str) or 101
     is_underlay = not is_overlay and (primary_probs.get(top_rated_horse, 0) > (1 / top_ml_dec)) and top_ml_dec < 4 # Define underlay as < 3/1
 
@@ -4400,7 +4400,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     if total_prob > 0:
         primary_probs_dict = {h: p / total_prob for h, p in primary_probs_dict.items()}
 
-    detailed_breakdown = build_component_breakdown(primary_df, name_to_post, name_to_ml)
+    detailed_breakdown = build_component_breakdown(primary_df, name_to_post, name_to_odds)
 
     component_report = "### What Our System Sees in Top Contenders\n\n"
     component_report += detailed_breakdown + "\n"
@@ -4416,7 +4416,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
     for pos, (horse, prob) in enumerate(finishing_order, 1):
         post = name_to_post.get(horse, '?')
-        ml = name_to_ml.get(horse, '?')
+        ml = name_to_odds.get(horse, '?')
         finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** (ML: {ml}) — {prob*100:.1f}% conditional probability\n"
 
     finishing_order_report += "\n💡 **Use These Rankings:** Build your exotic tickets using this exact finishing order for optimal probability-based coverage.\n\n"
@@ -4646,12 +4646,17 @@ else:
                         df_final_field["Post"].values,
                         index=df_final_field["Horse"]
                     ).to_dict()
-                    name_to_ml = pd.Series(
-                        df_final_field["ML"].values,
-                        index=df_final_field["Horse"]
-                    ).to_dict()
+                    
+                    # CRITICAL FIX: Prioritize Live Odds over ML odds (just like Fair % calculation does)
+                    name_to_odds = {}
+                    for _, row in df_final_field.iterrows():
+                        horse_name = row.get('Horse')
+                        live_odds = row.get('Live Odds', '')
+                        ml_odds = row.get('ML', '')
+                        # Use Live Odds if entered by user, otherwise fall back to ML
+                        name_to_odds[horse_name] = live_odds if live_odds else ml_odds
 
-                    # VALIDATION: Ensure all horses in primary_df have post/ML mappings
+                    # VALIDATION: Ensure all horses in primary_df have post/odds mappings
                     missing_horses = []
                     for horse in primary_df["Horse"]:
                         if horse not in name_to_post:
@@ -4688,7 +4693,7 @@ else:
 
                 # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
                 strategy_report_md = build_betting_strategy(
-                    primary_df, df_ol, strategy_profile, name_to_post, name_to_ml, field_size, ppi_val
+                    primary_df, df_ol, strategy_profile, name_to_post, name_to_odds, field_size, ppi_val
                 )
 
                 # Store strategy report in session state
@@ -4902,7 +4907,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 'program_number': int(safe_float(name_to_post.get(horse_name, idx + 1), idx + 1)),
                                 'horse_name': horse_name,
                                 'post_position': int(safe_float(name_to_post.get(horse_name, idx + 1), idx + 1)),
-                                'morning_line_odds': safe_float(name_to_ml.get(horse_name, '99'), 99.0),
+                                'morning_line_odds': safe_float(name_to_odds.get(horse_name, '99'), 99.0),
                                 'jockey': str(row.get('Jockey', '')),
                                 'trainer': str(row.get('Trainer', '')),
                                 'owner': str(row.get('Owner', '')),
