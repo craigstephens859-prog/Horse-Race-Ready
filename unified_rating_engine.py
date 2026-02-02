@@ -345,11 +345,19 @@ class UnifiedRatingEngine:
         )
 
     def _calc_class(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
-        """Class rating: purse comparison + race type hierarchy"""
+        """Class rating: purse comparison + race type hierarchy + FORM-ADJUSTED class drops"""
         rating: float = 0.0
 
         # Race type scoring
         today_score = self.RACE_TYPE_SCORES.get(today_race_type.lower(), 3.5)
+
+        # CRITICAL FIX: Check if horse was COMPETITIVE in recent races
+        # Don't reward class drops if horse was losing at higher level
+        was_competitive = False
+        if horse.recent_finishes:
+            # Consider competitive if finished in top 3 in any of last 3 races
+            recent_top3_count = sum(1 for finish in horse.recent_finishes[:3] if finish <= 3)
+            was_competitive = recent_top3_count >= 1
 
         # Purse comparison
         if horse.recent_purses and today_purse > 0:
@@ -363,10 +371,18 @@ class UnifiedRatingEngine:
                     rating -= 0.6
                 elif 0.8 <= purse_ratio <= 1.2:  # Same class
                     rating += 0.8
-                elif purse_ratio >= 0.6:  # Class drop
-                    rating += 1.5
-                else:  # Major drop
-                    rating += 2.5
+                elif purse_ratio >= 0.6:  # Class drop (REDUCED from +1.5)
+                    # Only give full bonus if horse was competitive at higher level
+                    if was_competitive:
+                        rating += 0.8  # Legitimate class drop advantage
+                    else:
+                        rating += 0.2  # Minimal bonus - just getting cheaper competition
+                else:  # Major drop (REDUCED from +2.5)
+                    # Red flag: Horse dropping significantly, likely weak
+                    if was_competitive:
+                        rating += 1.0  # Was good higher, should dominate here
+                    else:
+                        rating -= 0.3  # Warning: Couldn't win higher, dropping desperately
 
         # Race type progression
         if horse.race_types:
