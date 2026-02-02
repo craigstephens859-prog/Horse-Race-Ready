@@ -3806,15 +3806,6 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             # Running style bias (early speed 2.05 impact!)
             tier2_bonus += calculate_sprint_running_style_bonus(style, race_furlongs)
 
-            # Hot trainer/jockey combo (40% L60 was KEY!)
-            # ACTIVATED: Parse jockey/trainer stats from BRISNET PP text
-            # Awards +0.15 to +0.35 for elite connections (>25% win rate, >28% trainer)
-            # SA R8 Analysis: Won't overcome large PP gaps (0.70+) but helps close races
-            if pp_text:
-                tier2_bonus += calculate_jockey_trainer_impact(name, pp_text)
-            else:
-                tier2_bonus += calculate_hot_combo_bonus(0.0, 0.0, 0.0)
-
         # 1. Track Bias Impact Value bonus
         if style in impact_values:
             impact_val = impact_values[style]
