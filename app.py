@@ -4575,21 +4575,24 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds):
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                            strategy_profile: str, name_to_post: Dict[str, str],
                            name_to_odds: Dict[str, str], field_size: int, ppi_val: float,
-                           smart_money_horses: List[Dict] = None) -> str:
+                           smart_money_horses: List[Dict] = None, name_to_ml: Dict[str, str] = None) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,
     A/B/C/D grouping, and $50 bankroll optimization.
     
     Args:
         smart_money_horses: List of horses with significant ML→Live odds drops for Smart Money Alert
+        name_to_ml: Dictionary mapping horse names to ML odds (for comparison with live odds)
     """
 
     import numpy as np
     from itertools import combinations
     
-    # Handle None default for mutable default argument
+    # Handle None defaults for mutable default arguments
     if smart_money_horses is None:
         smart_money_horses = []
+    if name_to_ml is None:
+        name_to_ml = {}
 
     # --- ELITE: Calculate Most Likely Finishing Order (Sequential Selection Algorithm) ---
     def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> List[Tuple[str, float]]:
@@ -4728,7 +4731,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
     # --- 1. Helper Functions ---
     def format_horse_list(horse_names: List[str]) -> str:
-        """Creates a bulleted list of horses with post, name, and current odds (Live or ML)."""
+        """Creates a bulleted list of horses with post, name, and odds (shows ML → Live if different)."""
         if not horse_names:
             return "* None"
         lines = []
@@ -4736,8 +4739,16 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         sorted_horses = sorted(horse_names, key=lambda name: int(name_to_post.get(name, '999')))
         for name in sorted_horses:
             post = name_to_post.get(name, '??')
-            odds = name_to_odds.get(name, 'N/A')
-            lines.append(f"* **#{post} - {name}** (Odds: {odds})")
+            current_odds = name_to_odds.get(name, 'N/A')
+            ml_odds = name_to_ml.get(name, '')
+            
+            # Show ML → Live format when they differ, otherwise just show current odds
+            if ml_odds and current_odds != ml_odds and current_odds != 'N/A':
+                odds_display = f"ML {ml_odds} → Live {current_odds}"
+            else:
+                odds_display = current_odds
+            
+            lines.append(f"* **#{post} - {name}** ({odds_display})")
         return "\n".join(lines)
 
     def get_bet_cost(base: float, num_combos: int) -> str:
@@ -5250,7 +5261,7 @@ else:
 
                 # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
                 strategy_report_md = build_betting_strategy(
-                    primary_df, df_ol, strategy_profile, name_to_post, name_to_odds, field_size, ppi_val, smart_money_horses
+                    primary_df, df_ol, strategy_profile, name_to_post, name_to_odds, field_size, ppi_val, smart_money_horses, name_to_ml
                 )
 
                 # Store strategy report in session state
