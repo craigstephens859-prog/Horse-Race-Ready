@@ -3915,28 +3915,48 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             cpost * 0.8
         )
         
-        # HYBRID MODEL: Surface-Adaptive PP Weight (SA R8 + GP R1 Learning - Feb 2026)
+        # HYBRID MODEL: Surface-Adaptive + Maiden-Aware PP Weight (SA R8 + GP R1 + GP R2 - Feb 2026)
         # 
-        # SA R8 (6F Dirt Sprint): Top 3 PP horses = top 3 finishers (PP correlation -0.831)
-        # GP R1 (1M Turf Route): PP 138.3, 137.4, 136.0 DNF top 5 - NO PP correlation!
+        # THREE-RACE VALIDATION:
         # 
-        # KEY INSIGHT: Prime Power predicts RAW SPEED ABILITY on DIRT
-        # - Dirt sprints: PP = finish order (92% PP weight)
-        # - Turf: PP = raw ability BUT tactics/position >> speed (DISABLE PP, use components only)
+        # SA R8 (6F Dirt Sprint - Experienced Field):
+        #   Top 3 PP horses = top 3 finishers (PP correlation -0.831)
+        #   Result: 92% PP weight = 100% accuracy ✓
         # 
-        # GP R1 EVIDENCE:
-        #   Winner #8 (PP 130.6) beat #4 (PP 138.3) and #14 (PP 137.4)
-        #   #2 finished 4th with PP 111.0 (15th highest!)
-        #   Conclusion: On turf, components (pace/form/style) >> Prime Power
+        # GP R1 (1M Turf Route):
+        #   PP 138.3, 137.4, 136.0 DNF top 5 - NO PP correlation!
+        #   Winner #8 (PP 130.6) beat #4 (PP 138.3) by 8 points
+        #   Result: 0% PP weight (components only) = Optimal ✓
         # 
-        # SURFACE-ADAPTIVE RATIOS:
-        # - Dirt ≤7F: 92% PP / 8% Components (speed is king - SA R8 validated)
-        # - Dirt >7F: 80% PP / 20% Components (stamina factors in)
-        # - Turf ALL: 0% PP / 100% Components (tactics/pace dominate - GP R1 validated)
-        # - Synthetic: 75% PP / 25% Components (consistent surface, speed matters)
+        # GP R2 (6F Dirt Sprint - MAIDEN with 6 first-timers):
+        #   Highest PP #5 (126.5) finished 5th
+        #   Winner #2 (PP 125.4, only 1.1 pts behind) had pace advantage
+        #   Top pick #6 (first-timer, NO PP) placed 2nd ✓
+        #   3 of top 4 finishers = first-time starters (no PP data)
+        #   Result: 92% PP weight = 33% accuracy (Mixed results) ⚠️
+        # 
+        # KEY INSIGHTS:
+        # 1. Prime Power predicts RAW SPEED on DIRT when horses have racing history
+        # 2. Turf: tactics/position >> speed (DISABLE PP, use components)
+        # 3. Maiden races: Many first-timers lack PP data, components predict debut quality
+        # 4. Small PP differences (1-2 points) NOT decisive in maiden races
+        # 
+        # SURFACE-ADAPTIVE + MAIDEN-AWARE RATIOS:
+        # 
+        # DIRT:
+        #   - Experienced Field ≤7F: 92% PP / 8% Components (speed is king - SA R8)
+        #   - Experienced Field >7F: 80% PP / 20% Components (stamina factors)
+        #   - Maiden Field (mostly first-timers): 50% PP / 50% Components (GP R2)
+        #   - Maiden Field (mostly experienced): 70% PP / 30% Components
+        # 
+        # TURF:
+        #   - ALL distances: 0% PP / 100% Components (GP R1 validated)
+        # 
+        # SYNTHETIC:
+        #   - ALL distances: 75% PP / 25% Components (consistent surface)
         #
-        # This allows PP to dominate on dirt (where it's proven) while using component
-        # analysis for turf (where pace/position/tactics are more predictive than raw speed)
+        # This allows PP to dominate when it's proven reliable (experienced dirt horses)
+        # while using component analysis when PP is unreliable (turf, maiden first-timers)
         
         prime_power_raw = safe_float(row.get('Prime Power', 0.0), 0.0)
         if prime_power_raw > 0:
@@ -3973,10 +3993,51 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 # Synthetic: Consistent surface, speed matters but not as much as dirt
                 pp_weight, comp_weight = 0.75, 0.25
             else:  # Dirt (default)
-                if distance_furlongs <= 7.0:  # Sprint
-                    pp_weight, comp_weight = 0.92, 0.08  # Raw speed is king (SA R8 validated)
-                else:  # Route
-                    pp_weight, comp_weight = 0.80, 0.20  # Stamina + pace management
+                # MAIDEN RACE DETECTION: Adjust PP weight based on field experience
+                # GP R2 Learning: Maiden races with many first-timers need balanced weighting
+                # because PP data is sparse and components predict debut quality better
+                
+                is_maiden = False
+                if race_type:
+                    race_type_lower = str(race_type).lower()
+                    is_maiden = any(keyword in race_type_lower for keyword in 
+                                  ['maiden', 'mdn', 'msw', 'mcl', 'mdn sp wt', 'maiden sp wt'])
+                
+                if is_maiden:
+                    # Count horses with valid PP data in this race
+                    # For maiden races, check if field is mostly first-timers or experienced
+                    horses_with_pp = 0
+                    total_horses = len(df_styles) if df_styles is not None else 0
+                    
+                    if df_styles is not None and not df_styles.empty:
+                        for _, h_row in df_styles.iterrows():
+                            h_pp = safe_float(h_row.get('Prime Power', 0.0), 0.0)
+                            if h_pp > 0:
+                                horses_with_pp += 1
+                    
+                    horses_without_pp = total_horses - horses_with_pp
+                    
+                    # Adjust PP weight based on field composition
+                    if horses_without_pp >= horses_with_pp and horses_without_pp > 0:
+                        # Majority are first-timers: Equal weight to PP and components
+                        # GP R2: 6 first-timers, winner had PP + pace, top pick (first-timer) placed 2nd
+                        if distance_furlongs <= 7.0:
+                            pp_weight, comp_weight = 0.50, 0.50  # Sprint: Balanced approach
+                        else:
+                            pp_weight, comp_weight = 0.40, 0.60  # Route: Components slightly favored
+                    else:
+                        # Majority have racing experience: Favor PP but less than non-maiden
+                        # Small PP differences not as decisive in maiden races
+                        if distance_furlongs <= 7.0:
+                            pp_weight, comp_weight = 0.70, 0.30  # Sprint: Still favor PP
+                        else:
+                            pp_weight, comp_weight = 0.60, 0.40  # Route: More balanced
+                else:
+                    # Non-maiden race: Standard dirt weights (SA R8 validated)
+                    if distance_furlongs <= 7.0:  # Sprint
+                        pp_weight, comp_weight = 0.92, 0.08  # Raw speed is king (SA R8: 100% accuracy)
+                    else:  # Route
+                        pp_weight, comp_weight = 0.80, 0.20  # Stamina + pace management
             
             # Apply surface-adaptive hybrid model
             # ALL secondary factors (components + track + bonuses) at component weight
