@@ -3837,11 +3837,13 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
         # ======================== End Tier 2 Bonuses ========================
 
-        # Apply component weights: Class×2.5, Form×1.8, Speed×2.0, Pace×1.5, Style×1.2, Post×0.8
+        # Apply component weights: Class×3.0, Form×1.8, Speed×1.8, Pace×1.5, Style×1.2, Post×0.8
+        # TUNED: Class up to 3.0 (from 2.5), Speed down to 1.8 (from 2.0) based on SA R6 analysis
+        # Class advantage proved decisive when horses drop down - class tells more than speed figs
         weighted_components = (
-            c_class * 2.5 +
+            c_class * 3.0 +
             c_form * 1.8 +
-            cspeed * 2.0 +
+            cspeed * 1.8 +
             cpace * 1.5 +
             cstyle * 1.2 +
             cpost * 0.8
@@ -4157,9 +4159,11 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds):
         return "No horses to analyze."
 
     # COMPONENT WEIGHTS: Official system weights (matches rating engine)
+    # TUNED 2/1/2026: Class up to 3.0, Speed down to 1.8 based on SA R6 empirical analysis
+    # Class advantage proved decisive when horses drop down - class tells more than speed figures
     WEIGHTS = {
-        'Cclass': 2.5,   # Class is most important - long-term quality
-        'Cspeed': 2.0,   # Speed figures - raw ability
+        'Cclass': 3.0,   # Class is most important - long-term quality (INCREASED from 2.5)
+        'Cspeed': 1.8,   # Speed figures - raw ability (DECREASED from 2.0)
         'Cform': 1.8,    # Form cycle - current condition
         'Cpace': 1.5,    # Pace advantage - tactical fit
         'Cstyle': 1.2,   # Running style - bias fit
