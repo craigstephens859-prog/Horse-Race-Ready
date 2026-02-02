@@ -3848,6 +3848,21 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             cstyle * 1.2 +
             cpost * 0.8
         )
+        
+        # HYBRID MODEL: 30% Components + 70% Prime Power (SA R8 analysis - Feb 2026)
+        # Pure Prime Power predicted SA R8 top 3 correctly (127.5, 125.4, 125.3)
+        # Component model completely missed winner (had 11th Prime Power horse ranked 1st)
+        # Prime Power correlation: -0.831 (strongest predictor)
+        # Hybrid balances component insights with Prime Power's synergistic capture
+        prime_power_raw = safe_float(row.get('Prime Power', 0.0), 0.0)
+        if prime_power_raw > 0:
+            # Normalize Prime Power (typical range: 110-130)
+            pp_normalized = (prime_power_raw - 110) / 20  # 0 to 1 scale
+            pp_contribution = pp_normalized * 10  # Scale to match component range
+            
+            # Hybrid: 30% component model, 70% Prime Power
+            weighted_components = 0.3 * weighted_components + 0.7 * pp_contribution
+        
         arace = weighted_components + a_track + tier2_bonus
         R     = arace
 
