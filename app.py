@@ -4574,14 +4574,22 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds):
 
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                            strategy_profile: str, name_to_post: Dict[str, str],
-                           name_to_odds: Dict[str, str], field_size: int, ppi_val: float) -> str:
+                           name_to_odds: Dict[str, str], field_size: int, ppi_val: float,
+                           smart_money_horses: List[Dict] = None) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,
     A/B/C/D grouping, and $50 bankroll optimization.
+    
+    Args:
+        smart_money_horses: List of horses with significant ML→Live odds drops for Smart Money Alert
     """
 
     import numpy as np
     from itertools import combinations
+    
+    # Handle None default for mutable default argument
+    if smart_money_horses is None:
+        smart_money_horses = []
 
     # --- ELITE: Calculate Most Likely Finishing Order (Sequential Selection Algorithm) ---
     def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> List[Tuple[str, float]]:
@@ -4720,7 +4728,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
     # --- 1. Helper Functions ---
     def format_horse_list(horse_names: List[str]) -> str:
-        """Creates a bulleted list of horses with post, name, and ML."""
+        """Creates a bulleted list of horses with post, name, and current odds (Live or ML)."""
         if not horse_names:
             return "* None"
         lines = []
@@ -4728,8 +4736,8 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         sorted_horses = sorted(horse_names, key=lambda name: int(name_to_post.get(name, '999')))
         for name in sorted_horses:
             post = name_to_post.get(name, '??')
-            ml = name_to_odds.get(name, 'N/A')
-            lines.append(f"* **#{post} - {name}** (ML: {ml})")
+            odds = name_to_odds.get(name, 'N/A')
+            lines.append(f"* **#{post} - {name}** (Odds: {odds})")
         return "\n".join(lines)
 
     def get_bet_cost(base: float, num_combos: int) -> str:
@@ -4910,8 +4918,8 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
     for pos, (horse, prob) in enumerate(finishing_order, 1):
         post = name_to_post.get(horse, '?')
-        ml = name_to_odds.get(horse, '?')
-        finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** (ML: {ml}) — {prob*100:.1f}% conditional probability\n"
+        odds = name_to_odds.get(horse, '?')
+        finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** (Odds: {odds}) — {prob*100:.1f}% conditional probability\n"
 
     finishing_order_report += "\n💡 **Use These Rankings:** Build your exotic tickets using this exact finishing order for optimal probability-based coverage.\n\n"
 
@@ -5242,7 +5250,7 @@ else:
 
                 # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
                 strategy_report_md = build_betting_strategy(
-                    primary_df, df_ol, strategy_profile, name_to_post, name_to_odds, field_size, ppi_val
+                    primary_df, df_ol, strategy_profile, name_to_post, name_to_odds, field_size, ppi_val, smart_money_horses
                 )
 
                 # Store strategy report in session state
@@ -5281,9 +5289,10 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 - Key race dynamics and angles to focus on
 
 **2. Top Contenders & Betting Focus**
-- A-Group: Key win contenders with their dominant strengths (use post #, name, ML odds)
+- A-Group: Key win contenders with their dominant strengths (use post #, name, current odds)
 - B-Group: Primary challengers and why they're threats
 - Highlight any value opportunities or underlays from model analysis
+- Note any Smart Money Alert horses with significant ML→Live odds movement
 
 **3. Recommended Betting Approach**
 - State the optimal strategy profile for this race
