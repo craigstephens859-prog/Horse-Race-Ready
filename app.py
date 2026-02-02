@@ -363,7 +363,8 @@ def detect_race_number(pp_text: str) -> Optional[int]:
     if m:
         try:
             return int(m.group(1))
-        except:
+        except (ValueError, AttributeError):
+            # Regex group missing or invalid
             pass
     return None
 
@@ -1029,7 +1030,8 @@ def parse_e1_e2_lp_values(block) -> dict:
         try:
             e1_vals.append(int(m.group(1)))
             e2_vals.append(int(m.group(2)))
-            lp_vals.append(int(m.group(3)))
+            lp (ValueError, AttributeError, IndexError):
+            # Regex group missing or conversion failedvals.append(int(m.group(3)))
         except:
             pass
     return {'e1': e1_vals[:5], 'e2': e2_vals[:5], 'lp': lp_vals[:5]}
@@ -1102,8 +1104,9 @@ def parse_speed_figures_for_block(block) -> List[int]:
             # Basic sanity check for a realistic speed figure
             if 40 < fig_val < 130:
                 figs.append(fig_val)
-        except Exception:
-            pass # Ignore if conversion fails
+        except (ValueError, AttributeError, IndexError):
+            # Ignore if regex group missing or conversion fails
+            pass
 
     # We only care about the most recent figs, e.g., last 10
     return figs[:10]
@@ -3959,8 +3962,8 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame, ml_odds_dict: Optional[Dic
     if "R" not in ratings_df.columns or "Horse" not in ratings_df.columns:
         return {}
 
-    # SAFETY: Work on copy to avoid side effects
-    df = ratings_df.copy()
+    # SAFETY: Work on copy to avoid side effects (only if we modify)
+    df = ratings_df.copy()  # Keep copy since we add R_numeric column
 
     # VALIDATION: Ensure 'R' is numeric
     df['R_numeric'] = pd.to_numeric(df['R'], errors='coerce')
@@ -4116,7 +4119,8 @@ for i, (rbias, pbias) in enumerate(scenarios):
                         ml_odds_dict[horse_name] = float(parts[0]) / float(parts[1])
                     else:
                         ml_odds_dict[horse_name] = float(odds_str)
-                except:
+                except (ValueError, TypeError, IndexError, ZeroDivisionError):
+                    # Invalid odds format - use default
                     ml_odds_dict[horse_name] = 5.0
             else:
                 ml_odds_dict[horse_name] = 5.0
@@ -4404,6 +4408,12 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             
             # SELECTION: Horse with highest conditional probability
             best_relative_idx = np.argmax(remaining_probs)
+            
+            # BOUNDS CHECK: Validate index before accessing (prevents crash)
+            if best_relative_idx >= len(remaining_indices):
+                # Should never happen, but safety first
+                break
+            
             selected_horse_idx = remaining_indices[best_relative_idx]
             selected_prob = remaining_probs[best_relative_idx]
             
