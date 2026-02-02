@@ -26,7 +26,7 @@ except ImportError:
 
 # Import optimized components
 from horse_angles8 import compute_eight_angles
-from elite_parser import EliteBRISNETParser, HorseData
+from elite_parser_v2_gold import GoldStandardBRISNETParser, HorseData
 
 @dataclass
 class RatingComponents:
@@ -65,12 +65,13 @@ class UnifiedRatingEngine:
     """
 
     # Component weights (empirically optimized for 90%+ accuracy)
+    # OPTIMIZED: Increased style weight after Race 3 analysis showed track bias was critical
     WEIGHTS = {
         'class': 2.5,      # Highest weight - class tells
         'speed': 2.0,      # Speed matters most in open racing
         'form': 1.8,       # Recent form critical
         'pace': 1.5,       # Pace scenario important
-        'style': 1.2,      # Running style fit
+        'style': 2.0,      # INCREASED from 1.2 - track bias is CRITICAL (1.55 impact factor)
         'post': 0.8,       # Least predictive overall
         'angles': 0.10     # Per-angle bonus (8 angles × 0.10 = 0.80 max)
     }
@@ -107,7 +108,7 @@ class UnifiedRatingEngine:
                         Lower = more concentrated, Higher = more uniform
                         3.0 = balanced (recommended)
         """
-        self.parser = EliteBRISNETParser()
+        self.parser = GoldStandardBRISNETParser()
         self.softmax_tau = softmax_tau
         self.last_validation = None
 
