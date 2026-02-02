@@ -3040,21 +3040,40 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
                 # Solid ITM (>50%) = +0.05 (NEW)
                 elif itm_pct >= 0.50:
                     bonus += 0.05
+                
+                # Store jockey win% for combo bonus check
+                jockey_win_rate = win_pct
+            else:
+                jockey_win_rate = 0.0
+        else:
+            jockey_win_rate = 0.0
 
         trainer_match = re.search(trainer_pattern, section)
+        trainer_win_rate = 0.0
         if trainer_match:
             t_starts, t_wins, t_places, t_shows = map(int, trainer_match.groups())
 
             if t_starts >= 20:
                 t_win_pct = t_wins / t_starts
+                trainer_win_rate = t_win_pct
 
                 # Elite trainer (>28% win rate) = +0.12 bonus
                 if t_win_pct >= 0.28:
                     bonus += 0.12
                 elif t_win_pct >= 0.22:
                     bonus += 0.08
+        
+        # ELITE CONNECTIONS COMBO BONUS (SA R8 enhancement)
+        # When both jockey AND trainer are elite, add significant combo bonus
+        # SA R8 winner: 22% jockey + 18% trainer = elite connections
+        if jockey_win_rate >= 0.18 and trainer_win_rate >= 0.15:
+            # Both connections are strong/elite - powerful combination
+            bonus += 0.25  # Elite combo bonus
+        elif jockey_win_rate >= 0.15 and trainer_win_rate >= 0.12:
+            # Both connections are good - moderate combo
+            bonus += 0.15  # Good combo bonus
 
-    return float(np.clip(bonus, 0, 0.35))
+    return float(np.clip(bonus, 0, 0.50))  # Increased cap from 0.35 to 0.50
 
 def calculate_track_condition_granular(track_info: Dict[str, Any], style: str, post: int) -> float:
     """
@@ -4033,11 +4052,33 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         else:
                             pp_weight, comp_weight = 0.60, 0.40  # Route: More balanced
                 else:
-                    # Non-maiden race: Standard dirt weights (SA R8 validated)
+                    # Non-maiden race: Check for class dropper scenario (SA R6)
+                    # When significant class advantage exists, components gain more weight
+                    class_spread = 0.0
+                    if df_styles is not None and not df_styles.empty and 'Class Rating' in df_styles.columns:
+                        class_ratings = []
+                        for _, h_row in df_styles.iterrows():
+                            cr = safe_float(h_row.get('Class Rating', 0.0), 0.0)
+                            if cr > 0:
+                                class_ratings.append(cr)
+                        
+                        if len(class_ratings) >= 2:
+                            class_spread = max(class_ratings) - min(class_ratings)
+                    
                     if distance_furlongs <= 7.0:  # Sprint
-                        pp_weight, comp_weight = 0.92, 0.08  # Raw speed is king (SA R8: 100% accuracy)
+                        if class_spread > 1.5:
+                            # Class dropper scenario: Horse with significant class advantage
+                            # SA R6: Winner had +0.45 class adj, spread was 3.0 points
+                            pp_weight, comp_weight = 0.85, 0.15  # More component influence
+                        else:
+                            # Standard sprint: Pure speed dominates
+                            pp_weight, comp_weight = 0.92, 0.08  # Raw speed is king (SA R8: 100% accuracy)
                     else:  # Route
-                        pp_weight, comp_weight = 0.80, 0.20  # Stamina + pace management
+                        if class_spread > 2.0:
+                            # Route class dropper: Even more emphasis on stamina/class
+                            pp_weight, comp_weight = 0.70, 0.30
+                        else:
+                            pp_weight, comp_weight = 0.80, 0.20  # Stamina + pace management
             
             # Apply surface-adaptive hybrid model
             # ALL secondary factors (components + track + bonuses) at component weight
