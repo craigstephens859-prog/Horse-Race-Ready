@@ -805,29 +805,71 @@ class GoldStandardBRISNETParser:
 
     # ============ CLASS DATA ============
 
+    def _infer_purse_from_race_type(self, race_type: str) -> Optional[int]:
+        """
+        CRITICAL: Infer purse from race type names like 'Clm25000n2L' or 'MC50000'.
+        BRISNET embeds purse values in race type strings.
+        
+        Examples:
+        - 'Clm25000n2L' → $25,000
+        - 'MC50000' → $50,000
+        - 'OC20k' → $20,000
+        - 'Alw28000' → $28,000
+        """
+        if not race_type:
+            return None
+        
+        # Pattern 1: Direct numbers (Clm25000, MC50000, Alw28000)
+        match = re.search(r'(\d{4,6})', race_type)
+        if match:
+            return int(match.group(1))
+        
+        # Pattern 2: With 'k' suffix (OC20k, Alw50k)
+        match = re.search(r'(\d+)k', race_type, re.IGNORECASE)
+        if match:
+            return int(match.group(1)) * 1000
+        
+        # Pattern 3: Common defaults by type
+        race_lower = race_type.lower()
+        if 'maiden' in race_lower or 'mdn' in race_lower:
+            return 50000  # Typical maiden special weight
+        elif 'claiming' in race_lower or 'clm' in race_lower or 'mc' in race_lower:
+            return 25000  # Typical claiming level
+        elif 'allowance' in race_lower or 'alw' in race_lower:
+            return 50000  # Typical allowance
+        elif 'stake' in race_lower or 'stk' in race_lower or 'g1' in race_lower or 'g2' in race_lower or 'g3' in race_lower:
+            return 100000  # Stakes minimum
+        
+        return None
+
     def _parse_class_with_confidence(self, block: str) -> Tuple[List[int], List[str], float, float]:
         """
         Parse purses and race types.
+        CRITICAL FIX: Infers purses from race type names since BRISNET doesn't show explicit purse in past performances.
         Returns: (purses, race_types, avg_purse, confidence)
         """
         purses = []
         race_types = []
 
-        race_matches = self.RACE_HISTORY_PATTERN.findall(block)
+        # Updated pattern to match actual BRISNET format
+        # Example: "11Jan26SAª 6½ ft :21ª :44¨1:09« 1:16© ¡ ¨¨¨ Clm25000n2L ¨¨©"
+        race_line_pattern = re.compile(
+            r'(\d{2}[A-Za-z]{3}\d{2})\w+\s+[\d½]+[f]?\s+.*?'
+            r'([A-Z][a-z]{2,}\d+[a-zA-Z0-9\-]*|MC\d+|OC\d+|Alw\d+|Stk|G[123])'
+        )
+        
+        race_matches = race_line_pattern.findall(block)
 
         for match in race_matches:
-            # Extract purse
-            try:
-                purse = int(match[3])
-                if purse > 0:
-                    purses.append(purse)
-            except Exception:
-                pass
-
-            # Extract race type
-            race_type = match[2]
+            race_type = match[1] if len(match) > 1 else match[0]
+            
             if race_type:
                 race_types.append(race_type)
+                
+                # CRITICAL: Infer purse from race type name
+                inferred_purse = self._infer_purse_from_race_type(race_type)
+                if inferred_purse and inferred_purse > 0:
+                    purses.append(inferred_purse)
 
         avg_purse = float(np.mean(purses)) if purses else 0.0
         confidence = min(1.0, len(purses) / 3.0)

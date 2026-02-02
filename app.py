@@ -2576,6 +2576,21 @@ for _, r in df_final_field.iterrows():
         pedigree=ped,
         angles_df=ang if ang is not None else pd.DataFrame()
     )
+    
+    # CRITICAL FIX: Apply track bias penalties for mismatched styles
+    # Check if track has strong stalker bias (impact > 1.4)
+    style_adjustment = 0.0
+    horse_style = r.get('Style', 'NA')
+    if running_style_biases and 'S' in running_style_biases:
+        # Strong stalker bias detected
+        if horse_style == 'E':
+            style_adjustment -= 1.5  # Heavy penalty for early speed
+        elif horse_style == 'E/P':
+            style_adjustment -= 0.8  # Moderate penalty
+        elif horse_style == 'S':
+            style_adjustment += 1.2  # Strong bonus for stalkers
+    
+    form_rating += style_adjustment
 
     Cclass_vals.append(round(cclass_total, 3))
     Cform_vals.append(round(form_rating, 3))

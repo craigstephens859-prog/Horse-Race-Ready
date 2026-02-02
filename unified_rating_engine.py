@@ -587,7 +587,11 @@ class UnifiedRatingEngine:
         return float(np.clip(rating, -3.0, 3.0))
 
     def _calc_style(self, horse: HorseData, surface_type: str, style_bias: Optional[List[str]]) -> float:
-        """Running style strength rating"""
+        """Running style strength rating
+        
+        CRITICAL FIX: Track bias heavily influences outcomes.
+        Stalker-favoring tracks (impact value 1.55) require aggressive adjustments.
+        """
         strength_values: Dict[str, float] = {
             'Strong': 0.8,
             'Solid': 0.4,
@@ -597,12 +601,22 @@ class UnifiedRatingEngine:
 
         base: float = strength_values.get(horse.style_strength, 0.0)
 
-        # Style bias adjustment
+        # ENHANCED: Track bias adjustment with aggressive penalties/rewards
         if style_bias:
             if horse.pace_style in style_bias:
+                # DOUBLED bonus for matching dominant track bias
+                base += 0.8 if 'S' in style_bias else 0.4
+            elif horse.pace_style == 'E/P' and ('E' in style_bias or 'P' in style_bias):
                 base += 0.2
+            elif horse.pace_style == 'E' and 'S' in style_bias:
+                # CRITICAL: Heavy penalty for early speed on stalker-biased track
+                base -= 1.2
+            elif horse.pace_style == 'E/P' and 'S' in style_bias:
+                base -= 0.6
+            else:
+                base -= 0.3
 
-        return float(np.clip(base, -0.5, 0.8))
+        return float(np.clip(base, -1.5, 2.0))
 
     def _calc_post(self, horse: HorseData, distance_txt: str, post_bias: Optional[List[str]]) -> float:
         """Post position rating"""
