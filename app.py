@@ -980,7 +980,8 @@ def parse_fractional_positions(block) -> List[List[int]]:
         return positions
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
-    pattern = r'(\d{2}[A-Za-z]{3}\d{2}).*?\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*\s+(\d{1,2})[ªƒ²³¨«¬©°±´‚]*'
+    # More flexible pattern with unicode range for position markers (¹²³ª etc)
+    pattern = r'(\d{2}[A-Za-z]{3}\d{2}).*?(\d{1,2})[\s\u00aa-\u00b4]*(\d{1,2})[\s\u00aa-\u00b4]*(\d{1,2})[\s\u00aa-\u00b4]*(\d{1,2})[\s\u00aa-\u00b4]*(\d{1,2})[\s\u00aa-\u00b4]*(\d{1,2})'
     for m in re.finditer(pattern, block_str, re.MULTILINE):
         try:
             # Validate each group exists and contains digits before conversion
@@ -1030,9 +1031,9 @@ def parse_e1_e2_lp_values(block) -> dict:
         try:
             e1_vals.append(int(m.group(1)))
             e2_vals.append(int(m.group(2)))
-            lp (ValueError, AttributeError, IndexError):
-            # Regex group missing or conversion failedvals.append(int(m.group(3)))
-        except:
+            lp_vals.append(int(m.group(3)))
+        except (ValueError, AttributeError, IndexError):
+            # Regex group missing or conversion failed
             pass
     return {'e1': e1_vals[:5], 'e2': e2_vals[:5], 'lp': lp_vals[:5]}
 
@@ -1082,8 +1083,8 @@ def detect_bounce_risk(speed_figs: List[int]) -> float:
 SPEED_FIG_RE = re.compile(
     # Matches a date, track, etc., then a race type, then captures the first fig
     r"(?mi)^\s*(\d{2}[A-Za-z]{3}\d{2})\s+.*?" # Date (e.g., 23Sep23)
-    r"\b(Clm|Mdn|Md Sp Wt|Alw|OC|G1|G2|G3|Stk|Hcp)\b" # A race type keyword
-    r".*?\s+(\d{2,3})\s+" # The first 2-3 digit number after the type
+    r"\b(Clm|Mdn|Md\s*Sp\s*Wt|MSW|MCL|Alw|AOC|OC|G[123]|Stk|Hcp)\b" # Race type (added MSW, MCL, AOC)
+    r".*?\s+(\d{2,3})(?:\s|$)" # Speed figure followed by whitespace or end
 )
 
 def parse_speed_figures_for_block(block) -> List[int]:
@@ -3004,9 +3005,9 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     import re
 
     # Find horse section and extract jockey/trainer stats
-    # More flexible pattern that captures stats near the horse name
-    jockey_pattern = r'Jockey:?\s*[A-Z][^(]*\((\d+)-(\d+)-(\d+)-(\d+)\)'
-    trainer_pattern = r'Trainer:?\s*[A-Z][^(]*\((\d+)-(\d+)-(\d+)-(\d+)\)'
+    # Case-insensitive pattern that handles multi-word names with apostrophes/periods
+    jockey_pattern = r'Jockey:?\s*([A-Za-z][A-Za-z\s\.\']+?)\s*\((\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\)'
+    trainer_pattern = r'Trainer:?\s*([A-Za-z][A-Za-z\s\.\']+?)\s*\((\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\)'
 
     # Search within reasonable window after horse name
     horse_section_start = pp_text.find(horse_name)
@@ -3918,8 +3919,8 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         # Trade-off: May slightly underweight class droppers, but captures balanced fields
         prime_power_raw = safe_float(row.get('Prime Power', 0.0), 0.0)
         if prime_power_raw > 0:
-            # Normalize Prime Power (typical range: 110-130)
-            pp_normalized = (prime_power_raw - 110) / 20  # 0 to 1 scale
+            # Normalize Prime Power (typical range: 110-130, clip outliers to 0-2 scale)
+            pp_normalized = np.clip((prime_power_raw - 110) / 20, 0, 2)  # 0 to 2 scale (allows up to 150)
             pp_contribution = pp_normalized * 10  # Scale to match component range
             
             # Hybrid: 15% component insights, 85% Prime Power strength
