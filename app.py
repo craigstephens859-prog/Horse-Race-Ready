@@ -5310,11 +5310,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                 st.success("✅ Analysis Complete! Thank you for contributing to our community database.")
 
                 # Wrap ENTIRE report in consistent font styling (includes strategy_report_md AND LLM output)
-                styled_report = f"""
-                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                            font-size: 15px;
-                            line-height: 1.6;
-                            color: #1f2937;">
+                styled_report = f"""<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #1f2937;">
 
 {strategy_report_md}
 
@@ -5322,8 +5318,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 
 {report}
 
-                </div>
-                """
+</div>"""
                 st.markdown(styled_report, unsafe_allow_html=True)
 
                 # ---- Save to disk (optional) ----
