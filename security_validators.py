@@ -40,15 +40,17 @@ DISTANCE_SAFE_PATTERN = re.compile(r'^[\d\s./Mmilefurlongs]+$', re.IGNORECASE)
 # =====================================================
 # SQL INJECTION PATTERNS
 # =====================================================
+# NOTE: Patterns must not match legitimate BRISNET formatting
+# BRISNET uses '--' in times, dashes, and data separators
 SQL_INJECTION_PATTERNS = [
-    re.compile(r';.*?DROP', re.IGNORECASE),
-    re.compile(r';.*?DELETE', re.IGNORECASE),
-    re.compile(r';.*?TRUNCATE', re.IGNORECASE),
-    re.compile(r'UNION.*?SELECT', re.IGNORECASE),
-    re.compile(r'--.*$', re.MULTILINE),
+    re.compile(r';\s*DROP\s+TABLE', re.IGNORECASE),
+    re.compile(r';\s*DELETE\s+FROM', re.IGNORECASE),
+    re.compile(r';\s*TRUNCATE\s+TABLE', re.IGNORECASE),
+    re.compile(r'UNION\s+SELECT', re.IGNORECASE),
+    re.compile(r'--\s*\[SQL', re.IGNORECASE),  # More specific SQL comment pattern
     re.compile(r'/\*.*?\*/', re.DOTALL),
-    re.compile(r'exec\s*\(', re.IGNORECASE),
-    re.compile(r'execute\s*\(', re.IGNORECASE),
+    re.compile(r'exec\s*\(\s*[\'"]', re.IGNORECASE),  # More specific
+    re.compile(r'execute\s*\(\s*[\'"]', re.IGNORECASE),  # More specific
 ]
 
 # =====================================================
