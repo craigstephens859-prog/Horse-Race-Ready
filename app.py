@@ -4404,69 +4404,22 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
     component_report = "### What Our System Sees in Top Contenders\n\n"
     component_report += detailed_breakdown + "\n"
-    component_report += "---\n\n### Quick Summary\n\n"
-
-    for i, horse in enumerate(all_horses[:3], 1):  # Top 3 horses
-        row = primary_df[primary_df['Horse'] == horse].iloc[0]
-        post = name_to_post.get(horse, '?')
-        ml = name_to_ml.get(horse, '?')
-
-        # Extract component values
-        R = row.get('R', 0)
-        try:
-            Cclass = float(row.get('Cclass', 0))
-            Cform = float(row.get('Cform', 0))
-            Cspeed = float(row.get('Cspeed', 0))
-            Cpace = float(row.get('Cpace', 0))
-            Cstyle = float(row.get('Cstyle', 0))
-            Cpost = float(row.get('Cpost', 0))
-            atrack = float(row.get('A-Track', 0))
-        except:
-            Cclass = Cform = Cspeed = Cpace = Cstyle = Cpost = atrack = 0
-
-        # Find dominant component
-        components = [
-            ('Speed', Cspeed, 2.0),
-            ('Class', Cclass, 2.5),
-            ('Form', Cform, 1.8),
-            ('Pace Fit', Cpace, 1.5),
-            ('Running Style', Cstyle, 1.2),
-            ('Post Position', Cpost, 0.8)
-        ]
-        dominant = max(components, key=lambda x: abs(x[1] * x[2]))
-
-        component_report += f"**#{post} {horse}** (ML: {ml})\n"
-        component_report += f"* **Total Rating**: {R:.2f}\n"
-        component_report += f"* **Components**: Class {Cclass:+.2f} | Form {Cform:+.2f} | Speed {Cspeed:+.2f} | Pace {Cpace:+.2f} | Style {Cstyle:+.2f} | Post {Cpost:+.2f} | Track {atrack:+.2f}\n"
-        component_report += f"* **Strength**: {dominant[0]} ({dominant[1]:+.2f} × {dominant[1] * dominant[2]:.1f} weighted)\n"
-
-        # Explanation based on dominant component
-        if dominant[0] == 'Speed':
-            component_report += f"* **Why Rated**: Exceptional speed figures - {abs(dominant[1]):.1f} points faster than field average\n"
-        elif dominant[0] == 'Class':
-            component_report += f"* **Why Rated**: Strong class advantage - competing at appropriate/favorable level\n"
-        elif dominant[0] == 'Form':
-            component_report += f"* **Why Rated**: Positive form cycle - improving recent performances\n"
-        elif dominant[0] == 'Pace Fit':
-            component_report += f"* **Why Rated**: Ideal pace setup - running style matches projected scenario\n"
-
-        component_report += "\n"
 
     # --- GOLD STANDARD: Build Finishing Order Predictions (NO DUPLICATES) ---
     # Use sequential selection algorithm - each horse appears EXACTLY ONCE
     finishing_order = calculate_most_likely_finishing_order(primary_df, top_n=5)
 
-    finishing_order_report = "### Most Likely Finishing Order (Probability-Based)\n\n"
-    finishing_order_report += "**Note:** Horses can appear in multiple positions because these are conditional probabilities (e.g., P(2nd | not 1st), etc.). Consistency across positions signals reliability.\n\n"
+    finishing_order_report = "### Most Likely Finishing Order\n\n"
+    finishing_order_report += "**Algorithm:** Sequential selection ensuring each horse appears EXACTLY ONCE. The percentage indicates conditional probability (e.g., for 2nd place: probability of finishing 2nd given not finishing 1st).\n\n"
 
-    position_names = {1: "Win (1st)", 2: "Place (2nd)", 3: "Show (3rd)", 4: "4th", 5: "5th"}
+    position_names = {1: "🥇 Win (1st)", 2: "🥈 Place (2nd)", 3: "🥉 Show (3rd)", 4: "4th", 5: "5th"}
 
     for pos, (horse, prob) in enumerate(finishing_order, 1):
         post = name_to_post.get(horse, '?')
         ml = name_to_ml.get(horse, '?')
-        finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** — {prob*100:.1f}%\n"
+        finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** (ML: {ml}) — {prob*100:.1f}% conditional probability\n"
 
-    finishing_order_report += "\n"
+    finishing_order_report += "\n💡 **Use These Rankings:** Build your exotic tickets using this exact finishing order for optimal probability-based coverage.\n\n"
 
     # --- ELITE: Build $50 Bankroll Optimization ---
     bankroll_report = "### $50 Bankroll Structure\n\n"
@@ -4514,15 +4467,13 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     bankroll_report += f"**Risk Level:** {strategy_profile} approach - {'Wider coverage, value-based' if strategy_profile == 'Value Hunter' else 'Concentrated on top selection'}\n"
     bankroll_report += f"\n💡 **Use Finishing Order Predictions:** The probability rankings above show the most likely finishers for each position. Build your tickets using horses with highest probabilities for each slot.\n"
 
-    # --- 6. Build Final Report String ---
+    # --- 6. Build Final Report String (OPTIMIZED ORDER: Most Important First) ---
     final_report = f"""
-{component_report}
----
 {finishing_order_report}
 ---
 {bankroll_report}
 ---
-{pace_report}
+{component_report}
 ---
 {contender_report}
 ---
@@ -4540,6 +4491,8 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 **D-Group (Exotic Fillers - Use 3rd/4th/5th)**
 {format_horse_list(D_group)}
 
+---
+{pace_report}
 ---
 {blueprint_report}
 ---
@@ -4768,43 +4721,31 @@ Horses Offering Potential Value (Overlays):
 --- TASK: WRITE ELITE CLASSIC REPORT ---
 Your goal is to present a sophisticated yet clear analysis. Structure your report as follows:
 
-**1. Component Transparency (What Our System Sees)**
-- Present the "What Our System Sees in Top Contenders" section from the analysis above
-- Explain WHY each top horse is rated highly based on their component breakdown
-- Highlight their dominant strength and how it translates to race advantage
+**1. Race Overview (3-5 sentences)**
+- Summarize race conditions: track, surface, distance, purse
+- Pace projection based on PPI and field composition
+- Key race dynamics and angles to focus on
 
-**2. Finishing Order Predictions**
-- Present the "Most Likely Finishing Order" section showing predicted 1st-5th place finishers
-- Explain that same horses can appear in multiple positions based on probability analysis
-- Note which horses show consistency across multiple predicted positions
+**2. Top Contenders & Betting Focus**
+- A-Group: Key win contenders with their dominant strengths (use post #, name, ML odds)
+- B-Group: Primary challengers and why they're threats
+- Highlight any value opportunities or underlays from model analysis
 
-**3. $50 Bankroll Structure**
-- Present the "$50 Bankroll Structure" section with specific ticket allocations
-- Explain the logic behind the bet distribution
-- Show total investment and risk level
-
-**4. Race Summary**
-- Brief 4-6 sentences about race conditions, pace setup, and key angles
-
-**5. Contender Analysis**
-- Summarize A-Group (Key Win Contenders) and B-Group (Primary Challengers)
-- Use names, post numbers, and ML odds
-- Explain why each is a contender (rating, value, form, etc.)
-- Mention Value Note about top pick if provided
-
-**6. Betting Strategy**
-- State the Strategy Profile ({strategy_profile})
-- Present A/B/C/D Contender Groups exactly as listed
-- Show betting blueprints with example structures and costs
+**3. Recommended Betting Approach**
+- State the optimal strategy profile for this race
+- Explain which ticket structures make most sense given field dynamics
+- Reference the specific blueprints from the betting strategy section above
+- Mention bankroll allocation and risk management considerations
 
 **STYLE GUIDE:**
 - Be direct and analytical (no fluff like "buckle up" or "folks")
 - Use racing terminology appropriately
-- Explain component values in practical terms (e.g., "2.1 length speed advantage")
-- Make the sophisticated analysis accessible to all handicappers
-    - IMPORTANT: Emphasize that these are *blueprints* and the user should **scale the base bet amounts** ($0.10, $0.50, etc.) to fit their own budget per race (mentioning ~$100 max recommended).
-    - Include the final **Bankroll & Strategy Notes**.
-- **Tone:** Be informative, direct, and easy to understand. Avoid overly complex jargon. Use horse names and post numbers (#) frequently.
+- Focus on ACTIONABLE insights: Why these horses? Which tickets? How to play the race?
+- DO NOT restate the component breakdown, finishing order, or bankroll structure already displayed above
+- Instead, SYNTHESIZE the data into a clear narrative: pace scenario → contender strengths → betting approach
+- Use horse names with post numbers (#) for clarity
+- Keep it concise: ~150-200 words total
+- **Tone:** Confident, professional, accessible to all handicappers
 """
                 report = call_openai_messages(messages=[{"role":"user","content":prompt}])
 
