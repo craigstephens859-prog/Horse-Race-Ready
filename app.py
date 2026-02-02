@@ -1899,7 +1899,8 @@ def calculate_form_cycle_rating(
 
     # 1. Layoff factor
     days_since_last = recent_races[0]['days_ago'] if recent_races else 999
-    layoff_adj = calculate_layoff_factor(days_since_last)
+    # Use calculate_layoff_bonus (defined at line 3163) instead of calculate_layoff_factor
+    layoff_adj = calculate_layoff_bonus(days_since_last, is_marathon=False)
     form_rating += layoff_adj
 
     # 2. Form trend
@@ -2477,7 +2478,8 @@ for name, fig_list in figs_per_horse.items():
         })
 figs_df = pd.DataFrame(figs_data) # <--- THIS IS THE NEW FIGS DATAFRAME
 
-df_final_field = df_editor[df_editor["Scratched"]==False].copy()
+# CRITICAL: Explicit False check to handle potential NaN values from data_editor
+df_final_field = df_editor[df_editor["Scratched"].fillna(False) == False].copy()
 if df_final_field.empty:
     st.warning("All horses are scratched.")
     st.stop()
@@ -2623,17 +2625,33 @@ for _, r in df_final_field.iterrows():
     )
     
     # CRITICAL FIX: Apply track bias penalties for mismatched styles
-    # Check if track has strong stalker bias (impact > 1.4)
+    # Check if track has strong stalker bias using ACTUAL track bias data, not user selection
     style_adjustment = 0.0
     horse_style = r.get('Style', 'NA')
-    if running_style_biases and 'S' in running_style_biases:
-        # Strong stalker bias detected
+    
+    # Get actual track bias impact values from track profiles
+    canon_track = _canonical_track(track_name)
+    dist_bucket = distance_bucket(distance_txt)
+    track_cfg = TRACK_BIAS_PROFILES.get(canon_track, {}).get(race_surface, {}).get(dist_bucket, {})
+    runstyle_biases = track_cfg.get('runstyle', {})
+    
+    # Strong stalker track detected if S style has > 0.3 advantage
+    stalker_impact = runstyle_biases.get('S', 0.0)
+    early_speed_impact = runstyle_biases.get('E', 0.0)
+    
+    if stalker_impact > 0.3:  # Strong stalker-favoring track
+        # Apply penalties/bonuses based on horse's style vs track bias
         if horse_style == 'E':
             style_adjustment -= 1.5  # Heavy penalty for early speed
         elif horse_style == 'E/P':
             style_adjustment -= 0.8  # Moderate penalty
         elif horse_style == 'S':
             style_adjustment += 1.2  # Strong bonus for stalkers
+    elif early_speed_impact > 0.3:  # Strong speed-favoring track
+        if horse_style == 'E':
+            style_adjustment += 1.2  # Bonus for early speed
+        elif horse_style == 'S':
+            style_adjustment -= 0.8  # Penalty for closers
     
     form_rating += style_adjustment
 
@@ -4440,7 +4458,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     is_overlay = top_rated_horse in pos_ev_horses
     top_ml_str = name_to_odds.get(top_rated_horse, '100')
     top_ml_dec = str_to_decimal_odds(top_ml_str) or 101
-    is_underlay = not is_overlay and (primary_probs.get(top_rated_horse, 0) > (1 / top_ml_dec)) and top_ml_dec < 4 # Define underlay as < 3/1
+    is_underlay = not is_overlay and (primary_probs_dict.get(top_rated_horse, 0) > (1 / top_ml_dec)) and top_ml_dec < 4 # Define underlay as < 3/1
 
     if is_overlay:
          contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
