@@ -4012,18 +4012,15 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             # RACE QUALITY DETECTION (Purse + Type Analysis)
             # ═══════════════════════════════════════════════════════════════════════
             
-            # Extract purse amount
+            # Extract purse amount from race_type (BRISNET embeds purse in race type strings)
+            # Examples: 'Clm25000n2L' → $25,000, 'MC50000' → $50,000
             purse_amount = 0
             try:
-                if purse_str:
-                    # Parse purse from string like "$100,000" or "100k"
-                    purse_clean = purse_str.replace('$', '').replace(',', '').strip().lower()
-                    if 'k' in purse_clean:
-                        purse_amount = float(purse_clean.replace('k', '')) * 1000
-                    elif 'm' in purse_clean:
-                        purse_amount = float(purse_clean.replace('m', '')) * 1000000
-                    else:
-                        purse_amount = float(purse_clean)
+                # Try to infer from race_type first (most reliable)
+                if race_type:
+                    inferred_purse = infer_purse_from_race_type(race_type)
+                    if inferred_purse and inferred_purse > 0:
+                        purse_amount = inferred_purse
             except:
                 purse_amount = 0
             
