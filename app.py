@@ -3287,20 +3287,34 @@ def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) ->
 
 def calculate_hot_trainer_bonus(trainer_win_pct: float, is_hot_l14: bool = False, is_2nd_lasix_high_pct: bool = False) -> float:
     """
-    HOT TRAINER BONUS (TUP R6 Feb 2026 Calibration)
+    HOT TRAINER BONUS (TUP R6 + R7 Feb 2026 Calibration)
     
-    Winner #5 Cactus League had:
+    TUP R6 Allowance Winner #5 Cactus League:
     - Trainer: 22% win rate (hot trainer)
     - 4-0-0 in last 14 days (HOT!)
     - 2nd time Lasix: 33% trainer angle (HUGE!)
     
-    Failed pick #2 Ez Cowboy:
+    TUP R6 Failed pick #2 Ez Cowboy:
     - Trainer: Only 10% win rate (below average)
-    - No hot angles
     
-    Returns: Bonus to add to rating_final
+    TUP R7 Claiming Failed pick #3 Forest Acclamation:
+    - Trainer: 0% win rate (Feron 13 0-1-2) = DEATH SENTENCE
+    - 3 wins in 50 career starts (6% career win rate)
+    - Finished 4th despite being model's top pick
+    
+    Returns: Bonus/penalty to add to rating_final
     """
     bonus = 0.0
+    
+    # CRITICAL: 0% trainer = massive penalty (TUP R7 lesson)
+    if trainer_win_pct == 0.0:
+        return -2.5  # Eliminate from contention in most scenarios
+    
+    # Very low % trainer penalty (1-5%)
+    if trainer_win_pct > 0.0 and trainer_win_pct < 0.05:
+        bonus -= 1.0  # Significant penalty
+    elif trainer_win_pct >= 0.05 and trainer_win_pct < 0.10:
+        bonus -= 0.5  # Moderate penalty
     
     # High % trainer baseline
     if trainer_win_pct >= 0.25:  # Elite trainer (25%+)
@@ -3880,6 +3894,13 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         if track_info:
             tier2_bonus += calculate_track_condition_granular(track_info, style, post)
 
+        # ======================== CLAIMING RACE PACE CAP (TUP R7 Feb 2026) ========================
+        # Failed pick #3 Forest Acclamation: +0.84 pace × 1.5 = +1.26 rating boost
+        # BUT: 0% trainer + 3/50 career wins + worst Prime Power = fatal flaws ignored
+        # In claiming races: Talent/form/trainer > pace tactics
+        # Cap pace bonus to prevent over-reliance on pace scenarios in cheap races
+        pace_cap_applied = False
+        
         # ======================== DISTANCE CATEGORY DETECTION ========================
         is_marathon = is_marathon_distance(distance_txt)
         is_sprint = is_sprint_distance(distance_txt)
@@ -3955,7 +3976,90 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         if name in awd_analysis:
             tier2_bonus += calculate_awd_mismatch_penalty(awd_analysis[name])
 
-        # 5. HOT TRAINER BONUS (TUP R6 Feb 2026 - Winner had 22% trainer, 4-0-0 L14, 2nd time Lasix 33%)
+        # 5. CAREER FUTILITY PENALTY (TUP R7 Feb 2026)
+        # #3 Forest Acclamation: 3 wins in 50 starts (6%) finished 4th despite model picking to win
+        # Chronic losers rarely break through regardless of pace/class advantages
+        career_win_pct = 0.0
+        try:
+            # Parse career record: "Life: 50 3 - 1 - 7 $53,234 79"
+            career_match = re.search(r'Life:\s+(\d+)\s+(\d+)\s+-\s+\d+\s+-\s+\d+', pp_text)
+            if career_match:
+                career_starts = int(career_match.group(1))
+                career_wins = int(career_match.group(2))
+                if career_starts > 0:
+                    career_win_pct = career_wins / career_starts
+                    
+                    # Apply penalties for chronic losers
+                    if career_starts >= 20:  # Only penalize with meaningful sample size
+                        if career_win_pct < 0.05:  # Less than 5% win rate
+                            tier2_bonus -= 2.0  # Massive penalty
+                        elif career_win_pct < 0.10:  # Less than 10% win rate
+                            tier2_bonus -= 1.0  # Significant penalty
+        except:
+            pass
+
+        # 6. 2ND OFF LAYOFF BONUS (TUP R7 Feb 2026)
+        # Winner #4 If You Want It: 2nd start after layoff, improved from Speed 62
+        # BRISNET shows: "2nd off layoff 65 22% 60%" (22% win rate, 60% ITM)
+        is_second_off_layoff = False
+        try:
+            # Check for "2nd off layoff" stat with high win%
+            layoff_match = re.search(r'2nd off layoff\s+(\d+)\s+(\d+)%\s+(\d+)%', pp_text)
+            if layoff_match:
+                layoff_starts = int(layoff_match.group(1))
+                layoff_win_pct = int(layoff_match.group(2)) / 100.0
+                layoff_itm_pct = int(layoff_match.group(3)) / 100.0
+                
+                if layoff_starts >= 3:  # Meaningful sample size
+                    if layoff_win_pct >= 0.20:  # 20%+ win rate
+                        tier2_bonus += 0.8  # Strong bonus
+                        is_second_off_layoff = True
+                    elif layoff_win_pct >= 0.15:  # 15-19% win rate
+                        tier2_bonus += 0.5  # Moderate bonus
+                        is_second_off_layoff = True
+                    elif layoff_itm_pct >= 0.50:  # 50%+ ITM even if lower win%
+                        tier2_bonus += 0.3  # Small bonus
+                        is_second_off_layoff = True
+        except:
+            pass
+
+        # 7. BEST SPEED AT DISTANCE BONUS (TUP R7 Feb 2026)
+        # Winner #4 If You Want It: Tied #1 with 80 Best Speed at Distance
+        # 2nd place #9 English Danger: Tied #1 with 80 Best Speed at Distance
+        # This metric predicted 1-2 finish but model ignored it
+        best_speed_at_dist = 0
+        try:
+            # Parse "Best Speed at Dist" from PP text header
+            # Format: "# Best Speed at Dist\n4 If You Want It 80"
+            best_speed_pattern = rf'{re.escape(name)}\s+(\d+)'
+            # Look in "Best Speed at Dist" section
+            best_speed_section = re.search(r'# Best Speed at Dist(.{0,500})', pp_text, re.DOTALL)
+            if best_speed_section:
+                section_text = best_speed_section.group(1)
+                horse_best = re.search(best_speed_pattern, section_text)
+                if horse_best:
+                    best_speed_at_dist = int(horse_best.group(1))
+                    
+                    # Find all horses' best speeds to determine ranking
+                    all_best_speeds = re.findall(r'\d+\s+[A-Za-z\s\']+\s+(\d+)', section_text)
+                    if all_best_speeds:
+                        speeds = [int(s) for s in all_best_speeds]
+                        speeds_sorted = sorted(speeds, reverse=True)
+                        
+                        if best_speed_at_dist > 0:
+                            rank = speeds_sorted.index(best_speed_at_dist) + 1 if best_speed_at_dist in speeds_sorted else 999
+                            
+                            # Bonus for top 3 best speeds at distance
+                            if rank == 1:
+                                tier2_bonus += 0.5  # Best speed at distance
+                            elif rank == 2:
+                                tier2_bonus += 0.3  # 2nd best
+                            elif rank == 3:
+                                tier2_bonus += 0.2  # 3rd best
+        except:
+            pass
+
+        # 8. HOT TRAINER BONUS (TUP R6 + R7 Feb 2026 - Winner had 22% trainer, 4-0-0 L14, 2nd time Lasix 33%)
         # Extract trainer win % from PP text
         trainer_win_pct = 0.0
         is_hot_l14 = False
@@ -4126,11 +4230,20 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 class_weight = 3.0
                 form_weight = 1.8
             
+            # Apply pace component with claiming race cap (TUP R7)
+            pace_contribution = cpace * 1.5
+            
+            # Cap pace bonus in claiming races to prevent over-reliance
+            if race_quality == "low" or race_quality == "low-maiden":
+                if pace_contribution > 0.75:
+                    pace_contribution = 0.75  # Cap at +0.75 in claiming
+                    pace_cap_applied = True
+            
             weighted_components = (
                 c_class * class_weight +
                 c_form * form_weight +
                 cspeed * speed_multiplier +  # Boost speed in claiming/allowance
-                cpace * 1.5 +
+                pace_contribution +  # Capped in claiming races
                 cstyle * 1.2 +
                 cpost * 0.8
             )
