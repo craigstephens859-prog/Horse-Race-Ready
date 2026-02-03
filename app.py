@@ -3285,6 +3285,42 @@ def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) ->
     return 0.0
 
 
+def calculate_hot_trainer_bonus(trainer_win_pct: float, is_hot_l14: bool = False, is_2nd_lasix_high_pct: bool = False) -> float:
+    """
+    HOT TRAINER BONUS (TUP R6 Feb 2026 Calibration)
+    
+    Winner #5 Cactus League had:
+    - Trainer: 22% win rate (hot trainer)
+    - 4-0-0 in last 14 days (HOT!)
+    - 2nd time Lasix: 33% trainer angle (HUGE!)
+    
+    Failed pick #2 Ez Cowboy:
+    - Trainer: Only 10% win rate (below average)
+    - No hot angles
+    
+    Returns: Bonus to add to rating_final
+    """
+    bonus = 0.0
+    
+    # High % trainer baseline
+    if trainer_win_pct >= 0.25:  # Elite trainer (25%+)
+        bonus += 0.3
+    elif trainer_win_pct >= 0.20:  # Hot trainer (20-24%)
+        bonus += 0.5
+    elif trainer_win_pct >= 0.15:  # Above average (15-19%)
+        bonus += 0.2
+    
+    # Hot trainer in last 14 days (4+ wins)
+    if is_hot_l14:
+        bonus += 0.3
+    
+    # High % trainer angle (2nd time Lasix 33%+)
+    if is_2nd_lasix_high_pct:
+        bonus += 0.8  # HUGE angle
+    
+    return bonus
+
+
 # ======================== ROUTE & SPRINT CALIBRATION ========================
 # Based on Pegasus WC G1 (9f route) and GP Turf Sprint (5f sprint) validation
 
@@ -3919,19 +3955,58 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         if name in awd_analysis:
             tier2_bonus += calculate_awd_mismatch_penalty(awd_analysis[name])
 
+        # 5. HOT TRAINER BONUS (TUP R6 Feb 2026 - Winner had 22% trainer, 4-0-0 L14, 2nd time Lasix 33%)
+        # Extract trainer win % from PP text
+        trainer_win_pct = 0.0
+        is_hot_l14 = False
+        is_2nd_lasix_high_pct = False
+        try:
+            # Parse trainer win %: "Trnr: Eikleberry Kevin (50 11-7-4 22%)"
+            trainer_match = re.search(r'Trnr:.*?\(\d+\s+\d+-\d+-\d+\s+(\d+)%\)', pp_text)
+            if trainer_match:
+                trainer_win_pct = int(trainer_match.group(1)) / 100.0
+            
+            # Check for hot trainer in last 14 days (look for patterns like "9 4-0-0")
+            hot_l14_match = re.search(r'Hot Trainer in last 14 days \((\d+) (\d+)-\d+-\d+\)', pp_text)
+            if hot_l14_match and int(hot_l14_match.group(2)) >= 4:
+                is_hot_l14 = True
+            
+            # Check for 2nd time Lasix with high % angle
+            if '2nd time Lasix' in pp_text and trainer_win_pct >= 0.25:
+                is_2nd_lasix_high_pct = True
+                
+            tier2_bonus += calculate_hot_trainer_bonus(trainer_win_pct, is_hot_l14, is_2nd_lasix_high_pct)
+        except:
+            pass
+
         # ======================== End Tier 2 Bonuses ========================
 
-        # Apply component weights: Class×2.0, Form×1.8, Speed×1.8, Pace×1.5, Style×1.2, Post×0.8
+        # Apply component weights: Class×2.5, Form×2.0, Speed×2.2, Pace×1.5, Style×1.2, Post×0.8
         # OPTIMIZED: Class reduced to 2.0 (from 3.0) - SA R8 showed class penalties buried high-PP horses
         # #12 & #13 had class adjustments that dropped them despite elite PP (127.5, 125.3)
         # Prime Power already captures class quality - component class was double-counting
         # CLAIMING BOOST: Increase speed weight in claiming races (TUP R5 winner had highest speed LR)
-        speed_multiplier = 2.5 if race_quality == "low" else 1.8
+        # ALLOWANCE CALIBRATION (TUP R6 Feb 2026): Recent speed matters more than historical class
+        #   Failed pick #2 Ez Cowboy: High class (×3.0) but speed LR ranked 5th (68)
+        #   Winner #5 Cactus League: Lower class but hot trainer/2nd time Lasix angles
+        #   Fix: Speed 1.8→2.2 for allowance, Class 3.0→2.5, Form 1.8→2.0
+        if race_quality == "low":  # Claiming
+            speed_multiplier = 2.5
+            class_weight = 2.0
+            form_weight = 1.8
+        elif race_quality == "mid":  # Allowance
+            speed_multiplier = 2.2
+            class_weight = 2.5
+            form_weight = 2.0
+        else:  # Stakes/Graded
+            speed_multiplier = 1.8
+            class_weight = 3.0
+            form_weight = 1.8
         
         weighted_components = (
-            c_class * 2.0 +
-            c_form * 1.8 +
-            cspeed * speed_multiplier +  # Boost speed in claiming races
+            c_class * class_weight +
+            c_form * form_weight +
+            cspeed * speed_multiplier +  # Boost speed in claiming/allowance
             cpace * 1.5 +
             cstyle * 1.2 +
             cpost * 0.8
@@ -4679,6 +4754,25 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         else:
             # All probabilities were invalid - use uniform distribution
             win_probs = np.ones(len(horses), dtype=np.float64) / len(horses)
+
+        # CONFIDENCE CAP (TUP R6 Feb 2026): Prevent over-confident predictions
+        # Failed pick #2 Ez Cowboy had 94.8% probability but finished 4th
+        # Cap maximum win probability at 65% for competitive fields (6+ horses)
+        if len(horses) >= 6:
+            max_prob = 0.65
+            for i in range(len(win_probs)):
+                if win_probs[i] > max_prob:
+                    excess = win_probs[i] - max_prob
+                    win_probs[i] = max_prob
+                    # Redistribute excess to other horses proportionally
+                    other_indices = [j for j in range(len(win_probs)) if j != i]
+                    if other_indices:
+                        redistribution = excess / len(other_indices)
+                        for j in other_indices:
+                            win_probs[j] += redistribution
+            # Re-normalize after capping
+            if win_probs.sum() > 0:
+                win_probs = win_probs / win_probs.sum()
 
         # SEQUENTIAL SELECTION: Build finishing order one position at a time
         finishing_order = []
