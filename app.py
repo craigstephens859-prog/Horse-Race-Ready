@@ -6369,8 +6369,12 @@ else:
                         horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
 
                         # Function to process and save results automatically
-                        def process_finish_order(finish_input_val):
+                        def process_finish_order():
                             """Parse, validate, and save results. Called when user presses Enter."""
+                            # CRITICAL FIX: Read the CURRENT value from session_state (not args)
+                            # This ensures we get the NEW value when Enter is pressed, not the OLD value
+                            finish_input_val = st.session_state.get(f"finish_input_{race_id}", "")
+                            
                             if not finish_input_val or not finish_input_val.strip():
                                 return
                             
@@ -6434,6 +6438,9 @@ else:
                                         
                                         st.toast(f"🏁 Results saved! Winner: #{finish_order[0]} {horse_names_dict[finish_order[0]]}", icon="✅")
                                         
+                                        # Clear the input field after successful save
+                                        st.session_state[f"finish_input_{race_id}"] = ""
+                                        
                                         time.sleep(0.5)
                                         _safe_rerun()
                                     else:
@@ -6445,12 +6452,12 @@ else:
                                     st.code(traceback.format_exc(), language='python')
 
                         # Text input with on_change callback (triggers on Enter)
+                        # CRITICAL: No args parameter - function reads directly from session_state
                         finish_input = st.text_input(
                             "Finishing order (1st through 5th) - Press ENTER to save",
                             placeholder="Example: 5,12,1,8,7",
                             key=f"finish_input_{race_id}",
                             on_change=process_finish_order,
-                            args=(st.session_state.get(f"finish_input_{race_id}", ""),),
                             help="Type the program numbers in order from 1st to 5th, separated by commas, then press ENTER"
                         )
 
