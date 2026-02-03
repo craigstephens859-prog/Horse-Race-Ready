@@ -6368,102 +6368,89 @@ else:
                         program_numbers = sorted([int(h['program_number']) for h in horses])
                         horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
 
-                        # Function to process and save results automatically
-                        def process_finish_order():
-                            """Parse, validate, and save results. Called when user presses Enter."""
-                            # CRITICAL FIX: Read the CURRENT value from session_state (not args)
-                            # This ensures we get the NEW value when Enter is pressed, not the OLD value
-                            finish_input_val = st.session_state.get(f"finish_input_{race_id}", "")
-                            
-                            if not finish_input_val or not finish_input_val.strip():
-                                return
-                            
+                        # Text input for finish order - NO callback (simpler approach)
+                        finish_input = st.text_input(
+                            "Finishing order (1st through 5th) - Press ENTER to save",
+                            placeholder="Example: 5,12,1,8,7",
+                            key=f"finish_input_{race_id}",
+                            help="Type the program numbers in order from 1st to 5th, separated by commas, then press ENTER"
+                        )
+                        
+                        # Process the input if provided
+                        if finish_input and finish_input.strip():
                             finish_order = []
-                            validation_errors = []
                             
                             try:
                                 # Parse comma-separated values
-                                raw_values = [x.strip() for x in finish_input_val.split(',')]
+                                raw_values = [x.strip() for x in finish_input.split(',')]
                                 finish_order = [int(x) for x in raw_values if x]
                                 
                                 # Validation checks
                                 if len(finish_order) < 5:
                                     st.error(f"❌ Need 5 horses, only got {len(finish_order)}")
-                                    return
                                 elif len(finish_order) > 5:
                                     st.warning(f"⚠️ Too many horses ({len(finish_order)}), using first 5")
                                     finish_order = finish_order[:5]
                                 
                                 # Check for duplicates
-                                if len(finish_order) != len(set(finish_order)):
+                                elif len(finish_order) != len(set(finish_order)):
                                     st.error("❌ Cannot use same horse in multiple positions")
-                                    return
+                                    finish_order = []
                                 
                                 # Check all are valid program numbers
-                                invalid = [x for x in finish_order if x not in program_numbers]
-                                if invalid:
-                                    st.error(f"❌ Invalid program numbers: {', '.join(map(str, invalid))}")
-                                    return
+                                else:
+                                    invalid = [x for x in finish_order if x not in program_numbers]
+                                    if invalid:
+                                        st.error(f"❌ Invalid program numbers: {', '.join(map(str, invalid))}")
+                                        finish_order = []
+                                    else:
+                                        # Valid input - show preview and save button
+                                        preview_parts = []
+                                        for i, pos in enumerate(finish_order[:5]):
+                                            horse_name = horse_names_dict.get(pos, 'Unknown')
+                                            medals = ["🥇", "🥈", "🥉", "4th", "5th"]
+                                            preview_parts.append(f"{medals[i]} #{pos} {horse_name}")
+                                        st.success(" → ".join(preview_parts))
+                                        
+                                        # Auto-save button
+                                        if st.button("💾 Save Results", key=f"save_btn_{race_id}", type="primary"):
+                                            with st.spinner("Saving to database..."):
+                                                try:
+                                                    success = gold_db.submit_race_results(
+                                                        race_id=race_id,
+                                                        finish_order_programs=finish_order
+                                                    )
+
+                                                    if success:
+                                                        # Store success info
+                                                        st.session_state['last_save_success'] = True
+                                                        st.session_state['last_save_race_id'] = race_id
+                                                        st.session_state['last_save_winner'] = horse_names_dict[finish_order[0]]
+                                                        
+                                                        # Check if we predicted correctly
+                                                        predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
+                                                        predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
+                                                        st.session_state['last_save_predicted'] = predicted_winner
+                                                        
+                                                        st.toast(f"🏁 Results saved! Winner: #{finish_order[0]} {horse_names_dict[finish_order[0]]}", icon="✅")
+                                                        
+                                                        # Clear the input
+                                                        st.session_state[f"finish_input_{race_id}"] = ""
+                                                        
+                                                        time.sleep(0.5)
+                                                        _safe_rerun()
+                                                    else:
+                                                        st.error("❌ Failed to save to database")
+                                                        
+                                                except Exception as e:
+                                                    st.error(f"❌ Error: {str(e)}")
+                                                    import traceback
+                                                    st.code(traceback.format_exc(), language='python')
                                     
                             except ValueError:
                                 st.error("❌ Invalid format - use numbers separated by commas (e.g., 5,12,1,8,7)")
-                                return
-
-                            # If we got here, validation passed - show preview and save
-                            preview_parts = []
-                            for i, pos in enumerate(finish_order[:5]):
-                                horse_name = horse_names_dict.get(pos, 'Unknown')
-                                medals = ["🥇", "🥈", "🥉", "4th", "5th"]
-                                preview_parts.append(f"{medals[i]} #{pos} {horse_name}")
-                            st.success(" → ".join(preview_parts))
-                            
-                            # Auto-save to database
-                            with st.spinner("💾 Saving to database..."):
-                                try:
-                                    success = gold_db.submit_race_results(
-                                        race_id=race_id,
-                                        finish_order_programs=finish_order
-                                    )
-
-                                    if success:
-                                        # Store success info
-                                        st.session_state['last_save_success'] = True
-                                        st.session_state['last_save_race_id'] = race_id
-                                        st.session_state['last_save_winner'] = horse_names_dict[finish_order[0]]
-                                        
-                                        # Check if we predicted correctly
-                                        predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
-                                        predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
-                                        st.session_state['last_save_predicted'] = predicted_winner
-                                        
-                                        st.toast(f"🏁 Results saved! Winner: #{finish_order[0]} {horse_names_dict[finish_order[0]]}", icon="✅")
-                                        
-                                        # Clear the input field after successful save
-                                        st.session_state[f"finish_input_{race_id}"] = ""
-                                        
-                                        time.sleep(0.5)
-                                        _safe_rerun()
-                                    else:
-                                        st.error("❌ Failed to save to database")
-                                        
-                                except Exception as e:
-                                    st.error(f"❌ Error: {str(e)}")
-                                    import traceback
-                                    st.code(traceback.format_exc(), language='python')
-
-                        # Text input with on_change callback (triggers on Enter)
-                        # CRITICAL: No args parameter - function reads directly from session_state
-                        finish_input = st.text_input(
-                            "Finishing order (1st through 5th) - Press ENTER to save",
-                            placeholder="Example: 5,12,1,8,7",
-                            key=f"finish_input_{race_id}",
-                            on_change=process_finish_order,
-                            help="Type the program numbers in order from 1st to 5th, separated by commas, then press ENTER"
-                        )
-
-                        # Info message
-                        if not finish_input or not finish_input.strip():
-                            st.info("💡 Example: Type **5,12,1,8,7** and press ENTER to auto-save")
+                        else:
+                            st.info("💡 Example: Type **5,12,1,8,7** then click Save Results")
                         
                         st.markdown("---")
                 
