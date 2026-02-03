@@ -3981,37 +3981,6 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
         # ======================== End Tier 2 Bonuses ========================
 
-        # Apply component weights: Class×2.5, Form×2.0, Speed×2.2, Pace×1.5, Style×1.2, Post×0.8
-        # OPTIMIZED: Class reduced to 2.0 (from 3.0) - SA R8 showed class penalties buried high-PP horses
-        # #12 & #13 had class adjustments that dropped them despite elite PP (127.5, 125.3)
-        # Prime Power already captures class quality - component class was double-counting
-        # CLAIMING BOOST: Increase speed weight in claiming races (TUP R5 winner had highest speed LR)
-        # ALLOWANCE CALIBRATION (TUP R6 Feb 2026): Recent speed matters more than historical class
-        #   Failed pick #2 Ez Cowboy: High class (×3.0) but speed LR ranked 5th (68)
-        #   Winner #5 Cactus League: Lower class but hot trainer/2nd time Lasix angles
-        #   Fix: Speed 1.8→2.2 for allowance, Class 3.0→2.5, Form 1.8→2.0
-        if race_quality == "low":  # Claiming
-            speed_multiplier = 2.5
-            class_weight = 2.0
-            form_weight = 1.8
-        elif race_quality == "mid":  # Allowance
-            speed_multiplier = 2.2
-            class_weight = 2.5
-            form_weight = 2.0
-        else:  # Stakes/Graded
-            speed_multiplier = 1.8
-            class_weight = 3.0
-            form_weight = 1.8
-        
-        weighted_components = (
-            c_class * class_weight +
-            c_form * form_weight +
-            cspeed * speed_multiplier +  # Boost speed in claiming/allowance
-            cpace * 1.5 +
-            cstyle * 1.2 +
-            cpost * 0.8
-        )
-        
         # HYBRID MODEL: Surface-Adaptive + Maiden-Aware PP Weight (SA R8 + GP R1 + GP R2 - Feb 2026)
         # 
         # THREE-RACE VALIDATION:
@@ -4135,6 +4104,36 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 race_quality = "elite"
             elif purse_amount >= 150000 and race_quality not in ["elite", "high"]:
                 race_quality = "high"
+            
+            # ═══════════════════════════════════════════════════════════════════════
+            # COMPONENT WEIGHT CALCULATION (Must happen AFTER race_quality defined)
+            # ═══════════════════════════════════════════════════════════════════════
+            # ALLOWANCE CALIBRATION (TUP R6 Feb 2026): Recent speed matters more than historical class
+            #   Failed pick #2 Ez Cowboy: High class (×3.0) but speed LR ranked 5th (68)
+            #   Winner #5 Cactus League: Lower class but hot trainer/2nd time Lasix angles
+            #   Fix: Speed 1.8→2.2 for allowance, Class 3.0→2.5, Form 1.8→2.0
+            # CLAIMING BOOST: Increase speed weight in claiming races (TUP R5 winner had highest speed LR)
+            if race_quality == "low" or race_quality == "low-maiden":  # Claiming
+                speed_multiplier = 2.5
+                class_weight = 2.0
+                form_weight = 1.8
+            elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":  # Allowance/MSW
+                speed_multiplier = 2.2
+                class_weight = 2.5
+                form_weight = 2.0
+            else:  # Stakes/Graded
+                speed_multiplier = 1.8
+                class_weight = 3.0
+                form_weight = 1.8
+            
+            weighted_components = (
+                c_class * class_weight +
+                c_form * form_weight +
+                cspeed * speed_multiplier +  # Boost speed in claiming/allowance
+                cpace * 1.5 +
+                cstyle * 1.2 +
+                cpost * 0.8
+            )
             
             # ═══════════════════════════════════════════════════════════════════════
             # Surface-adaptive ratio selection (with quality adjustment)
