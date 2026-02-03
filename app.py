@@ -2024,10 +2024,274 @@ def odds_to_decimal(odds_str: str) -> float:
 
 # ===================== Class Rating Calculator (Comprehensive) =====================
 
+def extract_race_metadata_from_pp(pp_text: str) -> Dict[str, Any]:
+    """
+    🎯 ELITE EXTRACTION: Parse race type and purse from BRISNET PP text header.
+    
+    CRITICAL FOR CALIBRATION: All TUP R4/R5/R6/R7 fixes depend on correct race_quality.
+    - Claiming: Speed 2.5x, pace cap +0.75
+    - Allowance: Speed 2.2x, Class 2.5x
+    - Stakes: Speed 1.8x, Class 3.0x
+    
+    BRISNET HEADER FORMATS:
+    1. "PURSE $25,000. Claiming. For Three Year Olds..."
+    2. "6th Race. Santa Anita. $50,000 Maiden Special Weight"
+    3. "Race 4 - Clm25000n2L" (embedded in race type)
+    4. "Turf Paradise Race 7 - $6,250 Claiming"
+    
+    Returns:
+        dict: {
+            'purse': int,
+            'race_type_raw': str,  # Original text
+            'race_type_normalized': str,  # "claiming", "allowance", etc.
+            'confidence': float,  # 0.0-1.0
+            'source': str  # Where data came from
+        }
+    """
+    result = {
+        'purse': 0,
+        'race_type_raw': '',
+        'race_type_normalized': 'unknown',
+        'confidence': 0.0,
+        'source': 'none'
+    }
+    
+    if not pp_text or len(pp_text) < 50:
+        return result
+    
+    # Extract first 500 chars (header section)
+    header = pp_text[:500]
+    
+    # ═══════════════ PATTERN 1: "PURSE $X,XXX. Race Type." ═══════════════
+    purse_match = re.search(r'PURSE\s+\$([\d,]+)', header, re.IGNORECASE)
+    if purse_match:
+        try:
+            result['purse'] = int(purse_match.group(1).replace(',', ''))
+            result['confidence'] += 0.5
+            result['source'] = 'PURSE header'
+        except ValueError:
+            pass
+    
+    # Extract race type after PURSE line
+    if purse_match:
+        after_purse = header[purse_match.end():purse_match.end()+100]
+        # Look for race type keywords
+        if re.search(r'\bClaiming\b', after_purse, re.IGNORECASE):
+            result['race_type_raw'] = 'Claiming'
+            result['race_type_normalized'] = 'claiming'
+            result['confidence'] += 0.5
+        elif re.search(r'\bAllowance\b', after_purse, re.IGNORECASE):
+            result['race_type_raw'] = 'Allowance'
+            result['race_type_normalized'] = 'allowance'
+            result['confidence'] += 0.5
+        elif re.search(r'\bMaiden\s+Special\s+Weight\b', after_purse, re.IGNORECASE):
+            result['race_type_raw'] = 'Maiden Special Weight'
+            result['race_type_normalized'] = 'maiden special weight'
+            result['confidence'] += 0.5
+        elif re.search(r'\bMaiden\s+Claiming\b', after_purse, re.IGNORECASE):
+            result['race_type_raw'] = 'Maiden Claiming'
+            result['race_type_normalized'] = 'maiden claiming'
+            result['confidence'] += 0.5
+        elif re.search(r'\b(Stakes?|G[123]|Grade)\b', after_purse, re.IGNORECASE):
+            result['race_type_raw'] = 'Stakes'
+            result['race_type_normalized'] = 'stakes'
+            result['confidence'] += 0.5
+    
+    # ═══════════════ PATTERN 2: "$X,XXX Race Type" in any line ═══════════════
+    if result['purse'] == 0:
+        money_race_match = re.search(r'\$(\d{1,3}(?:,\d{3})*)\s+(Claiming|Allowance|Maiden|Stakes?)', header, re.IGNORECASE)
+        if money_race_match:
+            try:
+                result['purse'] = int(money_race_match.group(1).replace(',', ''))
+                result['race_type_raw'] = money_race_match.group(2)
+                result['race_type_normalized'] = money_race_match.group(2).lower()
+                result['confidence'] = 0.8
+                result['source'] = '$X Race Type'
+            except ValueError:
+                pass
+    
+    # ═══════════════ PATTERN 3: Embedded in race type code ═══════════════
+    if result['purse'] == 0:
+        # Look for patterns like "Clm25000n2L", "MC50000", "Alw28000"
+        embedded_match = re.search(r'(Clm|MC|Alw|OC)(\d{4,6})', header, re.IGNORECASE)
+        if embedded_match:
+            race_code = embedded_match.group(1).upper()
+            purse_num = embedded_match.group(2)
+            try:
+                result['purse'] = int(purse_num)
+                result['race_type_raw'] = f"{race_code}{purse_num}"
+                result['source'] = 'embedded code'
+                result['confidence'] = 0.6
+                
+                # Decode race type
+                if race_code in ['CLM', 'MC']:
+                    result['race_type_normalized'] = 'claiming'
+                elif race_code in ['ALW', 'OC']:
+                    result['race_type_normalized'] = 'allowance'
+            except ValueError:
+                pass
+    
+    # ═══════════════ PATTERN 4: "Race X - Race Type" ═══════════════
+    if result['race_type_normalized'] == 'unknown':
+        race_type_line = re.search(r'Race\s+\d+\s*-\s*([A-Za-z\s]+)', header, re.IGNORECASE)
+        if race_type_line:
+            race_text = race_type_line.group(1).strip().lower()
+            if 'claim' in race_text:
+                result['race_type_normalized'] = 'claiming'
+                result['race_type_raw'] = race_type_line.group(1).strip()
+                result['confidence'] += 0.3
+            elif 'allow' in race_text:
+                result['race_type_normalized'] = 'allowance'
+                result['race_type_raw'] = race_type_line.group(1).strip()
+                result['confidence'] += 0.3
+            elif 'maiden' in race_text:
+                result['race_type_normalized'] = 'maiden special weight'
+                result['race_type_raw'] = race_type_line.group(1).strip()
+                result['confidence'] += 0.3
+    
+    return result
+
+def extract_race_metadata_from_pp_text(pp_text: str) -> Dict[str, Any]:
+    """
+    UNIVERSAL: Extract race type and purse from BRISNET PP text headers.
+    Works across ALL tracks, ALL purse levels, ALL race types.
+    
+    Returns dict with:
+    - purse_amount: int (extracted purse)
+    - race_type: str (extracted race type)
+    - race_type_clean: str (normalized: 'claiming', 'allowance', 'stakes', etc.)
+    - confidence: float (0.0-1.0)
+    - detection_method: str (how it was detected)
+    
+    Examples of BRISNET headers:
+    - "PURSE $6,250. Claiming. For Three Year Olds..."
+    - "Purse: $50,000 Allowance Optional Claiming"
+    - "$100,000 Grade 2 Stakes"
+    - "Race 7: Clm6250n3L"
+    """
+    if not pp_text or len(pp_text.strip()) < 50:
+        return {'purse_amount': 0, 'race_type': '', 'race_type_clean': 'unknown', 'confidence': 0.0, 'detection_method': 'no_text'}
+    
+    result = {
+        'purse_amount': 0,
+        'race_type': '',
+        'race_type_clean': 'unknown',
+        'confidence': 0.0,
+        'detection_method': 'none'
+    }
+    
+    # Get first 800 characters (header region)
+    header = pp_text[:800]
+    
+    # ========== PURSE EXTRACTION (Multi-Pattern) ==========
+    purse_patterns = [
+        r'PURSE\s+\$([\d,]+)',  # "PURSE $6,250"
+        r'Purse:\s+\$([\d,]+)',  # "Purse: $50,000"
+        r'\$([\d,]+)\s+(?:Grade|Stakes|Allowance|Claiming)',  # "$100,000 Grade 2"
+        r'\$([\d,]+)',  # Any dollar amount in header
+    ]
+    
+    for pattern in purse_patterns:
+        match = re.search(pattern, header, re.IGNORECASE)
+        if match:
+            try:
+                result['purse_amount'] = int(match.group(1).replace(',', ''))
+                result['detection_method'] = 'purse_text'
+                result['confidence'] = 0.9
+                break
+            except:
+                pass
+    
+    # ========== RACE TYPE EXTRACTION (Multi-Pattern) ==========
+    race_type_patterns = [
+        # Graded Stakes
+        (r'Grade\s+(I{1,3}|[123])', 'stakes_graded', 1.0),
+        (r'G([123])', 'stakes_graded', 1.0),
+        # Stakes
+        (r'Stakes', 'stakes', 0.95),
+        (r'Handicap', 'stakes', 0.9),
+        (r'Listed', 'stakes', 0.9),
+        # Allowance
+        (r'Allowance\s+Optional\s+Claiming', 'allowance_optional', 0.95),
+        (r'Optional\s+Claiming', 'allowance_optional', 0.95),
+        (r'Allowance', 'allowance', 0.95),
+        (r'\bAOC\b', 'allowance_optional', 0.9),
+        (r'\bAlw\b', 'allowance', 0.9),
+        # Claiming
+        (r'Maiden\s+Claiming', 'maiden_claiming', 0.95),
+        (r'Maiden\s+Clm', 'maiden_claiming', 0.9),
+        (r'\bMCL\b', 'maiden_claiming', 0.9),
+        (r'Claiming', 'claiming', 0.95),
+        (r'\bClm\b', 'claiming', 0.9),
+        (r'\bMC\b', 'claiming', 0.85),
+        # Maiden
+        (r'Maiden\s+Special\s+Weight', 'maiden_special_weight', 0.95),
+        (r'\bMSW\b', 'maiden_special_weight', 0.9),
+        (r'Maiden', 'maiden', 0.85),
+        # Starter
+        (r'Starter\s+Allowance', 'starter_allowance', 0.9),
+        (r'Starter\s+Handicap', 'starter_handicap', 0.9),
+        # Waiver
+        (r'Waiver', 'waiver_claiming', 0.85),
+    ]
+    
+    for pattern, race_type_clean, confidence in race_type_patterns:
+        match = re.search(pattern, header, re.IGNORECASE)
+        if match:
+            result['race_type'] = match.group(0)
+            result['race_type_clean'] = race_type_clean
+            result['confidence'] = max(result['confidence'], confidence)
+            if result['detection_method'] == 'none':
+                result['detection_method'] = 'text_pattern'
+            break
+    
+    # ========== EMBEDDED RACE TYPE (Clm25000n2L format) ==========
+    embedded_pattern = r'\b(Clm|MC|OC|Alw|Mdn|MSW|Stk|G[123])([\d]+[kK]?)'
+    embedded_match = re.search(embedded_pattern, header, re.IGNORECASE)
+    if embedded_match:
+        prefix = embedded_match.group(1).lower()
+        amount_str = embedded_match.group(2)
+        
+        # Extract purse from embedded format if not already found
+        if result['purse_amount'] == 0:
+            try:
+                if 'k' in amount_str.lower():
+                    result['purse_amount'] = int(amount_str[:-1]) * 1000
+                else:
+                    result['purse_amount'] = int(amount_str)
+                result['detection_method'] = 'embedded_format'
+            except:
+                pass
+        
+        # Map prefix to race type if not already found
+        if result['race_type_clean'] == 'unknown':
+            prefix_map = {
+                'clm': 'claiming',
+                'mc': 'claiming',
+                'oc': 'allowance_optional',
+                'alw': 'allowance',
+                'mdn': 'maiden',
+                'msw': 'maiden_special_weight',
+                'stk': 'stakes',
+                'g1': 'stakes_graded',
+                'g2': 'stakes_graded',
+                'g3': 'stakes_graded',
+            }
+            result['race_type_clean'] = prefix_map.get(prefix, 'unknown')
+            result['race_type'] = embedded_match.group(0)
+            result['confidence'] = 0.85
+            if result['detection_method'] == 'none':
+                result['detection_method'] = 'embedded_format'
+    
+    return result
+
 def infer_purse_from_race_type(race_type: str) -> Optional[int]:
     """
-    CRITICAL: Infer purse from race type names like 'Clm25000n2L' or 'MC50000'.
+    LEGACY: Infer purse from race type names like 'Clm25000n2L' or 'MC50000'.
     BRISNET embeds purse values in race type strings.
+    
+    NOTE: Use extract_race_metadata_from_pp_text() for comprehensive detection.
+    This function is kept for backward compatibility.
     
     Examples:
     - 'Clm25000n2L' → $25,000
@@ -4157,57 +4421,116 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 pass
             
             # ═══════════════════════════════════════════════════════════════════════
-            # RACE QUALITY DETECTION (Purse + Type Analysis)
+            # UNIVERSAL RACE QUALITY DETECTION (All Tracks, All Types, All Purses)
             # ═══════════════════════════════════════════════════════════════════════
             
-            # Extract purse amount from race_type (BRISNET embeds purse in race type strings)
-            # Examples: 'Clm25000n2L' → $25,000, 'MC50000' → $50,000
-            purse_amount = 0
-            try:
-                # Try to infer from race_type first (most reliable)
-                if race_type:
-                    inferred_purse = infer_purse_from_race_type(race_type)
-                    if inferred_purse and inferred_purse > 0:
-                        purse_amount = inferred_purse
-            except:
-                purse_amount = 0
+            # STEP 1: Extract race metadata from PP text (PREFERRED - most accurate)
+            race_metadata = extract_race_metadata_from_pp_text(pp_text)
             
-            # Classify race quality based on type and purse
-            race_quality = "mid"  # Default
-            race_type_lower = str(race_type).lower() if race_type else ""
+            # STEP 2: Try legacy race_type extraction if PP text detection failed
+            purse_amount = race_metadata['purse_amount']
+            race_type_clean = race_metadata['race_type_clean']
+            detection_confidence = race_metadata['confidence']
             
-            # ELITE TIER: Stakes races (especially graded)
-            if any(keyword in race_type_lower for keyword in ['g1', 'g2', 'g3', 'grade 1', 'grade 2', 'grade 3']):
+            if purse_amount == 0 and race_type:
+                # Fallback: Try to infer from race_type parameter
+                inferred_purse = infer_purse_from_race_type(race_type)
+                if inferred_purse and inferred_purse > 0:
+                    purse_amount = inferred_purse
+                    detection_confidence = 0.7
+            
+            if race_type_clean == 'unknown' and race_type:
+                # Fallback: Parse race_type parameter
+                race_type_lower = str(race_type).lower()
+                if 'g1' in race_type_lower or 'g2' in race_type_lower or 'g3' in race_type_lower:
+                    race_type_clean = 'stakes_graded'
+                elif 'stake' in race_type_lower or 'stk' in race_type_lower:
+                    race_type_clean = 'stakes'
+                elif 'allowance' in race_type_lower or 'alw' in race_type_lower:
+                    race_type_clean = 'allowance'
+                elif 'aoc' in race_type_lower or 'optional' in race_type_lower:
+                    race_type_clean = 'allowance_optional'
+                elif 'maiden claiming' in race_type_lower or 'mcl' in race_type_lower:
+                    race_type_clean = 'maiden_claiming'
+                elif 'claiming' in race_type_lower or 'clm' in race_type_lower:
+                    race_type_clean = 'claiming'
+                elif 'maiden' in race_type_lower or 'msw' in race_type_lower:
+                    race_type_clean = 'maiden_special_weight'
+                detection_confidence = 0.6
+            
+            # STEP 3: Map to race_quality tier (determines component weights)
+            race_quality = "mid"  # Default fallback
+            
+            # ELITE TIER: Graded Stakes + High-Purse Stakes
+            if race_type_clean == 'stakes_graded':
                 race_quality = "elite"
-            elif 'stakes' in race_type_lower or 'listed' in race_type_lower:
+            elif race_type_clean == 'stakes':
                 if purse_amount >= 200000:
                     race_quality = "elite"
                 else:
                     race_quality = "high"
-            # HIGH TIER: Allowance races
-            elif 'allowance' in race_type_lower or 'alw' in race_type_lower or 'aoc' in race_type_lower:
+            # HIGH TIER: Allowance races (including AOC)
+            elif race_type_clean in ['allowance', 'allowance_optional']:
                 race_quality = "high"
             # LOW TIER: Claiming races
-            elif 'claiming' in race_type_lower or 'clm' in race_type_lower or 'claim' in race_type_lower:
-                if 'maiden' in race_type_lower:
-                    race_quality = "low-maiden"  # Maiden claiming
-                else:
-                    race_quality = "low"
+            elif race_type_clean == 'claiming':
+                race_quality = "low"
+            elif race_type_clean == 'maiden_claiming':
+                race_quality = "low-maiden"
             # MID TIER: Maiden Special Weight
-            elif 'maiden' in race_type_lower or 'msw' in race_type_lower:
+            elif race_type_clean in ['maiden_special_weight', 'maiden']:
                 if purse_amount >= 70000:
                     race_quality = "mid-maiden"
                 else:
                     race_quality = "low-maiden"
             # STARTER races (mid-tier)
-            elif 'starter' in race_type_lower:
+            elif race_type_clean in ['starter_allowance', 'starter_handicap']:
                 race_quality = "mid"
             
-            # Purse override: Very high purse = higher quality
+            # STEP 4: Purse-based override (very high purse = upgrade tier)
             if purse_amount >= 500000:
                 race_quality = "elite"
             elif purse_amount >= 150000 and race_quality not in ["elite", "high"]:
                 race_quality = "high"
+            
+            # STEP 5: Display detected metadata for user validation
+            with st.expander("🔍 Race Classification & Detection Details", expanded=False):
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Detected Purse", f"${purse_amount:,}" if purse_amount > 0 else "Unknown")
+                with col2:
+                    st.metric("Race Type", race_type_clean.replace('_', ' ').title())
+                with col3:
+                    st.metric("Quality Tier", race_quality.upper())
+                with col4:
+                    confidence_color = "🟢" if detection_confidence >= 0.8 else "🟡" if detection_confidence >= 0.5 else "🔴"
+                    st.metric("Confidence", f"{confidence_color} {detection_confidence:.0%}")
+                
+                st.caption(f"**Detection Method:** {race_metadata['detection_method'].replace('_', ' ').title()}")
+                st.caption(f"**Raw Race Type:** {race_metadata['race_type'] or race_type or 'Not detected'}")
+                
+                if detection_confidence < 0.5:
+                    st.warning("⚠️ **Low confidence detection** - Verify race type is correctly classified")
+                if purse_amount == 0:
+                    st.info("ℹ️ Purse not detected - Using race type classification only")
+            
+            # Display which weights will be applied based on race_quality
+            st.markdown("### ⚖️ Component Weights Configuration")
+            if race_quality == "low" or race_quality == "low-maiden":
+                weights_display = "**Speed: 2.5×** | **Class: 2.0×** | **Form: 1.8×** | **Pace Cap: +0.75 max**"
+                calibration_note = "TUP R4/R5/R7 Claiming Calibration"
+                strategy_note = "🎯 Speed and recent form heavily weighted. Pace capped to prevent over-reliance. Trainer quality critical (0% trainer = -2.5 penalty)."
+            elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":
+                weights_display = "**Speed: 2.2×** | **Class: 2.5×** | **Form: 2.0×** | **Pace: No Cap**"
+                calibration_note = "TUP R6 Allowance/MSW Calibration"
+                strategy_note = "⚖️ Balanced approach favoring class and form. Speed slightly elevated vs stakes. Hot trainers get +0.5 to +0.8 bonus."
+            else:  # elite/stakes
+                weights_display = "**Speed: 1.8×** | **Class: 3.0×** | **Form: 1.8×** | **Pace: No Cap**"
+                calibration_note = "Original Stakes Weights"
+                strategy_note = "👑 Class heavily weighted (3.0×) as historical performance at this level is critical. Elite trainers and proven stakes performers favored."
+            
+            st.info(f"{weights_display}  \n_({calibration_note})_")
+            st.caption(strategy_note)
             
             # ═══════════════════════════════════════════════════════════════════════
             # COMPONENT WEIGHT CALCULATION (Must happen AFTER race_quality defined)
@@ -4221,14 +4544,37 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 speed_multiplier = 2.5
                 class_weight = 2.0
                 form_weight = 1.8
+                weight_profile = "CLAIMING (Calibrated TUP R4/R5/R7)"
             elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":  # Allowance/MSW
                 speed_multiplier = 2.2
                 class_weight = 2.5
                 form_weight = 2.0
+                weight_profile = "ALLOWANCE/MSW (Calibrated TUP R6)"
             else:  # Stakes/Graded
                 speed_multiplier = 1.8
                 class_weight = 3.0
                 form_weight = 1.8
+                weight_profile = "STAKES/GRADED (Original)"
+            
+            # Display applied weights for transparency
+            with st.expander("⚖️ Component Weights Applied", expanded=False):
+                st.caption(f"**Weight Profile:** {weight_profile}")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Speed Weight", f"{speed_multiplier}×", help="Recent speed figures matter this much")
+                with col2:
+                    st.metric("Class Weight", f"{class_weight}×", help="Historical class/purse levels matter this much")
+                with col3:
+                    st.metric("Form Weight", f"{form_weight}×", help="Recent form cycle matters this much")
+                
+                st.caption("**Other Components:** Pace 1.5× (capped at 0.75 in claiming), Style 1.2×, Post 0.8×")
+                
+                if race_quality == "low" or race_quality == "low-maiden":
+                    st.info("🎯 **Claiming Race Strategy:** Speed and recent form heavily weighted. Pace capped at +0.75 to prevent over-reliance. Trainer quality critical (0% trainer = -2.5 penalty).")
+                elif race_quality == "high":
+                    st.info("🎯 **Allowance Race Strategy:** Balanced approach favoring class and form. Speed slightly elevated vs stakes. Hot trainers get +0.5 to +0.8 bonus.")
+                elif race_quality == "elite":
+                    st.info("🎯 **Stakes Race Strategy:** Class heavily weighted (3.0×) as historical performance at this level is critical. Elite trainers and proven stakes performers favored.")
             
             # Apply pace component with claiming race cap (TUP R7)
             pace_contribution = cpace * 1.5
