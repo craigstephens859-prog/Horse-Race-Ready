@@ -1091,15 +1091,21 @@ def detect_bounce_risk(speed_figs: List[int]) -> float:
 # ========== END SAVANT ENHANCEMENTS ==========
 
 SPEED_FIG_RE = re.compile(
-    # Matches a date, track, etc., then a race type, then captures the first fig
-    r"(?mi)^\s*(\d{2}[A-Za-z]{3}\d{2})\s+.*?" # Date (e.g., 23Sep23)
-    r"\b(Clm|Mdn|Md\s*Sp\s*Wt|MSW|MCL|Alw|AOC|OC|G[123]|Stk|Hcp)\b" # Race type (added MSW, MCL, AOC)
-    r".*?\s+(\d{2,3})(?:\s|$)" # Speed figure followed by whitespace or end
+    # CRITICAL FIX: Match the actual BRISNET format with E1 E2/ LP +calls SPEED_FIG
+    # Example: "88 81/ 77 +4 +1 70"  where 70 is the speed figure
+    r"(?mi)"
+    r"\s+(\d{2,3})"                    # E1 pace figure (88)
+    r"\s+(\d{2,3})\s*/\s*(\d{2,3})"   # E2/LP figures (81/ 77)
+    r"\s+[+-]\d+"                      # Call position (+4)
+    r"\s+[+-]\d+"                      # Call position (+1)
+    r"\s+(\d{2,3})"                    # SPEED FIGURE (70) - THIS IS WHAT WE WANT!
+    r"(?:\s|$)"                        # End with space or end of line
 )
 
 def parse_speed_figures_for_block(block) -> List[int]:
     """
     Parses a horse's PP text block and extracts all main speed figures.
+    CRITICAL: Speed figure is in the 4th capture group after E1, E2, LP
     """
     figs = []
     if not block:
@@ -1110,8 +1116,8 @@ def parse_speed_figures_for_block(block) -> List[int]:
 
     for m in SPEED_FIG_RE.finditer(block_str):
         try:
-            # The speed figure is the third capture group
-            fig_val = int(m.group(3))
+            # The speed figure is the FOURTH capture group (after E1, E2, LP)
+            fig_val = int(m.group(4))
             # Basic sanity check for a realistic speed figure
             if 40 < fig_val < 130:
                 figs.append(fig_val)
