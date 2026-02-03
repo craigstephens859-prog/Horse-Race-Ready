@@ -110,7 +110,7 @@ if "pp_text_cache" not in st.session_state:
 
 # Defaults for Race Info
 if 'track_name' not in st.session_state:
-    st.session_state['track_name'] = "Keeneland"
+    st.session_state['track_name'] = "Unknown Track"
 if 'surface_type' not in st.session_state:
     st.session_state['surface_type'] = "Dirt"
 if 'condition_txt' not in st.session_state:
@@ -329,6 +329,7 @@ TRACK_ALIASES = {
     "Charles Town": ["charlestown", "charles town", "ct"],
     "Gulfstream": ["gulfstream", "gulfstream park", "gp"],
     "Tampa Bay Downs": ["tampa", "tampa bay downs", "tam"],
+    "Turf Paradise": ["turf paradise", "tup", "turf"],
     "Belmont Park": ["belmont", "belmont park", "bel", "aqueduct at belmont", "belmont at aqueduct", "big a"],
     "Horseshoe Indianapolis": ["horseshoe indianapolis", "indiana grand", "ind", "indy"],
     "Penn National": ["penn national", "pen"],
@@ -344,15 +345,34 @@ for canon, toks in TRACK_ALIASES.items():
         _CANON_BY_TOKEN[t] = canon
 
 def parse_track_name_from_pp(pp_text: str) -> str:
-    head = (pp_text or "")[:800].lower()
+    """
+    Parse track name from BRISNET PP text.
+    Checks both:
+    1. Header/title text for full track names
+    2. Race history lines for track abbreviations (e.g., 29Dec25Tup, 08Nov25Aquª)
+    """
+    text = (pp_text or "")[:2000].lower()  # Increased to capture race history
+    
+    # First, check for track abbreviations in race history date lines
+    # Pattern: DDMmmYYTrk (e.g., 29Dec25Tup, 08Nov25Aquª)
+    date_line_pattern = r'\d{2}[A-Za-z]{3}\d{2}([A-Za-z]{2,4})'
+    for match in re.finditer(date_line_pattern, text):
+        track_code = match.group(1).lower()
+        if track_code in _CANON_BY_TOKEN:
+            return _CANON_BY_TOKEN[track_code]
+    
+    # Second, check for full track names in header
     for token, canon in _CANON_BY_TOKEN.items():
-        if re.search(rf'\b{re.escape(token)}\b', head):
+        if re.search(rf'\b{re.escape(token)}\b', text):
             return canon
+    
+    # Third, check for multi-word track names
     for canon, toks in TRACK_ALIASES.items():
         for t in toks:
             t_words = [w for w in t.split() if len(w) > 2]
-            if t_words and all(re.search(rf'\b{re.escape(w)}\b', head) for w in t_words):
+            if t_words and all(re.search(rf'\b{re.escape(w)}\b', text) for w in t_words):
                 return canon
+    
     return ""
 
 def detect_race_number(pp_text: str) -> Optional[int]:
