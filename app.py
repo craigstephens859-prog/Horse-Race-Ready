@@ -806,8 +806,16 @@ HORSE_HDR_RE = re.compile(
 )
 
 def _normalize_style(tok: str) -> str:
+    """Normalize running style token to canonical form.
+    
+    Handles all case variations: EP, E/P, ep, e/p, Ep, etc.
+    """
     t = (tok or "").upper().strip()
-    return "E/P" if t in ("EP", "E/P") else t
+    # Handle all E/P variations
+    if t in ("EP", "E/P", "E-P"):
+        return "E/P"
+    # Return uppercase version for other styles
+    return t
 
 def calculate_style_strength(style: str, quirin: float) -> str:
     s = (style or "NA").upper()
@@ -964,6 +972,7 @@ def detect_lasix_change(block) -> float:
             lasix_pattern.append(True)
         else:
             lasix_pattern.append(False)
+    # CRITICAL FIX: Validate list has at least 2 elements before accessing indices
     if len(lasix_pattern) >= 2:
         if lasix_pattern[0] and not any(lasix_pattern[1:]):
             bonus += 0.18  # First-time Lasix = major boost
@@ -1003,7 +1012,8 @@ def parse_fractional_positions(block) -> List[List[int]]:
 def calculate_trip_quality(positions: List[List[int]], field_size: int = 10) -> float:
     """SAVANT ANGLE: Trip handicapping. Returns bonus from -0.04 to +0.12"""
     bonus = 0.0
-    if not positions or len(positions[0]) < 6:
+    # CRITICAL FIX: Check positions exists AND has elements before accessing
+    if not positions or len(positions) == 0 or len(positions[0]) < 6:
         return bonus
     pp, st, c1, c2, stretch, finish = positions[0]
     if pp >= 7 and st >= 7 and finish <= 3:
@@ -1519,7 +1529,10 @@ def calculate_exotics_biased(fair_probs: Dict[str,float],
         prob *= w_first(horses[i]) * w_second(horses[j])
         ex_rows.append({"Ticket":f"{horses[i]} → {horses[j]}", "Prob":prob})
 
-    ex_total = sum(r["Prob"] for r in ex_rows) or 1.0
+    # CRITICAL FIX: Validate probability sum before normalization
+    ex_total = sum(r["Prob"] for r in ex_rows)
+    if ex_total <= 1e-9:  # If sum is essentially zero, return empty DataFrame
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     for r in ex_rows: r["Prob"] = r["Prob"]/ex_total
     for r in ex_rows:
         if r["Prob"] > 1e-9:
@@ -1735,10 +1748,12 @@ def calculate_form_trend(recent_finishes: List[int]) -> float:
     # Check for improvement pattern (finishes getting better = lower numbers)
     if len(recent_finishes) >= 3:
         recent_3 = recent_finishes[:3]
-        if recent_3[0] < recent_3[1] < recent_3[2]:  # Improving (3rd, 4th, 5th → getting better)
-            return 1.5  # Strong improvement
-        elif recent_3[0] > recent_3[1] > recent_3[2]:  # Declining
-            return -1.2  # Declining form
+        # CRITICAL FIX: Verify list has exactly 3 elements before comparison
+        if len(recent_3) == 3:
+            if recent_3[0] < recent_3[1] < recent_3[2]:  # Improving (3rd, 4th, 5th → getting better)
+                return 1.5  # Strong improvement
+            elif recent_3[0] > recent_3[1] > recent_3[2]:  # Declining
+                return -1.2  # Declining form
 
     # Weighted average scoring
     if weighted_avg <= 1.5:  # Consistently winning/placing
@@ -1784,12 +1799,22 @@ def parse_workout_data(block) -> dict:
             total = int(match.group(7)) if match.group(7) else None
 
             time_clean = re.sub(r'[«©ª¬®¯°¨]', '', time_str)
-            if ':' in time_clean:
-                parts = time_clean.split(':')
-                time_seconds = float(parts[0]) * 60 + float(parts[1]) if len(parts) == 2 else float(parts[1])
-            else:
-                time_seconds = float(time_clean)
+            # CRITICAL FIX: Wrap float conversions in try-except to prevent ValueError
+            try:
+                if ':' in time_clean:
+                    parts = time_clean.split(':')
+                    if len(parts) == 2:
+                        time_seconds = float(parts[0]) * 60 + float(parts[1])
+                    elif len(parts) > 0:
+                        time_seconds = float(parts[-1])  # Use last part if malformed
+                    else:
+                        continue  # Skip this workout if no valid parts
+                else:
+                    time_seconds = float(time_clean)
+            except (ValueError, IndexError):
+                continue  # Skip workout if conversion fails
 
+            # CRITICAL FIX: Validate distance > 0 before division
             normalized_time = time_seconds * (4.0 / distance) if distance > 0 else 999
 
             work_details.append({
@@ -1819,6 +1844,12 @@ def parse_workout_data(block) -> dict:
 
         if work_details[0]['bullet']:
             bonus += 0.03  # Recent bullet
+        
+        # CRITICAL FIX: Validate total > 0 before division to prevent ZeroDivisionError
+        if work_details[0]['rank'] and work_details[0]['total'] and work_details[0]['total'] > 0:
+            percentile = work_details[0]['rank'] / work_details[0]['total']
+            if percentile <= 0.2:
+                bonus += 0.05  # Top 20% of field
 
         if 'g' in work_details[0]['grade'].lower():
             bonus += 0.03  # Gate work
@@ -2554,9 +2585,13 @@ pp_text_widget = st.text_area(
     value=st.session_state["pp_text_cache"],
     height=300,
     key="pp_text_input",
-    help="Paste the text from a BRIS Ultimate Past Performances PDF.",
+    help="Paste the text from a BRIS Ultimate Past Performances PDF. Minimum 100 characters required.",
     disabled=st.session_state["parsed"]
 )
+
+# VALIDATION: Check minimum text length
+if pp_text_widget and len(pp_text_widget.strip()) < 100:
+    st.warning("⚠️ PP text too short. Please paste complete Past Performance data (minimum 100 characters).")
 
 col_parse, col_reset = st.columns([1,1])
 with col_parse:
@@ -2574,22 +2609,27 @@ if reset_clicked:
 
 if parse_clicked:
     text_now = (st.session_state.get("pp_text_input") or "").strip()
+    # CRITICAL FIX: Validate text length before parsing
     if not text_now:
         st.warning("Paste PPs text first.")
+    elif len(text_now) < 100:
+        st.error("❌ PP text too short. Please paste complete Past Performance data (minimum 100 characters).")
     else:
-        # SECURITY: Validate PP text before processing
-        if SECURITY_VALIDATORS_AVAILABLE:
-            try:
-                text_now = sanitize_pp_text(text_now)
-            except ValueError as e:
-                st.error(f"Invalid PP text: {e}")
-                st.stop()
+        # PERFORMANCE: Add progress indicator for parsing operation
+        with st.spinner("🔍 Parsing Past Performances..."):
+            # SECURITY: Validate PP text before processing
+            if SECURITY_VALIDATORS_AVAILABLE:
+                try:
+                    text_now = sanitize_pp_text(text_now)
+                except ValueError as e:
+                    st.error(f"Invalid PP text: {e}")
+                    st.stop()
 
-        st.session_state["pp_text_cache"] = text_now
-        st.session_state["parsed"] = True
-        # Clear Classic Report from previous race
-        st.session_state.pop('classic_report_generated', None)
-        st.session_state.pop('classic_report', None)
+            st.session_state["pp_text_cache"] = text_now
+            st.session_state["parsed"] = True
+            # Clear Classic Report from previous race
+            st.session_state.pop('classic_report_generated', None)
+            st.session_state.pop('classic_report', None)
         _safe_rerun()
 
 if not st.session_state["parsed"]:
@@ -2622,7 +2662,8 @@ if 'race_num' not in st.session_state:
     st.session_state['race_num'] = 1
 auto_race_num = detect_race_number(pp_text)
 default_race_num = int(auto_race_num) if auto_race_num else st.session_state['race_num']
-race_num = st.number_input("Race Number:", min_value=1, max_value=15, step=1, value=default_race_num)
+# CRITICAL FIX: Increase max_value to 20 (some tracks have 16+ races)
+race_num = st.number_input("Race Number:", min_value=1, max_value=20, step=1, value=default_race_num)
 st.session_state['race_num'] = race_num
 
 # Surface auto from header, but allow override
@@ -6461,7 +6502,8 @@ else:
                 try:
                     import sqlite3
                     import os
-                    conn = sqlite3.connect(gold_db.db_path)
+                    # CRITICAL FIX: Add timeout to prevent database lock hangs
+                    conn = sqlite3.connect(gold_db.db_path, timeout=10.0)
                     cursor = conn.cursor()
                     
                     # COMPREHENSIVE DATABASE CHECK
@@ -6614,7 +6656,8 @@ else:
 
                 try:
                     import sqlite3
-                    conn = sqlite3.connect(gold_db.db_path)
+                    # CRITICAL FIX: Add timeout to prevent database lock hangs
+                    conn = sqlite3.connect(gold_db.db_path, timeout=10.0)
                     history_df = pd.read_sql_query("""
                         SELECT
                             retrain_timestamp,
