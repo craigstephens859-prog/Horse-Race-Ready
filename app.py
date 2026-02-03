@@ -4437,6 +4437,75 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         #
         # This creates an adaptive intelligence that learns race-to-race patterns
         
+        # ═══════════════════════════════════════════════════════════════════════
+        # CALCULATE WEIGHTED COMPONENTS (must happen BEFORE Prime Power check)
+        # ═══════════════════════════════════════════════════════════════════════
+        # CRITICAL FIX: weighted_components must be calculated before the
+        # if prime_power_raw > 0 block, otherwise the else branch will fail
+        # with UnboundLocalError when trying to use it
+        
+        # Apply component weights based on race_quality
+        # These weights are already set in the race info section
+        speed_multiplier = 1.8  # Default
+        class_weight = 3.0
+        form_weight = 1.8
+        
+        # Determine race quality for this horse's calculation
+        # Use race_type parameter or detect from PP text
+        race_quality = "mid"  # Default
+        try:
+            # Try to detect race quality from PP text
+            race_metadata = extract_race_metadata_from_pp_text(pp_text)
+            race_type_clean = race_metadata.get('race_type_clean', '')
+            purse_amount = race_metadata.get('purse_amount', 0)
+            
+            # Map to quality tier
+            if race_type_clean == 'stakes_graded':
+                race_quality = "elite"
+            elif race_type_clean == 'stakes' and purse_amount >= 200000:
+                race_quality = "elite"
+            elif race_type_clean in ['allowance', 'allowance_optional']:
+                race_quality = "high"
+            elif race_type_clean == 'claiming':
+                race_quality = "low"
+            elif race_type_clean == 'maiden_claiming':
+                race_quality = "low-maiden"
+            elif purse_amount >= 500000:
+                race_quality = "elite"
+        except:
+            pass  # Use default race_quality
+        
+        # Set weights based on race quality
+        if race_quality == "low" or race_quality == "low-maiden":
+            speed_multiplier = 2.5
+            class_weight = 2.0
+            form_weight = 1.8
+        elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":
+            speed_multiplier = 2.2
+            class_weight = 2.5
+            form_weight = 2.0
+        else:  # elite/stakes
+            speed_multiplier = 1.8
+            class_weight = 3.0
+            form_weight = 1.8
+        
+        # Apply pace component with claiming race cap
+        pace_contribution = cpace * 1.5
+        if race_quality == "low" or race_quality == "low-maiden":
+            if pace_contribution > 0.75:
+                pace_contribution = 0.75
+        
+        # Calculate weighted components (available for both PP and non-PP paths)
+        weighted_components = (
+            c_class * class_weight +
+            c_form * form_weight +
+            cspeed * speed_multiplier +
+            pace_contribution +
+            cstyle * 1.2 +
+            cpost * 0.8
+        )
+        
+        # Now check if Prime Power is available
         prime_power_raw = safe_float(row.get('Prime Power', 0.0), 0.0)
         if prime_power_raw > 0:
             # Normalize Prime Power (typical range: 110-130, clip outliers to 0-2 scale)
@@ -4499,42 +4568,26 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     race_type_clean = 'maiden_special_weight'
                 detection_confidence = 0.6
             
-            # STEP 3: Map to race_quality tier (determines component weights)
-            race_quality = "mid"  # Default fallback
+            # ═══════════════════════════════════════════════════════════════════════
+            # ENHANCED RACE QUALITY DETECTION (When Prime Power IS available)
+            # ═══════════════════════════════════════════════════════════════════════
+            # When PP is present, we can refine the race quality detection with purse details
             
-            # ELITE TIER: Graded Stakes + High-Purse Stakes
-            if race_type_clean == 'stakes_graded':
-                race_quality = "elite"
-            elif race_type_clean == 'stakes':
-                if purse_amount >= 200000:
-                    race_quality = "elite"
-                else:
-                    race_quality = "high"
-            # HIGH TIER: Allowance races (including AOC)
-            elif race_type_clean in ['allowance', 'allowance_optional']:
-                race_quality = "high"
-            # LOW TIER: Claiming races
-            elif race_type_clean == 'claiming':
-                race_quality = "low"
-            elif race_type_clean == 'maiden_claiming':
-                race_quality = "low-maiden"
-            # MID TIER: Maiden Special Weight
-            elif race_type_clean in ['maiden_special_weight', 'maiden']:
-                if purse_amount >= 70000:
-                    race_quality = "mid-maiden"
-                else:
-                    race_quality = "low-maiden"
-            # STARTER races (mid-tier)
-            elif race_type_clean in ['starter_allowance', 'starter_handicap']:
-                race_quality = "mid"
+            # STEP 1: Extract detailed race metadata from PP text
+            race_metadata = extract_race_metadata_from_pp_text(pp_text)
+            purse_amount = race_metadata['purse_amount']
+            race_type_clean = race_metadata['race_type_clean']
+            detection_confidence = race_metadata['confidence']
             
-            # STEP 4: Purse-based override (very high purse = upgrade tier)
+            # STEP 2: Override/refine race_quality if we have better purse/type info
             if purse_amount >= 500000:
                 race_quality = "elite"
             elif purse_amount >= 150000 and race_quality not in ["elite", "high"]:
                 race_quality = "high"
+            elif race_type_clean == 'stakes_graded' and race_quality != "elite":
+                race_quality = "elite"
             
-            # STEP 5: Display detected metadata for user validation
+            # STEP 3: Display detected metadata for user validation
             with st.expander("🔍 Race Classification & Detection Details", expanded=False):
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -4554,68 +4607,6 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     st.warning("⚠️ **Low confidence detection** - Verify race type is correctly classified")
                 if purse_amount == 0:
                     st.info("ℹ️ Purse not detected - Using race type classification only")
-            
-            # Display which weights will be applied based on race_quality
-            st.markdown("### ⚖️ Component Weights Configuration")
-            if race_quality == "low" or race_quality == "low-maiden":
-                weights_display = "**Speed: 2.5×** | **Class: 2.0×** | **Form: 1.8×** | **Pace Cap: +0.75 max**"
-                calibration_note = "TUP R4/R5/R7 Claiming Calibration"
-                strategy_note = "🎯 Speed and recent form heavily weighted. Pace capped to prevent over-reliance. Trainer quality critical (0% trainer = -2.5 penalty)."
-            elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":
-                weights_display = "**Speed: 2.2×** | **Class: 2.5×** | **Form: 2.0×** | **Pace: No Cap**"
-                calibration_note = "TUP R6 Allowance/MSW Calibration"
-                strategy_note = "⚖️ Balanced approach favoring class and form. Speed slightly elevated vs stakes. Hot trainers get +0.5 to +0.8 bonus."
-            else:  # elite/stakes
-                weights_display = "**Speed: 1.8×** | **Class: 3.0×** | **Form: 1.8×** | **Pace: No Cap**"
-                calibration_note = "Original Stakes Weights"
-                strategy_note = "👑 Class heavily weighted (3.0×) as historical performance at this level is critical. Elite trainers and proven stakes performers favored."
-            
-            st.info(f"{weights_display}  \n_({calibration_note})_")
-            st.caption(strategy_note)
-            
-            # ═══════════════════════════════════════════════════════════════════════
-            # COMPONENT WEIGHT CALCULATION (Must happen AFTER race_quality defined)
-            # ═══════════════════════════════════════════════════════════════════════
-            # ALLOWANCE CALIBRATION (TUP R6 Feb 2026): Recent speed matters more than historical class
-            #   Failed pick #2 Ez Cowboy: High class (×3.0) but speed LR ranked 5th (68)
-            #   Winner #5 Cactus League: Lower class but hot trainer/2nd time Lasix angles
-            #   Fix: Speed 1.8→2.2 for allowance, Class 3.0→2.5, Form 1.8→2.0
-            # CLAIMING BOOST: Increase speed weight in claiming races (TUP R5 winner had highest speed LR)
-            if race_quality == "low" or race_quality == "low-maiden":  # Claiming
-                speed_multiplier = 2.5
-                class_weight = 2.0
-                form_weight = 1.8
-                weight_profile = "CLAIMING (Calibrated TUP R4/R5/R7)"
-            elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":  # Allowance/MSW
-                speed_multiplier = 2.2
-                class_weight = 2.5
-                form_weight = 2.0
-                weight_profile = "ALLOWANCE/MSW (Calibrated TUP R6)"
-            else:  # Stakes/Graded
-                speed_multiplier = 1.8
-                class_weight = 3.0
-                form_weight = 1.8
-                weight_profile = "STAKES/GRADED (Original)"
-            
-            # Display applied weights for transparency
-            with st.expander("⚖️ Component Weights Applied", expanded=False):
-                st.caption(f"**Weight Profile:** {weight_profile}")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Speed Weight", f"{speed_multiplier}×", help="Recent speed figures matter this much")
-                with col2:
-                    st.metric("Class Weight", f"{class_weight}×", help="Historical class/purse levels matter this much")
-                with col3:
-                    st.metric("Form Weight", f"{form_weight}×", help="Recent form cycle matters this much")
-                
-                st.caption("**Other Components:** Pace 1.5× (capped at 0.75 in claiming), Style 1.2×, Post 0.8×")
-                
-                if race_quality == "low" or race_quality == "low-maiden":
-                    st.info("🎯 **Claiming Race Strategy:** Speed and recent form heavily weighted. Pace capped at +0.75 to prevent over-reliance. Trainer quality critical (0% trainer = -2.5 penalty).")
-                elif race_quality == "high":
-                    st.info("🎯 **Allowance Race Strategy:** Balanced approach favoring class and form. Speed slightly elevated vs stakes. Hot trainers get +0.5 to +0.8 bonus.")
-                elif race_quality == "elite":
-                    st.info("🎯 **Stakes Race Strategy:** Class heavily weighted (3.0×) as historical performance at this level is critical. Elite trainers and proven stakes performers favored.")
             
             # Apply pace component with claiming race cap (TUP R7)
             pace_contribution = cpace * 1.5
