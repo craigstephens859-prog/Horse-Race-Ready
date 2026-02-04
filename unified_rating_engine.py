@@ -338,12 +338,12 @@ class UnifiedRatingEngine:
 
         # Prepare horse data dict for Bayesian framework
         horse_dict = {
-            'recent_finishes': horse.recent_finishes or [],
-            'days_since_last': horse.days_since_last or 30,
-            'speed_figures': horse.speed_figures or [],
-            'avg_top2': horse.avg_top2 or 0.0
+            'recent_finishes': horse.recent_finishes if horse.recent_finishes else [],
+            'days_since_last': horse.days_since_last if horse.days_since_last is not None else 30,
+            'speed_figures': horse.speed_figures if horse.speed_figures else [],
+            'avg_top2': horse.avg_top2 if horse.avg_top2 and horse.avg_top2 > 0 else 80.0
         }
-        parsing_conf = horse.parsing_confidence
+        parsing_conf = horse.parsing_confidence if horse.parsing_confidence > 0 else 0.5
 
         # Component 1: CLASS [-3.0 to +6.0] with uncertainty
         cclass_det = self._calc_class(horse, today_purse, today_race_type)
@@ -408,7 +408,7 @@ class UnifiedRatingEngine:
             mud_adjustment = self._adjust_for_off_track(horse, condition_txt)
 
         # WEIGHTED COMBINATION WITH UNCERTAINTY PROPAGATION
-        component_ratings = {
+        component_ratings_dict = {
             'class': (cclass, cclass_std),
             'form': (cform, cform_std),
             'speed': (cspeed, cspeed_std),
@@ -417,17 +417,23 @@ class UnifiedRatingEngine:
             'post': (cpost, cpost_std)
         }
         
-        final_bayes = calculate_final_rating_with_uncertainty(
-            component_ratings,
-            self.WEIGHTS,
-            angles_bonus=angles_total * self.WEIGHTS['angles'],
-            tier2_bonus=tier2,
-            extra_bonuses=[mud_adjustment]
+        # Convert tuples to BayesianRating objects for aggregation
+        from bayesian_rating_framework import BayesianRating
+        component_ratings_bayesian = {}
+        for name, (mean, std) in component_ratings_dict.items():
+            component_ratings_bayesian[name] = BayesianRating(mean=mean, std=std)
+        
+        # Calculate weighted sum with uncertainty
+        final_mean, final_std = calculate_final_rating_with_uncertainty(
+            component_ratings_bayesian,
+            self.WEIGHTS
         )
         
-        final_rating = final_bayes.mean
-        final_rating_std = final_bayes.std
-        confidence_level = final_bayes.confidence_level
+        # Add bonuses (these don't have uncertainty, so add deterministically)
+        angles_bonus = angles_total * self.WEIGHTS['angles']
+        final_rating = final_mean + angles_bonus + tier2 + mud_adjustment
+        final_rating_std = final_std
+        confidence_level = 1.0 - (final_std / (abs(final_mean) + 1e-6))
 
         return RatingComponents(
             cclass=round(cclass, 2),
