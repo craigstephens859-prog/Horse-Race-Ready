@@ -440,7 +440,8 @@ class UnifiedRatingEngine:
 
             return float(np.clip(rating, -2.0, 3.0))
 
-        # Layoff factor
+        # Layoff factor (PEGASUS TUNING: More aggressive penalties for long layoffs)
+        # White Abarrio 146-day layoff was heavily under-penalized
         if horse.days_since_last is not None:
             days = horse.days_since_last
             if days <= 14:
@@ -451,12 +452,15 @@ class UnifiedRatingEngine:
                 rating += 0.0
             elif days <= 90:
                 rating -= 0.5
+            elif days <= 120:
+                rating -= 1.5  # INCREASED from -1.0
             elif days <= 180:
-                rating -= 1.0
+                rating -= 3.0  # INCREASED from -1.0
             else:
-                rating -= 2.0
+                rating -= 5.0  # INCREASED from -2.0
 
-        # Form trend
+        # Form trend (PEGASUS TUNING: Reward winners more aggressively)
+        # Skippylongstocking won last out but wasn't rewarded enough
         if horse.recent_finishes and len(horse.recent_finishes) >= 3:
             finishes = horse.recent_finishes[:5]
 
@@ -470,9 +474,17 @@ class UnifiedRatingEngine:
             if finishes[0] > finishes[1] > finishes[2]:
                 rating -= 1.2
 
-            # Recent win bonus
+            # Recent win bonus (INCREASED: +0.8 → +2.5)
             if finishes[0] == 1:
-                rating += 0.8
+                rating += 2.5  # INCREASED from 0.8
+                
+                # Back-to-back wins bonus (NEW)
+                if len(finishes) >= 2 and finishes[1] == 1:
+                    rating += 4.0  # Total +6.5 for winning streak
+
+            # Recent place/show bonus (NEW)
+            elif finishes[0] in [2, 3]:
+                rating += 1.0  # Reward in-the-money finishes
 
             # Consistency bonus
             if all(f <= 3 for f in finishes):
