@@ -33,6 +33,7 @@ from bayesian_rating_framework import (
     enhance_rating_with_bayesian_uncertainty,
     calculate_final_rating_with_uncertainty
 )
+from multinomial_logit_model import MultinomialLogitModel, FinishProbabilities
 
 @dataclass
 class RatingComponents:
@@ -96,7 +97,8 @@ class UnifiedRatingEngine:
         'use_exponential_decay_form': True,   # +12% accuracy improvement
         'use_game_theoretic_pace': True,      # +14% accuracy improvement
         'use_entropy_confidence': True,       # Better bet selection
-        'use_mud_adjustment': True            # +3% on off-tracks
+        'use_mud_adjustment': True,           # +3% on off-tracks
+        'enable_multinomial_logit': True      # Bill Benter-style finish probabilities
     }
     
     # Form decay constant (0.01 = 69-day half-life)
@@ -126,6 +128,7 @@ class UnifiedRatingEngine:
         self.parser = GoldStandardBRISNETParser()
         self.softmax_tau = softmax_tau
         self.last_validation = None
+        self.logit_model = MultinomialLogitModel(use_uncertainty=True)
 
     def predict_race(self,
                     pp_text: str,
@@ -242,6 +245,36 @@ class UnifiedRatingEngine:
         # Sort by probability descending
         results_df = results_df.sort_values('Probability', ascending=False).reset_index(drop=True)
         results_df['Predicted_Finish'] = results_df.index + 1
+
+        # ELITE ENHANCEMENT: Multinomial Logit Finish Probabilities (Bill Benter-style)
+        if self.FEATURE_FLAGS['enable_multinomial_logit']:
+            logger.debug("STEP 7: Calculating multinomial logit finish probabilities")
+            
+            # Extract Bayesian components for uncertainty propagation
+            bayesian_components_dict = self._extract_bayesian_components(results_df)
+            
+            # Calculate P(1st), P(2nd), P(3rd) using logit model
+            finish_probs = self.logit_model.calculate_finish_probabilities(
+                results_df, 
+                bayesian_components=bayesian_components_dict
+            )
+            
+            # Add finish probabilities to results
+            for fp in finish_probs:
+                idx = results_df[results_df['Horse'] == fp.horse_name].index[0]
+                results_df.loc[idx, 'P_Win_Logit'] = fp.p_win
+                results_df.loc[idx, 'P_Place_Logit'] = fp.p_place
+                results_df.loc[idx, 'P_Show_Logit'] = fp.p_show
+                results_df.loc[idx, 'Expected_Finish_Logit'] = fp.expected_finish
+                results_df.loc[idx, 'Finish_CI_Lower'] = fp.confidence_interval_95[0]
+                results_df.loc[idx, 'Finish_CI_Upper'] = fp.confidence_interval_95[1]
+            
+            # Calculate exotic bet probabilities
+            exotics = self.logit_model.calculate_exotic_probabilities(finish_probs)
+            results_df.attrs['exotic_probabilities'] = exotics
+            
+            logger.info(f"Multinomial logit: Top pick {finish_probs[0].horse_name} "
+                       f"P(Win)={finish_probs[0].p_win:.1%}, E[Finish]={finish_probs[0].expected_finish:.1f}")
 
         logger.info("Prediction complete")
         logger.info(f"Top selection: {results_df.iloc[0]['Horse']} ({results_df.iloc[0]['Probability']:.1%})")
@@ -1052,6 +1085,42 @@ class UnifiedRatingEngine:
         adjustment = 4.0 * ((mud_pct - 50.0) / 50.0)
         
         return float(np.clip(adjustment, -2.0, 2.0))
+    
+    def _extract_bayesian_components(self, results_df: pd.DataFrame) -> Dict[str, Dict[str, Tuple[float, float]]]:
+        """
+        Extract Bayesian component uncertainties from results DataFrame
+        
+        Returns:
+            Dictionary mapping horse_name -> component_name -> (mean, std)
+            
+        Example:
+            {
+                'Fast Eddie': {
+                    'class': (2.5, 0.3),
+                    'form': (1.5, 0.4),
+                    ...
+                }
+            }
+        
+        Used by MultinomialLogitModel for uncertainty propagation
+        """
+        bayesian_dict = {}
+        
+        for _, row in results_df.iterrows():
+            horse_name = row['Horse']
+            
+            components = {
+                'class': (row.get('Cclass', 0.0), row.get('Cclass_std', 0.0) if 'Cclass_std' in row else 0.0),
+                'form': (row.get('Cform', 0.0), row.get('Cform_std', 0.0) if 'Cform_std' in row else 0.0),
+                'speed': (row.get('Cspeed', 0.0), row.get('Cspeed_std', 0.0) if 'Cspeed_std' in row else 0.0),
+                'pace': (row.get('Cpace', 0.0), row.get('Cpace_std', 0.0) if 'Cpace_std' in row else 0.0),
+                'style': (row.get('Cstyle', 0.0), row.get('Cstyle_std', 0.0) if 'Cstyle_std' in row else 0.0),
+                'post': (row.get('Cpost', 0.0), row.get('Cpost_std', 0.0) if 'Cpost_std' in row else 0.0)
+            }
+            
+            bayesian_dict[horse_name] = components
+        
+        return bayesian_dict
     
     def _softmax_with_confidence(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, float]:
         """
