@@ -240,6 +240,17 @@ app.backup.py
 app.before-*.py
 pylint_report.txt
 
+# Streamlit backup files and merge artifacts
+.streamlit/*_BACKUP*.py
+.streamlit/*_ORIGINAL*.py
+.streamlit/*_MERGED*.py
+.streamlit/merge_*.py
+.streamlit/create_*.py
+.streamlit/find_*.py
+.streamlit/complete_*.py
+.streamlit/MERGE_*.txt
+.streamlit/CONFIG_*.txt
+
 # =====================================================
 # SECURITY-CRITICAL FILES (DO NOT COMMIT)
 # =====================================================
