@@ -318,6 +318,11 @@ class GoldStandardBRISNETParser:
         horses = {}
         self.global_warnings = []
         self.global_errors = []
+        
+        # NEW: Extract race header metadata (purse, distance, race type)
+        self.race_header = self._extract_race_header(pp_text, debug)
+        if debug and self.race_header:
+            logger.info(f"📋 Race Header: {self.race_header}")
 
         try:
             # Step 1: Split into horse chunks
@@ -360,6 +365,156 @@ class GoldStandardBRISNETParser:
             logger.error(traceback.format_exc())
 
         return horses
+
+    # ============ RACE HEADER EXTRACTION ============
+
+    def _extract_race_header(self, pp_text: str, debug: bool = False) -> Dict[str, Any]:
+        """
+        Extract race metadata from header section (before first horse).
+        
+        Returns dict with:
+        - purse: int (race purse amount)
+        - distance: str (e.g., "6 Furlongs", "1 1/8 Miles")
+        - distance_furlongs: float (converted to furlongs for calculations)
+        - race_type: str (e.g., "Grade 1 Stakes", "Claiming")
+        - race_type_normalized: str (e.g., "g1", "claiming")
+        - track_name: str
+        - surface: str ("Dirt", "Turf", "Synthetic")
+        - confidence: float (0.0-1.0)
+        """
+        header_info = {
+            'purse': 0,
+            'distance': '',
+            'distance_furlongs': 0.0,
+            'race_type': '',
+            'race_type_normalized': '',
+            'track_name': '',
+            'surface': '',
+            'confidence': 0.0
+        }
+        
+        # Extract header section (before first horse - typically first 800 chars)
+        header_text = pp_text[:800] if pp_text else ""
+        
+        confidence_score = 0.0
+        
+        # === PURSE EXTRACTION ===
+        purse_patterns = [
+            (r'PURSE\s+\$(\d{1,3}(?:,\d{3})*)', 1.0),  # "PURSE $100,000"
+            (r'Purse:\s+\$(\d{1,3}(?:,\d{3})*)', 1.0),  # "Purse: $50,000"
+            (r'\$(\d{1,3}(?:,\d{3})*)\s+(?:Grade|Stakes|Allowance)', 0.95),  # "$100,000 Grade 1"
+            (r'(Clm|MC|Alw|OC)(\d{4,6})', 0.85),  # "Clm25000" embedded format
+        ]
+        
+        for pattern, conf in purse_patterns:
+            match = re.search(pattern, header_text, re.IGNORECASE)
+            if match:
+                try:
+                    if len(match.groups()) == 1:
+                        purse_str = match.group(1).replace(',', '')
+                        header_info['purse'] = int(purse_str)
+                    else:  # Embedded format like Clm25000
+                        header_info['purse'] = int(match.group(2))
+                    confidence_score += conf * 0.33
+                    if debug:
+                        logger.info(f"  💵 Purse: ${header_info['purse']:,} (pattern: {pattern[:30]}...)")
+                    break
+                except (ValueError, AttributeError):
+                    pass
+        
+        # === DISTANCE EXTRACTION ===
+        distance_patterns = [
+            (r'(\d+(?:\s+\d+/\d+)?)\s+(Furlong|Mile)s?', 1.0),  # "6 Furlongs", "1 1/8 Miles"
+            (r'(\d+)F', 0.9),  # "6F"
+            (r'(\d+\.\d+)\s*Miles?', 0.9),  # "1.125 Miles"
+        ]
+        
+        for pattern, conf in distance_patterns:
+            match = re.search(pattern, header_text, re.IGNORECASE)
+            if match:
+                try:
+                    header_info['distance'] = match.group(0)
+                    
+                    # Convert to furlongs
+                    if 'Mile' in match.group(0):
+                        if '/' in match.group(0):  # "1 1/8 Miles"
+                            parts = match.group(1).split()
+                            whole = int(parts[0]) if parts else 0
+                            frac = parts[1] if len(parts) > 1 else "0/1"
+                            num, den = map(int, frac.split('/'))
+                            miles = whole + (num / den)
+                            header_info['distance_furlongs'] = miles * 8
+                        else:  # "1.125 Miles"
+                            miles = float(match.group(1))
+                            header_info['distance_furlongs'] = miles * 8
+                    elif 'Furlong' in match.group(0):
+                        header_info['distance_furlongs'] = float(match.group(1))
+                    elif 'F' in match.group(0):
+                        header_info['distance_furlongs'] = float(match.group(1))
+                    
+                    confidence_score += conf * 0.33
+                    if debug:
+                        logger.info(f"  📏 Distance: {header_info['distance']} ({header_info['distance_furlongs']}F)")
+                    break
+                except (ValueError, AttributeError):
+                    pass
+        
+        # === RACE TYPE EXTRACTION ===
+        race_type_patterns = [
+            (r'Grade\s+(I{1,3}|[123])\s+Stakes', 'g1/g2/g3', 1.0),
+            (r'G([123])\s+Stakes?', 'g1/g2/g3', 1.0),
+            (r'Stakes', 'stakes', 0.95),
+            (r'Allowance\s+Optional\s+Claiming', 'allowance_optional', 0.95),
+            (r'Optional\s+Claiming', 'allowance_optional', 0.95),
+            (r'Allowance', 'allowance', 0.95),
+            (r'\bAOC\b', 'allowance_optional', 0.9),
+            (r'Maiden\s+Claiming', 'maiden_claiming', 0.95),
+            (r'Maiden\s+Special\s+Weight', 'maiden_special_weight', 0.95),
+            (r'\bMSW\b', 'maiden_special_weight', 0.9),
+            (r'Claiming', 'claiming', 0.95),
+            (r'\bClm\d+', 'claiming', 0.9),
+            (r'\bMC\d+', 'maiden_claiming', 0.9),
+        ]
+        
+        for pattern, normalized, conf in race_type_patterns:
+            match = re.search(pattern, header_text, re.IGNORECASE)
+            if match:
+                header_info['race_type'] = match.group(0)
+                
+                # Normalize grade levels
+                if 'Grade' in match.group(0) or 'G' in match.group(0):
+                    if 'I' in match.group(0) or '1' in match.group(0):
+                        header_info['race_type_normalized'] = 'grade 1'
+                    elif 'II' in match.group(0) or '2' in match.group(0):
+                        header_info['race_type_normalized'] = 'grade 2'
+                    elif 'III' in match.group(0) or '3' in match.group(0):
+                        header_info['race_type_normalized'] = 'grade 3'
+                else:
+                    header_info['race_type_normalized'] = normalized
+                
+                confidence_score += conf * 0.34
+                if debug:
+                    logger.info(f"  🏆 Race Type: {header_info['race_type']} → {header_info['race_type_normalized']}")
+                break
+        
+        # === TRACK NAME EXTRACTION ===
+        track_match = re.search(r'([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*)\s+Race\s+\d+', header_text[:200])
+        if track_match:
+            header_info['track_name'] = track_match.group(1)
+            if debug:
+                logger.info(f"  🏇 Track: {header_info['track_name']}")
+        
+        # === SURFACE EXTRACTION ===
+        if re.search(r'\bTurf\b', header_text[:300], re.IGNORECASE):
+            header_info['surface'] = 'Turf'
+        elif re.search(r'\bSynthetic\b', header_text[:300], re.IGNORECASE):
+            header_info['surface'] = 'Synthetic'
+        else:
+            header_info['surface'] = 'Dirt'  # Default
+        
+        header_info['confidence'] = min(1.0, confidence_score)
+        
+        return header_info
 
     # ============ CHUNKING (HORSE SPLITTING) ============
 

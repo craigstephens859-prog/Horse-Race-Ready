@@ -4351,27 +4351,33 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 # High quality parse - use unified engine
                 engine = UnifiedRatingEngine(softmax_tau=3.0)
 
-                # Extract race metadata (purse, race type, distance) using comprehensive function
-                race_metadata = extract_race_metadata_from_pp_text(pp_text)
-                today_purse = race_metadata.get('purse_amount', 0)
+                # Extract race metadata using elite parser's race header (most accurate)
+                today_purse = 0
+                final_distance = distance_txt
+                extracted_race_type = race_type
                 
-                # Fallback to session state or defaults if extraction failed
+                if hasattr(parser, 'race_header') and parser.race_header:
+                    race_header = parser.race_header
+                    today_purse = race_header.get('purse', 0)
+                    if race_header.get('distance'):
+                        final_distance = race_header.get('distance')
+                    if race_header.get('race_type_normalized'):
+                        extracted_race_type = race_header.get('race_type_normalized')
+                
+                # Fallback to comprehensive extraction if parser didn't get purse
+                if today_purse == 0:
+                    race_metadata = extract_race_metadata_from_pp_text(pp_text)
+                    today_purse = race_metadata.get('purse_amount', 0)
+                
+                # Final fallback to session state
                 if today_purse == 0:
                     today_purse = st.session_state.get('purse_val', 20000)
                 
-                # Extract distance from PP text header (e.g., "6 Furlongs", "1 1/16 Miles")
-                import re
-                distance_match = re.search(r'(\d+(?:\s+\d+/\d+)?)\s+(Furlong|Mile)', pp_text[:500], re.IGNORECASE)
-                extracted_distance = distance_match.group(0) if distance_match else None
-                
-                # Use extracted distance if found, otherwise use session state
-                final_distance = extracted_distance if extracted_distance else distance_txt
-                
-                # Get predictions
+                # Get predictions with extracted metadata
                 results_df = engine.predict_race(
                     pp_text=pp_text,
                     today_purse=today_purse,
-                    today_race_type=race_type,
+                    today_race_type=extracted_race_type,
                     track_name=track_name,
                     surface_type=surface_type,
                     distance_txt=final_distance
