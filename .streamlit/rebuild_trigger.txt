@@ -1,0 +1,5 @@
+# FORCE REBUILD - Updated 2026-02-04 13:15 PST
+# This file forces Streamlit Cloud to rebuild with latest fixes:
+# - Bug fix: calculate_final_rating_with_uncertainty signature corrected
+# - Bug fix: days_since_last attribute fixed  
+# - Bug fix: None safety checks added for Bayesian calculations
