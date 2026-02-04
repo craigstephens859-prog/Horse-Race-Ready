@@ -27,10 +27,16 @@ except ImportError:
 # Import optimized components
 from horse_angles8 import compute_eight_angles
 from elite_parser_v2_gold import GoldStandardBRISNETParser, HorseData
+from bayesian_rating_framework import (
+    BayesianRating,
+    BayesianComponentRater,
+    enhance_rating_with_bayesian_uncertainty,
+    calculate_final_rating_with_uncertainty
+)
 
 @dataclass
 class RatingComponents:
-    """Structured rating breakdown for transparency"""
+    """Structured rating breakdown for transparency with Bayesian uncertainty"""
     cclass: float  # Class rating [-3.0 to +6.0]
     cform: float   # Form cycle [-3.0 to +3.0]
     cspeed: float  # Speed figures [-2.0 to +2.0]
@@ -41,6 +47,15 @@ class RatingComponents:
     tier2_bonus: float   # SPI, surface stats, etc.
     final_rating: float  # Weighted combination
     confidence: float    # Parsing confidence [0-1]
+    # ELITE ENHANCEMENT: Bayesian uncertainty quantification
+    cclass_std: float = 0.0  # Class uncertainty
+    cform_std: float = 0.0   # Form uncertainty
+    cspeed_std: float = 0.0  # Speed uncertainty
+    cpace_std: float = 0.0   # Pace uncertainty
+    cstyle_std: float = 0.0  # Style uncertainty
+    cpost_std: float = 0.0   # Post uncertainty
+    final_rating_std: float = 0.0  # Total rating uncertainty
+    confidence_level: float = 0.0  # Statistical confidence (0-1)
 
 class UnifiedRatingEngine:
     """
@@ -279,37 +294,77 @@ class UnifiedRatingEngine:
                                      style_bias: Optional[List[str]],
                                      post_bias: Optional[List[str]]) -> RatingComponents:
         """
-        COMPREHENSIVE RATING CALCULATION
+        COMPREHENSIVE RATING CALCULATION WITH BAYESIAN UNCERTAINTY
 
-        Each component independently calculated, then weighted combination.
+        Each component independently calculated with uncertainty quantification.
         All formulas PhD-calibrated for maximum predictive accuracy.
+        
+        ELITE ENHANCEMENT (v2.0): Now includes Bayesian probability estimates
+        for each component, allowing better risk assessment and bet sizing.
         """
 
-        # Component 1: CLASS [-3.0 to +6.0]
-        cclass = self._calc_class(horse, today_purse, today_race_type)
+        # Prepare horse data dict for Bayesian framework
+        horse_dict = {
+            'recent_finishes': horse.recent_finishes or [],
+            'days_since_last': horse.days_since_last_race or 30,
+            'speed_figures': horse.speed_figures or [],
+            'avg_top2': horse.avg_top2 or 0.0
+        }
+        parsing_conf = horse.parsing_confidence
 
-        # Component 2: FORM CYCLE [-3.0 to +3.0]
-        # PhD Enhancement: Exponential decay form rating
+        # Component 1: CLASS [-3.0 to +6.0] with uncertainty
+        cclass_det = self._calc_class(horse, today_purse, today_race_type)
+        cclass_bayes = enhance_rating_with_bayesian_uncertainty(
+            cclass_det, 'class', horse_dict, parsing_conf
+        )
+        cclass = cclass_bayes.mean
+        cclass_std = cclass_bayes.std
+
+        # Component 2: FORM CYCLE [-3.0 to +3.0] with uncertainty
         if self.FEATURE_FLAGS['use_exponential_decay_form']:
-            cform = self._calc_form_with_decay(horse)
+            cform_det = self._calc_form_with_decay(horse)
         else:
-            cform = self._calc_form(horse)  # Original method
+            cform_det = self._calc_form(horse)
+        cform_bayes = enhance_rating_with_bayesian_uncertainty(
+            cform_det, 'form', horse_dict, parsing_conf
+        )
+        cform = cform_bayes.mean
+        cform_std = cform_bayes.std
 
-        # Component 3: SPEED FIGURES [-2.0 to +2.0]
-        cspeed = self._calc_speed(horse, horses_in_race)
+        # Component 3: SPEED FIGURES [-2.0 to +2.0] with uncertainty
+        cspeed_det = self._calc_speed(horse, horses_in_race)
+        cspeed_bayes = enhance_rating_with_bayesian_uncertainty(
+            cspeed_det, 'speed', horse_dict, parsing_conf
+        )
+        cspeed = cspeed_bayes.mean
+        cspeed_std = cspeed_bayes.std
 
-        # Component 4: PACE SCENARIO [-3.0 to +3.0]
-        # PhD Enhancement: Game-theoretic pace scenario
+        # Component 4: PACE SCENARIO [-3.0 to +3.0] with uncertainty
         if self.FEATURE_FLAGS['use_game_theoretic_pace']:
-            cpace = self._calc_pace_game_theoretic(horse, horses_in_race, distance_txt)
+            cpace_det = self._calc_pace_game_theoretic(horse, horses_in_race, distance_txt)
         else:
-            cpace = self._calc_pace(horse, horses_in_race, distance_txt)  # Original method
+            cpace_det = self._calc_pace(horse, horses_in_race, distance_txt)
+        cpace_bayes = enhance_rating_with_bayesian_uncertainty(
+            cpace_det, 'pace', horse_dict, parsing_conf
+        )
+        cpace = cpace_bayes.mean
+        cpace_std = cpace_bayes.std
 
-        # Component 5: RUNNING STYLE [-0.5 to +0.8]
-        cstyle = self._calc_style(horse, surface_type, style_bias)
+        # Component 5: RUNNING STYLE [-0.5 to +0.8] with uncertainty
+        cstyle_det = self._calc_style(horse, surface_type, style_bias)
+        cstyle_bayes = enhance_rating_with_bayesian_uncertainty(
+            cstyle_det, 'style', horse_dict, parsing_conf
+        )
+        cstyle = cstyle_bayes.mean
+        cstyle_std = cstyle_bayes.std
 
-        # Component 6: POST POSITION [-0.5 to +0.5]
-        cpost = self._calc_post(horse, distance_txt, post_bias)
+        # Component 6: POST POSITION [-0.5 to +0.5] with uncertainty
+        cpost_det = self._calc_post(horse, distance_txt, post_bias)
+        cpost_bayes = enhance_rating_with_bayesian_uncertainty(
+            cpost_det, 'post', horse_dict, parsing_conf
+        )
+        cpost = cpost_bayes.mean
+        cpost_std = cpost_bayes.std
 
         # Component 7: TIER 2 BONUSES (SPI, surface stats, etc.)
         tier2 = self._calc_tier2_bonus(horse, surface_type, distance_txt)
@@ -319,18 +374,27 @@ class UnifiedRatingEngine:
         if self.FEATURE_FLAGS['use_mud_adjustment']:
             mud_adjustment = self._adjust_for_off_track(horse, condition_txt)
 
-        # WEIGHTED COMBINATION
-        final_rating = (
-            (cclass * self.WEIGHTS['class']) +
-            (cform * self.WEIGHTS['form']) +
-            (cspeed * self.WEIGHTS['speed']) +
-            (cpace * self.WEIGHTS['pace']) +
-            (cstyle * self.WEIGHTS['style']) +
-            (cpost * self.WEIGHTS['post']) +
-            (angles_total * self.WEIGHTS['angles']) +
-            tier2 +
-            mud_adjustment
+        # WEIGHTED COMBINATION WITH UNCERTAINTY PROPAGATION
+        component_ratings = {
+            'class': (cclass, cclass_std),
+            'form': (cform, cform_std),
+            'speed': (cspeed, cspeed_std),
+            'pace': (cpace, cpace_std),
+            'style': (cstyle, cstyle_std),
+            'post': (cpost, cpost_std)
+        }
+        
+        final_bayes = calculate_final_rating_with_uncertainty(
+            component_ratings,
+            self.WEIGHTS,
+            angles_bonus=angles_total * self.WEIGHTS['angles'],
+            tier2_bonus=tier2,
+            extra_bonuses=[mud_adjustment]
         )
+        
+        final_rating = final_bayes.mean
+        final_rating_std = final_bayes.std
+        confidence_level = final_bayes.confidence_level
 
         return RatingComponents(
             cclass=round(cclass, 2),
@@ -342,7 +406,15 @@ class UnifiedRatingEngine:
             angles_total=round(angles_total, 2),
             tier2_bonus=round(tier2, 2),
             final_rating=round(final_rating, 2),
-            confidence=horse.parsing_confidence
+            confidence=horse.parsing_confidence,
+            cclass_std=round(cclass_std, 3),
+            cform_std=round(cform_std, 3),
+            cspeed_std=round(cspeed_std, 3),
+            cpace_std=round(cpace_std, 3),
+            cstyle_std=round(cstyle_std, 3),
+            cpost_std=round(cpost_std, 3),
+            final_rating_std=round(final_rating_std, 3),
+            confidence_level=round(confidence_level, 3)
         )
 
     def _calc_class(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
