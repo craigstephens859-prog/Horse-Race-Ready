@@ -339,7 +339,7 @@ class UnifiedRatingEngine:
         # Prepare horse data dict for Bayesian framework
         horse_dict = {
             'recent_finishes': horse.recent_finishes or [],
-            'days_since_last': horse.days_since_last_race or 30,
+            'days_since_last': horse.days_since_last or 30,
             'speed_figures': horse.speed_figures or [],
             'avg_top2': horse.avg_top2 or 0.0
         }
