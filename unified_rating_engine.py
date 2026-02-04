@@ -462,6 +462,22 @@ class UnifiedRatingEngine:
 
         # Race type scoring
         today_score = self.RACE_TYPE_SCORES.get(today_race_type.lower(), 3.5)
+        
+        # FALLBACK: If parser didn't extract purse/type history, use today's race as baseline
+        # Grade 1 Stakes = everyone gets baseline +3.0 for being in the race
+        if today_score >= 8.0:  # Grade 1
+            rating += 3.0
+        elif today_score >= 7.0:  # Grade 2
+            rating += 2.5
+        elif today_score >= 6.0:  # Grade 3
+            rating += 2.0
+        elif today_score >= 5.0:  # Stakes
+            rating += 1.5
+        
+        # If we have NO historical data, return baseline now
+        if not horse.recent_purses and not horse.race_types and not horse.recent_finishes:
+            logger.debug(f"{horse.name}: Using fallback class rating {rating:.2f} (no history)")
+            return float(np.clip(rating, -3.0, 6.0))
 
         # CRITICAL FIX: Check if horse was COMPETITIVE in recent races
         # Don't reward class drops if horse was losing at higher level
