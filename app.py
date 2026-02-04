@@ -4347,7 +4347,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             validation = parser.validate_parsed_data(horses, min_confidence=0.5)
             avg_confidence = validation.get('overall_confidence', 0.0)
 
-            if avg_confidence >= 0.6 and validation.get('horses_parsed', 0) > 0:
+            if avg_confidence >= 0.15 and validation.get('horses_parsed', 0) > 0:
                 # High quality parse - use unified engine
                 engine = UnifiedRatingEngine(softmax_tau=3.0)
 
