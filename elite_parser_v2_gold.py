@@ -104,10 +104,24 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     days_since_work: Optional[int] = None
     last_work_speed: Optional[str] = None  # "b" (bullet), "H" (handily), "Bg" (breezing)
     workout_confidence: float = 0.3
+    workout_pattern: Optional[str] = None  # "Sharp", "Steady", "Light"
 
     # === PRIME POWER (Proprietary BRISNET metric) ===
     prime_power: Optional[float] = None
     prime_power_rank: Optional[int] = None
+    
+    # === EQUIPMENT & MEDICATION ===
+    equipment_change: Optional[str] = None  # "Blinkers On", "Blinkers Off", etc.
+    first_lasix: bool = False
+    
+    # === TRIP COMMENTS & RUNNING LINES ===
+    trip_comments: List[str] = field(default_factory=list)  # Last 3-5 race comments
+    
+    # === SURFACE STATISTICS ===
+    surface_stats: Dict[str, Dict[str, float]] = field(default_factory=dict)  # {"Fst": {"win_pct": 25, "avg_fig": 85}, ...}
+    
+    # === ENHANCED PACE DATA ===
+    early_speed_pct: Optional[float] = None  # % of races showing early speed (0-100)
 
     # === VALIDATION ===
     parsing_confidence: float = 1.0  # Overall confidence
@@ -669,6 +683,20 @@ class GoldStandardBRISNETParser:
             horse.days_since_work = days_since_work
             horse.last_work_speed = last_speed
             horse.workout_confidence = work_conf
+            
+            # EQUIPMENT CHANGES & MEDICATION
+            equipment_info = self._parse_equipment_changes(block)
+            horse.equipment_change = equipment_info['change']
+            horse.first_lasix = equipment_info['first_lasix']
+            
+            # TRIP COMMENTS
+            horse.trip_comments = self._parse_trip_comments(block)
+            
+            # SURFACE STATISTICS
+            horse.surface_stats = self._parse_surface_stats(block)
+            
+            # EARLY SPEED PERCENTAGE
+            horse.early_speed_pct = self._calculate_early_speed_pct(horse)
 
             # PRIME POWER
             pp_value, pp_rank = self._parse_prime_power(block)
@@ -1159,6 +1187,132 @@ class GoldStandardBRISNETParser:
 
         confidence = 0.8 if count > 0 else 0.2
         return count, days_since, last_speed, confidence
+    
+    # ============ EQUIPMENT CHANGES ============
+    
+    def _parse_equipment_changes(self, block: str) -> Dict[str, Any]:
+        """
+        Parse equipment changes (blinkers, tongue tie, etc.) and medication (Lasix).
+        Returns dict with 'change' (str) and 'first_lasix' (bool)
+        """
+        result = {'change': None, 'first_lasix': False}
+        
+        # Blinkers on/off patterns
+        if re.search(r'Blinkers?\s+On', block, re.IGNORECASE):
+            result['change'] = 'Blinkers On'
+        elif re.search(r'Blinkers?\s+Off', block, re.IGNORECASE):
+            result['change'] = 'Blinkers Off'
+        
+        # First-time Lasix
+        if re.search(r'First.*?Lasix|Lasix.*?First|1st.*?L', block, re.IGNORECASE):
+            result['first_lasix'] = True
+            if not result['change']:
+                result['change'] = 'First Lasix'
+        
+        return result
+    
+    # ============ TRIP COMMENTS ============
+    
+    def _parse_trip_comments(self, block: str) -> List[str]:
+        """
+        Extract trip/running line comments from past performances.
+        Returns list of comments (most recent first, up to 5).
+        """
+        comments = []
+        
+        # Look for common trip comment patterns
+        # Format: "Bumped start, rallied late" or "Wide trip, no excuse"
+        comment_patterns = [
+            r'(?:Bumped?|Check|Steady|Blocked|Wide|Rail|Closed|Rallied|Weakened|Stopped?)[^\.]{10,80}',
+            r'(?:Bad\s+start|Good\s+trip|Troubled?|Clear\s+trip)[^\.]{10,80}',
+        ]
+        
+        for pattern in comment_patterns:
+            matches = re.findall(pattern, block, re.IGNORECASE)
+            comments.extend(matches[:5])
+        
+        return comments[:5]  # Most recent 5
+    
+    # ============ SURFACE STATISTICS ============
+    
+    def _parse_surface_stats(self, block: str) -> Dict[str, Dict[str, float]]:
+        """
+        Extract surface-specific statistics (win %, ITM %, avg figs).
+        Returns dict like: {"Fst": {"win_pct": 25.0, "itm_pct": 60.0, "avg_fig": 85.0}, ...}
+        """
+        surface_stats = {}
+        
+        # Look for surface stats section (common BRISNET format)
+        # Example: "DIRT: 5-2-1-0 (40%) $1.80 avg Beyer: 88"
+        surface_patterns = {
+            'Fst': r'(?:DIRT|Fast|Fst):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)',
+            'Trf': r'(?:TURF|Grass|Trf):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)',
+            'AW': r'(?:SYNTH|All\s*Weather|AW):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)',
+        }
+        
+        for surface_key, pattern in surface_patterns.items():
+            match = re.search(pattern, block, re.IGNORECASE)
+            if match:
+                try:
+                    wins = int(match.group(1))
+                    places = int(match.group(2))
+                    shows = int(match.group(3))
+                    starts = wins + places + shows + int(match.group(4))
+                    win_pct = float(match.group(5))
+                    itm_pct = ((wins + places + shows) / starts * 100) if starts > 0 else 0.0
+                    
+                    # Try to find avg figure on same line
+                    line_context = block[max(0, match.start()-50):match.end()+100]
+                    fig_match = re.search(r'(?:Beyer|Fig|Speed)[:\s]+(\d+)', line_context)
+                    avg_fig = float(fig_match.group(1)) if fig_match else 0.0
+                    
+                    surface_stats[surface_key] = {
+                        'win_pct': win_pct,
+                        'itm_pct': itm_pct,
+                        'avg_fig': avg_fig,
+                        'starts': starts
+                    }
+                except Exception:
+                    pass
+        
+        return surface_stats
+    
+    # ============ EARLY SPEED PERCENTAGE ============
+    
+    def _calculate_early_speed_pct(self, horse: HorseData) -> Optional[float]:
+        """
+        Calculate percentage of races where horse showed early speed (E or E/P behavior).
+        Uses pace style and Quirin points as indicators.
+        Returns percentage 0-100.
+        """
+        # If we have comprehensive running line data, could parse that
+        # For now, use style and Quirin as proxy
+        
+        if horse.pace_style == 'E':
+            # Pure speed horse
+            if horse.quirin_points >= 7:
+                return 95.0  # Almost always on lead
+            elif horse.quirin_points >= 4:
+                return 80.0
+            else:
+                return 65.0
+        elif horse.pace_style == 'E/P':
+            # Press type
+            if horse.quirin_points >= 6:
+                return 75.0
+            elif horse.quirin_points >= 3:
+                return 60.0
+            else:
+                return 45.0
+        elif horse.pace_style == 'P':
+            # Stalker/midpack
+            return 35.0
+        elif horse.pace_style == 'S':
+            # Closer
+            return 10.0
+        else:
+            # Unknown
+            return None
 
     # ============ PRIME POWER ============
 
