@@ -158,42 +158,68 @@ class UnifiedRatingEngine:
     FORM_DECAY_LAMBDA = 0.01
 
     # Race type hierarchy for class calculations - COMPREHENSIVE COVERAGE
-    # Score range: 0.5 (lowest maiden claiming) to 8.0 (Grade 1 Stakes)
-    # Every 0.5 point = meaningful class distinction
+    # Based on North American racing classification levels 1-7
+    # Score range: 1.0 (Level 1 maiden) to 8.0 (Level 7 Grade 1)
     RACE_TYPE_SCORES = {
-        # === MAIDEN CLAIMING (Lowest) ===
+        # === LEVEL 1: MAIDEN RACES (1.0-3.0) ===
+        # Horses that have never won
+        'msw': 3.0, 'maiden special weight': 3.0, 'md sp wt': 3.0, 'mdn sp wt': 3.0,
+        'maiden': 3.0, 'mdn': 3.0,
+        
         'mcl': 1.0, 'maiden claiming': 1.0, 'mdn clm': 1.0, 'md clm': 1.0,
         'maiden clm': 1.0, 'mdn claiming': 1.0,
         
-        # === CLAIMING (Low to Mid-Low) ===
+        'moc': 2.0, 'maiden optional claiming': 2.0, 'mdn optional claiming': 2.0,
+        'maiden oc': 2.0, 'mdn oc': 2.0,
+        
+        # === LEVEL 2: CLAIMING (2.0-3.2) ===
+        # Horses for sale; price indicates quality
         'clm': 2.0, 'claiming': 2.0, 'clm price': 2.0,
-        'clm10000': 1.5, 'clm16000': 2.0, 'clm25000': 2.5,  # Tiered by price
-        'clm32000': 2.8, 'clm40000': 3.0, 'clm50000': 3.2,
+        'clm10000': 1.5, 'clm12500': 1.8, 'clm16000': 2.0, 'clm20000': 2.2,
+        'clm25000': 2.5, 'clm32000': 2.8, 'clm40000': 3.0, 'clm50000': 3.2,
         
-        # === MAIDEN SPECIAL WEIGHT (Mid) ===
-        'mdn': 3.0, 'md sp wt': 3.0, 'maiden special weight': 3.0, 
-        'msw': 3.0, 'maiden': 3.0, 'mdn sp wt': 3.0,
+        'clh': 2.2, 'claiming handicap': 2.2, 'clm handicap': 2.2,
         
-        # === STARTER ALLOWANCE (Mid) ===
-        'str': 3.5, 'starter allowance': 3.5, 'str alw': 3.5,
-        'starter handicap': 3.5, 'str hcp': 3.5,
+        'cst': 3.5, 'claiming stakes': 3.5, 'clm stakes': 3.5,
         
-        # === ALLOWANCE (Mid-High) ===
-        'alw': 4.0, 'allowance': 4.0, 'n1x': 4.0, 'n2x': 4.2, 'n3x': 4.5,
-        'allowance n1x': 4.0, 'allowance n2x': 4.2, 'allowance n3x': 4.5,
+        # === LEVEL 3: STARTER (3.5) ===
+        # For horses from recent claiming races
+        'str': 3.5, 'sta': 3.5, 'starter allowance': 3.5, 'str alw': 3.5,
+        'starter': 3.5,
         
-        # === ALLOWANCE OPTIONAL CLAIMING (Mid-High) ===
-        'aoc': 4.5, 'oc': 4.5, 'optional claiming': 4.5,
+        'shp': 3.6, 'starter handicap': 3.6, 'str hcp': 3.6,
+        'starter hcp': 3.6,
+        
+        'soc': 3.8, 'starter optional claiming': 3.8, 'str optional claiming': 3.8,
+        'starter oc': 3.8,
+        
+        # === LEVEL 4: ALLOWANCE (4.0-4.2) ===
+        # Non-selling; condition races
+        'alw': 4.0, 'allowance': 4.0,
+        'nw1x': 4.0, 'allowance nw1x': 4.0, 'alw nw1x': 4.0,
+        'nw2x': 4.2, 'allowance nw2x': 4.2, 'alw nw2x': 4.2,
+        'nw3x': 4.5, 'allowance nw3x': 4.5, 'alw nw3x': 4.5,
+        
+        # === LEVEL 5: ALLOWANCE OPTIONAL CLAIMING (4.5-5.0) ===
+        # Allowance with optional claiming price
+        'aoc': 4.5, 'oc': 4.5, 'ocl': 4.5, 'optional claiming': 4.5,
         'allowance optional claiming': 4.5, 'alw optional': 4.5,
+        'oc25000': 4.5, 'oc32000': 4.7, 'oc40000': 4.8, 'oc50000': 5.0,
         
-        # === STAKES (High) ===
-        'stk': 5.0, 'stakes': 5.0, 'stake': 5.0,
-        'listed': 5.2, 'listed stakes': 5.2,  # Listed = below graded but above regular stakes
+        # === LEVEL 5-6: OPTIONAL CLAIMING HANDICAP (5.0-5.5) ===
+        'och': 5.0, 'optional claiming handicap': 5.0, 'oc handicap': 5.0,
+        'oc hcp': 5.0,
         
-        # === HANDICAP (High) ===
+        # === LEVEL 6: HANDICAP (5.5-6.0) ===
+        # Weights assigned to equalize chances
         'hcp': 5.5, 'handicap': 5.5, 'h': 5.5,
         
-        # === GRADED STAKES (Elite) ===
+        # === LEVEL 7: STAKES & GRADED (5.0-8.0) ===
+        # High-purse races
+        'stk': 5.0, 's': 5.0, 'stakes': 5.0, 'stake': 5.0,
+        'listed': 5.2, 'listed stakes': 5.2, 'lst': 5.2,
+        
+        # Graded Stakes (Elite level)
         'g3': 6.0, 'grade 3': 6.0, 'grade iii': 6.0, 'griii': 6.0,
         'g3 stakes': 6.0, 'grade 3 stakes': 6.0,
         
@@ -203,13 +229,12 @@ class UnifiedRatingEngine:
         'g1': 8.0, 'grade 1': 8.0, 'grade i': 8.0, 'gri': 8.0,
         'g1 stakes': 8.0, 'grade 1 stakes': 8.0,
         
-        # === SPECIAL CONDITIONS (Variations) ===
+        # === SPECIAL CONDITIONS ===
         'waiver claiming': 2.2, 'waiver': 2.2, 'wcl': 2.2,
-        'trial': 4.8,  # Trials often high quality
-        'futurity': 5.5, 'derby': 6.5,  # Special events
+        'trial': 4.8, 'futurity': 5.5, 'derby': 6.5,
         
-        # === INTERNATIONAL EQUIVALENT PATTERNS ===
-        'group 1': 8.0, 'group 2': 7.0, 'group 3': 6.0,  # European pattern
+        # === INTERNATIONAL EQUIVALENTS ===
+        'group 1': 8.0, 'group 2': 7.0, 'group 3': 6.0,
         'gr1': 8.0, 'gr2': 7.0, 'gr3': 6.0
     }
 
@@ -604,128 +629,214 @@ class UnifiedRatingEngine:
         
         return dynamic_weights
 
+    def _calculate_claiming_score(self, claiming_price: float) -> float:
+        """
+        Calculate race type score for claiming races based on price.
+        Level 2 classification: Claiming races scaled by purse/price.
+        
+        Args:
+            claiming_price: Claiming price in dollars
+            
+        Returns:
+            Score value (1.5-3.2 for Level 2 claiming races)
+        """
+        if claiming_price < 10000:
+            return 1.5  # Bottom CLM
+        elif claiming_price < 16000:
+            return 2.0  # CLM10000-15999
+        elif claiming_price < 25000:
+            return 2.2  # CLM16000-24999
+        elif claiming_price < 32000:
+            return 2.5  # CLM25000-31999
+        elif claiming_price < 40000:
+            return 2.8  # CLM32000-39999
+        elif claiming_price < 50000:
+            return 3.0  # CLM40000-49999
+        else:
+            return 3.2  # CLM50000+
+
     def _calc_class(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
         """
-        Class rating: purse comparison + race type hierarchy + FORM-ADJUSTED class drops
+        Class rating with comprehensive Level 1-7 race type classification.
         
-        COMPREHENSIVE RACE TYPE WEIGHTING:
-        - Grade 1 (8.0): +3.0 baseline - Elite championship caliber
-        - Grade 2 (7.0): +2.5 baseline - High-end stakes
-        - Grade 3 (6.0): +2.0 baseline - Quality stakes
-        - Stakes/Handicap (5.0-5.5): +1.5 baseline - Open stakes
-        - AOC/High Allowance (4.5): +1.0 baseline - Strong allowance
-        - Mid Allowance (4.0-4.2): +0.5 baseline - Standard allowance
-        - MSW/Low Allowance (3.0-3.5): +0.2 baseline - Starter level
-        - Claiming (2.0-3.2): 0.0 baseline - By purse only
-        - Maiden Claiming (1.0-1.5): -0.3 baseline - Lowest tier
+        NORTH AMERICAN RACE TYPE SYSTEM:
+        Level 1 - Maiden: MSW (3.0), MCL (1.0), MOC (2.0)
+        Level 2 - Claiming: CLM (1.5-3.2 by price), CLH (2.2), CST (3.5)
+        Level 3 - Starter: STR/STA (3.5), SHP (3.6), SOC (3.8)
+        Level 4 - Allowance: ALW (4.0-4.5 by conditions)
+        Level 5 - AOC: AOC/OC/OCL (4.5-5.0 by price)
+        Level 6 - Handicap: HCP (5.5), OCH (5.0)
+        Level 7 - Stakes: STK/S (5.0), G3 (6.0), G2 (7.0), G1 (8.0)
+        
+        Applies purse-based quality scaling within levels and form-adjusted class evaluation.
         """
         rating: float = 0.0
 
-        # Race type scoring - normalize the input
-        today_type_lower = today_race_type.lower()
+        # Normalize today's race type
+        today_type_lower = today_race_type.lower().strip() if today_race_type else ''
+        logger.debug(f"Class calc for {horse.name}: race_type='{today_race_type}'")
         
-        # Direct lookup first (handles all variations)
+        # === STEP 1: RACE TYPE SCORE DETECTION ===
+        # Try exact match first (fastest - handles all RACE_TYPE_SCORES entries)
         today_score = self.RACE_TYPE_SCORES.get(today_type_lower, None)
         
-        # If not found, intelligent substring matching for complex formats
+        # If not found, intelligent parsing for complex formats
         if today_score is None:
-            # Grade levels (handles "Grade 1 Stakes", "G1 Handicap", etc.)
-            if any(term in today_type_lower for term in ['g1', 'grade 1', 'grade i', 'group 1']):
-                today_score = 8.0
-            elif any(term in today_type_lower for term in ['g2', 'grade 2', 'grade ii', 'group 2']):
-                today_score = 7.0
-            elif any(term in today_type_lower for term in ['g3', 'grade 3', 'grade iii', 'group 3']):
-                today_score = 6.0
-            # Stakes types
-            elif 'handicap' in today_type_lower and 'stakes' in today_type_lower:
-                today_score = 5.5  # Stakes Handicap
+            # === LEVEL 7: GRADED STAKES ===
+            if any(term in today_type_lower for term in ['g1', 'grade 1', 'grade i', 'group 1', 'gri']):
+                today_score = 8.0  # G1
+            elif any(term in today_type_lower for term in ['g2', 'grade 2', 'grade ii', 'group 2', 'grii']):
+                today_score = 7.0  # G2
+            elif any(term in today_type_lower for term in ['g3', 'grade 3', 'grade iii', 'group 3', 'griii']):
+                today_score = 6.0  # G3
+            
+            # === LEVEL 7: STAKES (Non-graded) ===
             elif 'listed' in today_type_lower:
-                today_score = 5.2  # Listed Stakes
-            elif 'stakes' in today_type_lower or 'stk' in today_type_lower:
-                today_score = 5.0  # Open Stakes
-            # Allowance types
-            elif 'optional' in today_type_lower or 'aoc' in today_type_lower:
-                today_score = 4.5  # Allowance Optional Claiming
-            elif 'n3x' in today_type_lower:
-                today_score = 4.5  # Restricted allowance (high)
-            elif 'n2x' in today_type_lower:
-                today_score = 4.2  # Restricted allowance (mid)
-            elif 'n1x' in today_type_lower or 'alw' in today_type_lower or 'allowance' in today_type_lower:
-                today_score = 4.0  # Standard allowance
-            elif 'starter' in today_type_lower:
-                today_score = 3.5  # Starter allowance
-            # Maiden types
-            elif 'maiden' in today_type_lower:
-                if 'clm' in today_type_lower or 'claiming' in today_type_lower:
-                    today_score = 1.0  # Maiden Claiming
+                today_score = 5.2  # LST - Listed Stakes
+            elif any(term in today_type_lower for term in ['stakes', 'stk', ' s ']):
+                today_score = 5.0  # STK/S
+            
+            # === LEVEL 6: HANDICAP ===
+            elif 'handicap' in today_type_lower or 'hcp' in today_type_lower:
+                if 'optional' in today_type_lower or 'claiming' in today_type_lower:
+                    today_score = 5.0  # OCH - Optional Claiming Handicap
+                elif 'starter' in today_type_lower:
+                    today_score = 3.6  # SHP - Starter Handicap (Level 3)
+                elif 'claiming' in today_type_lower:
+                    today_score = 2.2  # CLH - Claiming Handicap (Level 2)
                 else:
-                    today_score = 3.0  # Maiden Special Weight
-            # Claiming (check for embedded purse amounts)
-            elif 'clm' in today_type_lower or 'claiming' in today_type_lower:
-                # Try to extract claiming price for tiered scoring
-                import re
-                clm_match = re.search(r'clm[^\d]*(\d+)', today_type_lower)
-                if clm_match:
-                    clm_price = int(clm_match.group(1))
-                    if clm_price >= 50000:
-                        today_score = 3.2
-                    elif clm_price >= 40000:
-                        today_score = 3.0
-                    elif clm_price >= 32000:
-                        today_score = 2.8
-                    elif clm_price >= 25000:
-                        today_score = 2.5
-                    elif clm_price >= 16000:
-                        today_score = 2.0
+                    today_score = 5.5  # HCP - Standard Handicap
+            
+            # === LEVEL 5: ALLOWANCE OPTIONAL CLAIMING ===
+            elif any(term in today_type_lower for term in ['aoc', 'optional claiming', 'allowance optional', 'oc ', ' oc', 'ocl']):
+                # Try to extract claiming price for tier scoring
+                claiming_price = self._extract_claiming_price(today_type_lower)
+                if claiming_price >= 50000:
+                    today_score = 5.0  # OC50000
+                elif claiming_price >= 40000:
+                    today_score = 4.8  # OC40000
+                elif claiming_price >= 32000:
+                    today_score = 4.7  # OC32000
+                else:
+                    today_score = 4.5  # AOC/OC base
+            
+            # === LEVEL 4: ALLOWANCE ===
+            elif 'allowance' in today_type_lower or 'alw' in today_type_lower:
+                # Check for condition levels (NW1X, NW2X, NW3X)
+                if 'nw3x' in today_type_lower or 'n3x' in today_type_lower:
+                    today_score = 4.5  # Top restricted allowance
+                elif 'nw2x' in today_type_lower or 'n2x' in today_type_lower:
+                    today_score = 4.2  # Mid restricted allowance
+                elif 'nw1x' in today_type_lower or 'n1x' in today_type_lower:
+                    today_score = 4.0  # Entry restricted allowance
+                else:
+                    today_score = 4.0  # ALW base
+            
+            # === LEVEL 3: STARTER ===
+            elif 'starter' in today_type_lower or any(term in today_type_lower for term in ['str', 'sta']):
+                if 'optional' in today_type_lower or 'claiming' in today_type_lower:
+                    today_score = 3.8  # SOC - Starter Optional Claiming
+                else:
+                    today_score = 3.5  # STR/STA - Starter Allowance
+            
+            # === LEVEL 2: CLAIMING ===
+            elif 'claiming' in today_type_lower or 'clm' in today_type_lower:
+                # Check if it's a maiden claiming (Level 1)
+                if 'maiden' in today_type_lower or 'mdn' in today_type_lower:
+                    today_score = 1.0  # MCL
+                # Check if it's a claiming stakes (Level 2-7 hybrid)
+                elif 'stakes' in today_type_lower or 'cst' in today_type_lower:
+                    today_score = 3.5  # CST - Claiming Stakes
+                else:
+                    # Extract claiming price for tiered scoring
+                    claiming_price = self._extract_claiming_price(today_type_lower)
+                    if claiming_price > 0:
+                        today_score = self._calculate_claiming_score(claiming_price)
                     else:
-                        today_score = 1.5
+                        today_score = 2.0  # CLM base
+            
+            # === LEVEL 1: MAIDEN ===
+            elif 'maiden' in today_type_lower or 'mdn' in today_type_lower:
+                if 'optional' in today_type_lower or 'moc' in today_type_lower:
+                    today_score = 2.0  # MOC - Maiden Optional Claiming
+                elif 'special' in today_type_lower or 'msw' in today_type_lower:
+                    today_score = 3.0  # MSW - Maiden Special Weight
                 else:
-                    today_score = 2.0  # Default claiming
-            # Waiver claiming
-            elif 'waiver' in today_type_lower:
-                today_score = 2.2
-            # Fallback
+                    today_score = 3.0  # Default maiden (MSW)
+            
+            # === FALLBACK ===
             else:
-                today_score = 3.5  # Default middle-class
+                today_score = 3.5  # Default to mid-level
+                logger.warning(f"  → Unrecognized race type '{today_race_type}', using default score {today_score}")
+        else:
+            logger.debug(f"  → Exact match: '{today_type_lower}' = {today_score}")
         
-        # GRANULAR BASELINE: Weighted bonuses by race tier
-        # Every horse gets a baseline for the quality of race they're entering
-        if today_score >= 8.0:  # Grade 1
+        # === STEP 2: LEVEL-BASED BASELINE BONUS ===
+        # Granular bonuses aligned to classification levels
+        if today_score >= 8.0:  # Level 7: G1
             rating += 3.0
-        elif today_score >= 7.0:  # Grade 2
+        elif today_score >= 7.0:  # Level 7: G2
             rating += 2.5
-        elif today_score >= 6.0:  # Grade 3
+        elif today_score >= 6.0:  # Level 7: G3
             rating += 2.0
-        elif today_score >= 5.5:  # Handicap/High Stakes
+        elif today_score >= 5.5:  # Level 6: HCP
+            rating += 1.8
+        elif today_score >= 5.2:  # Level 7: Listed
+            rating += 1.6
+        elif today_score >= 5.0:  # Level 7: STK / Level 6: OCH
             rating += 1.5
-        elif today_score >= 5.0:  # Stakes
-            rating += 1.5
-        elif today_score >= 4.5:  # AOC/N3X (Strong allowance)
+        elif today_score >= 4.5:  # Level 5: AOC / Level 4: NW3X
             rating += 1.0
-        elif today_score >= 4.0:  # N2X/N1X/Standard Allowance
+        elif today_score >= 4.0:  # Level 4: ALW
             rating += 0.5
-        elif today_score >= 3.5:  # Starter Allowance
+        elif today_score >= 3.5:  # Level 3: STR / Level 2: CST
+            rating += 0.3
+        elif today_score >= 3.0:  # Level 1: MSW
             rating += 0.2
-        elif today_score >= 3.0:  # MSW
-            rating += 0.2
-        elif today_score >= 2.5:  # High-end Claiming (25k-50k)
-            rating += 0.0  # Neutral - let purse differentiate
-        elif today_score >= 2.0:  # Mid Claiming (16k-25k)
+        elif today_score >= 2.0:  # Level 2: CLM / Level 1: MOC
             rating += 0.0
-        elif today_score >= 1.5:  # Low Claiming (10k-16k)
+        elif today_score >= 1.5:  # Level 2: Low CLM
             rating -= 0.2
-        else:  # Maiden Claiming (<10k) - Lowest tier
-            rating -= 0.3
-
-        # CRITICAL FIX: Check if horse was COMPETITIVE in recent races
-        # Don't reward class drops if horse was losing at higher level
+        else:  # Level 1: MCL
+            rating -= 0.5
+        
+        logger.debug(f"  → Today's race score: {today_score:.1f}, baseline: {rating:.2f}")
+        
+        # === STEP 3: PURSE-BASED QUALITY ADJUSTMENT ===
+        # Within same race type, higher purse indicates better horses
+        if today_purse > 0:
+            purse_bonus = 0.0
+            
+            # Different baselines and scaling by race level
+            if today_score >= 6.0:  # Graded stakes
+                baseline_purse = 150000
+                if today_purse > baseline_purse:
+                    purse_bonus = min((today_purse - baseline_purse) / 300000 * 0.3, 1.5)
+            elif today_score >= 5.0:  # Stakes/Handicap
+                baseline_purse = 75000
+                if today_purse > baseline_purse:
+                    purse_bonus = min((today_purse - baseline_purse) / 150000 * 0.2, 1.0)
+            elif today_score >= 4.0:  # Allowance/AOC
+                baseline_purse = 40000
+                if today_purse > baseline_purse:
+                    purse_bonus = min((today_purse - baseline_purse) / 80000 * 0.15, 0.8)
+            elif today_score >= 2.0:  # Claiming
+                baseline_purse = 15000
+                if today_purse > baseline_purse:
+                    purse_bonus = min((today_purse - baseline_purse) / 30000 * 0.1, 0.5)
+            
+            rating += purse_bonus
+            if purse_bonus > 0:
+                logger.debug(f"  → Purse bonus: ${today_purse:,.0f} adds +{purse_bonus:.2f}")
+        
+        # === STEP 4: FORM-ADJUSTED CLASS EVALUATION ===
+        # Check if horse was competitive in recent races
         was_competitive = False
         if horse.recent_finishes:
-            # Consider competitive if finished in top 3 in any of last 3 races
             recent_top3_count = sum(1 for finish in horse.recent_finishes[:3] if finish <= 3)
             was_competitive = recent_top3_count >= 1
 
-        # Purse comparison (ADJUSTED: More granular for claiming tiers)
+        # Purse comparison
         if horse.recent_purses and today_purse > 0:
             avg_recent = np.mean(horse.recent_purses)
             if avg_recent > 0:
@@ -737,18 +848,10 @@ class UnifiedRatingEngine:
                     rating -= 0.6
                 elif 0.8 <= purse_ratio <= 1.2:  # Same class
                     rating += 0.8
-                elif purse_ratio >= 0.6:  # Class drop (FORM-ADJUSTED)
-                    # Only give full bonus if horse was competitive at higher level
-                    if was_competitive:
-                        rating += 0.8  # Legitimate class drop advantage
-                    else:
-                        rating += 0.2  # Minimal bonus - just getting cheaper competition
-                else:  # Major drop (RED FLAG)
-                    # Red flag: Horse dropping significantly, likely weak
-                    if was_competitive:
-                        rating += 1.0  # Was good higher, should dominate here
-                    else:
-                        rating -= 0.3  # Warning: Couldn't win higher, dropping desperately
+                elif purse_ratio >= 0.6:  # Class drop
+                    rating += 0.8 if was_competitive else 0.2
+                else:  # Major drop
+                    rating += 1.0 if was_competitive else -0.3
 
         # Race type progression
         if horse.race_types:
