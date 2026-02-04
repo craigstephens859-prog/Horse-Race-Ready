@@ -388,6 +388,106 @@ def detect_race_number(pp_text: str) -> Optional[int]:
             pass
     return None
 
+def parse_brisnet_race_header(pp_text: str) -> Dict[str, Any]:
+    """
+    Parse comprehensive BRISNET race header information.
+    
+    Expected format:
+    Ultimate PP's w/ QuickPlay Comments | Track Name | Race Type Purse | Distance | Age/Sex | Date | Race #
+    
+    Example:
+    Ultimate PP's w/ QuickPlay Comments | Turf Paradise | ©Hcp 50000 | 6 Furlongs | 3yo Fillies | Monday, February 02, 2026 | Race 8
+    
+    Returns dict with all extracted fields:
+    - track_name, race_number, race_type, purse_amount, distance, age_restriction, sex_restriction, race_date, day_of_week
+    """
+    if not pp_text:
+        return {}
+    
+    result = {
+        'track_name': '',
+        'race_number': 0,
+        'race_type': '',
+        'purse_amount': 0,
+        'distance': '',
+        'age_restriction': '',
+        'sex_restriction': '',
+        'race_date': '',
+        'day_of_week': ''
+    }
+    
+    # Get first line (header)
+    header_line = pp_text.strip().split('\n')[0].strip()
+    
+    # Split by pipe delimiter
+    parts = [p.strip() for p in header_line.split('|')]
+    
+    if len(parts) < 2:
+        # No pipes - return empty (will fall back to individual parsers)
+        return result
+    
+    # Parse each section
+    for i, part in enumerate(parts):
+        part_lower = part.lower()
+        
+        # Skip "Ultimate PP's w/ QuickPlay Comments"
+        if 'ultimate' in part_lower or 'quickplay' in part_lower:
+            continue
+        
+        # Track name (first non-Ultimate part)
+        if not result['track_name'] and i > 0:
+            # Check if this looks like a track name
+            if not re.search(r'\d+\s*(?:furlong|mile|yard)', part_lower) and \
+               not re.search(r'(clm|alw|stk|hcp|mdn|msw|aoc)', part_lower) and \
+               not re.search(r'race\s+\d+', part_lower) and \
+               not re.search(r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)', part_lower):
+                result['track_name'] = part
+                continue
+        
+        # Race type + purse (e.g., "©Hcp 50000", "Clm 4000")
+        race_type_match = re.search(r'([©¨§]?[A-Za-z]+)\s+(\d+)', part)
+        if race_type_match and not result['race_type']:
+            result['race_type'] = race_type_match.group(1)
+            try:
+                result['purse_amount'] = int(race_type_match.group(2))
+            except:
+                pass
+            continue
+        
+        # Distance (e.g., "6 Furlongs", "1 Mile", "1„ Mile")
+        if re.search(r'\d+\s*(?:furlong|mile|yard|f\b)', part_lower):
+            result['distance'] = part
+            continue
+        
+        # Age/Sex restrictions (e.g., "3yo Fillies", "4&up", "F&M")
+        if re.search(r'(?:\d+yo|f&m|fillies|mares|colts|geldings|4&up|3&up)', part_lower):
+            age_match = re.search(r'(\d+yo|4&up|3&up)', part_lower)
+            if age_match:
+                result['age_restriction'] = age_match.group(1)
+            
+            sex_match = re.search(r'(fillies?|mares?|colts?|geldings?|f&m)', part_lower, re.IGNORECASE)
+            if sex_match:
+                result['sex_restriction'] = sex_match.group(1).title()
+            continue
+        
+        # Date (e.g., "Monday, February 02, 2026")
+        date_match = re.search(r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday)[,\s]+(.+\d{4})', part_lower)
+        if date_match:
+            result['day_of_week'] = date_match.group(1).title()
+            result['race_date'] = date_match.group(2).strip()
+            continue
+        
+        # Race number (e.g., "Race 8")
+        race_num_match = re.search(r'race\s+(\d+)', part_lower)
+        if race_num_match:
+            try:
+                result['race_number'] = int(race_num_match.group(1))
+            except:
+                pass
+            continue
+    
+    return result
+
 # -------- Race-type constants + detection --------
 # This dictionary is our constant. It measures the "reliability" of the race type.
 base_class_bias = {
@@ -2669,8 +2769,37 @@ pp_text = st.session_state["pp_text_cache"]
 st.header("2. Race Info (Confirm)")
 first_line = (pp_text.split("\n",1)[0] or "").strip()
 
-# Track
-parsed_track = parse_track_name_from_pp(pp_text)
+# Parse comprehensive header information
+header_info = parse_brisnet_race_header(pp_text)
+
+# Display extracted header info if available
+if header_info and any(header_info.values()):
+    with st.expander("📋 Extracted Header Information", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            if header_info.get('track_name'):
+                st.caption(f"**Track:** {header_info['track_name']}")
+            if header_info.get('race_number'):
+                st.caption(f"**Race:** {header_info['race_number']}")
+            if header_info.get('race_type'):
+                st.caption(f"**Type:** {header_info['race_type']}")
+            if header_info.get('purse_amount'):
+                st.caption(f"**Purse:** ${header_info['purse_amount']:,}")
+        with col2:
+            if header_info.get('distance'):
+                st.caption(f"**Distance:** {header_info['distance']}")
+            if header_info.get('age_restriction') or header_info.get('sex_restriction'):
+                restrictions = []
+                if header_info.get('age_restriction'):
+                    restrictions.append(header_info['age_restriction'])
+                if header_info.get('sex_restriction'):
+                    restrictions.append(header_info['sex_restriction'])
+                st.caption(f"**Restrictions:** {' '.join(restrictions)}")
+            if header_info.get('day_of_week') and header_info.get('race_date'):
+                st.caption(f"**Date:** {header_info['day_of_week']}, {header_info['race_date']}")
+
+# Track (use parsed value from comprehensive parser if available, otherwise fallback)
+parsed_track = header_info.get('track_name') or parse_track_name_from_pp(pp_text)
 track_name = st.text_input("Track:", value=(parsed_track or st.session_state['track_name']))
 
 # SECURITY: Validate track name if validators available
@@ -2683,10 +2812,10 @@ if SECURITY_VALIDATORS_AVAILABLE and track_name:
 
 st.session_state['track_name'] = track_name
 
-# Race Number
+# Race Number (use parsed value if available)
 if 'race_num' not in st.session_state:
     st.session_state['race_num'] = 1
-auto_race_num = detect_race_number(pp_text)
+auto_race_num = header_info.get('race_number') or detect_race_number(pp_text)
 default_race_num = int(auto_race_num) if auto_race_num else st.session_state['race_num']
 # CRITICAL FIX: Increase max_value to 20 (some tracks have 16+ races)
 race_num = st.number_input("Race Number:", min_value=1, max_value=20, step=1, value=default_race_num)
