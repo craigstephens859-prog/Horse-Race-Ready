@@ -208,37 +208,28 @@ def parse_brisnet_header(pp_text: str) -> Dict[str, Any]:
     """
     Parse Brisnet race header to extract comprehensive race metadata.
     
-    Extracts all key information from the pipe-delimited header format commonly
-    found in Brisnet Past Performances, including track name, race number,
-    race type, purse amount, distance, age/sex restrictions, and race date.
+    Supports both pipe-delimited and space-separated Brisnet PP formats.
+    
+    Pipe format: "Ultimate PP's | Turf Paradise | ©Hcp 50000 | 6 Furlongs | 3yo Fillies | Monday, February 02, 2026 | Race 8"
+    Space format: "Ultimate PP's w/ QuickPlay Comments Gulfstream Park PWCInvit-G1 1„ Mile 4&up Saturday, January 24, 2026 Race 13"
     
     Args:
         pp_text: Raw Brisnet Past Performance text containing header line
         
     Returns:
         Dictionary containing parsed header fields:
-            - track_name: str (e.g., 'Turf Paradise')
-            - race_number: int (e.g., 8)
-            - race_type: str (e.g., '©Hcp' for Handicap)
+            - track_name: str (e.g., 'Turf Paradise', 'Gulfstream Park')
+            - race_number: int (e.g., 8, 13)
+            - race_type: str (e.g., '©Hcp', 'PWCInvit-G1')
             - race_conditions: str (full race type text for further parsing)
-            - purse_amount: int (in dollars, e.g., 50000)
-            - distance: str (e.g., '6 Furlongs')
-            - distance_furlongs: float (converted, e.g., 6.0)
+            - purse_amount: int (in dollars, e.g., 50000, 3000000)
+            - distance: str (e.g., '6 Furlongs', '1„ Mile')
+            - distance_furlongs: float (converted, e.g., 6.0, 10.0)
             - age_restriction: str (e.g., '3yo', '4&up')
             - sex_restriction: str (e.g., 'Fillies', 'F&M')
-            - race_date: str (e.g., 'February 02, 2026')
-            - day_of_week: str (e.g., 'Monday')
+            - race_date: str (e.g., 'February 02, 2026', 'January 24, 2026')
+            - day_of_week: str (e.g., 'Monday', 'Saturday')
             - surface: str (e.g., 'Dirt', 'Turf') - if detectable
-            
-    Example:
-        >>> header = "Ultimate PP's | Turf Paradise | ©Hcp 50000 | 6 Furlongs | 3yo Fillies | Monday, February 02, 2026 | Race 8"
-        >>> result = parse_brisnet_header(header)
-        >>> result['track_name']
-        'Turf Paradise'
-        >>> result['purse_amount']
-        50000
-        >>> result['distance_furlongs']
-        6.0
     """
     result: Dict[str, Any] = {
         'track_name': None,
@@ -256,18 +247,98 @@ def parse_brisnet_header(pp_text: str) -> Dict[str, Any]:
     }
     
     try:
-        # Find header line (first line with pipe delimiters)
+        # Find header line in first 10 lines
         header_line = ''
-        for line in pp_text.split('\n')[:10]:  # Check first 10 lines
-            if '|' in line and ('Ultimate PP' in line or 'Race' in line):
-                header_line = line
+        for line in pp_text.split('\n')[:10]:
+            if 'Ultimate PP' in line and 'Race' in line:
+                header_line = line.strip()
                 break
         
         if not header_line:
-            logger.warning("No header line found with pipe delimiters")
+            logger.warning("No header line found in PP text")
             return result
         
-        # Split by pipe delimiter
+        # Detect format: pipe-delimited or space-separated
+        is_pipe_format = '|' in header_line
+        
+        if is_pipe_format:
+            # Parse pipe-delimited format
+            parts = [p.strip() for p in header_line.split('|')]
+        else:
+            # Parse space-separated format
+            # Format: Ultimate PP's w/ QuickPlay Comments <Track> <Type> <Distance> <Age> <Date> Race <Num>
+            import re
+            
+            # Remove "Ultimate PP's w/ QuickPlay Comments" prefix
+            text = re.sub(r'^Ultimate PP.*?Comments\s+', '', header_line)
+            
+            # Extract track name (before race type pattern)
+            # Track names can be multi-word (e.g., "Gulfstream Park", "Santa Anita", "Del Mar")
+            track_pattern = r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'
+            track_match = re.search(track_pattern, text)
+            if track_match:
+                result['track_name'] = track_match.group(1)
+                text = text[len(track_match.group(1)):].strip()
+            
+            # Extract race type (usually has hyphens, special chars, or ends with -G1/G2/G3)
+            # Examples: PWCInvit-G1, ©Hcp, ALW50000, MCL25000
+            type_pattern = r'^([A-Za-z©™®]+(?:-[A-Z0-9]+)?(?:\s+\d+)?)'
+            type_match = re.search(type_pattern, text)
+            if type_match:
+                result['race_type'] = type_match.group(1).strip()
+                result['race_conditions'] = type_match.group(1).strip()
+                text = text[len(type_match.group(1)):].strip()
+            
+            # Extract distance (e.g., "1„ Mile", "6F", "1ˆ")
+            dist_pattern = r'^([\d½¼¾„ˆ]+\s*(?:Mile|Furlongs?|Yards?|f|F|m|M)?)'
+            dist_match = re.search(dist_pattern, text)
+            if dist_match:
+                result['distance'] = dist_match.group(1).strip()
+                text = text[len(dist_match.group(1)):].strip()
+            
+            # Extract age/sex restriction (e.g., "4&up", "3yo Fillies")
+            age_pattern = r'^((?:\d+)?(?:yo|&up)?(?:\s+(?:Fillies|Colts|Mares|F&M|C&G))?)'
+            age_match = re.search(age_pattern, text)
+            if age_match and age_match.group(1).strip():
+                age_text = age_match.group(1).strip()
+                result['age_restriction'] = age_text
+                # Extract sex restriction
+                sex_match = re.search(r'(Fillies|Colts|Mares|F&M|C&G)', age_text)
+                if sex_match:
+                    result['sex_restriction'] = sex_match.group(1)
+                text = text[len(age_text):].strip()
+            
+            # Extract date (e.g., "Saturday, January 24, 2026")
+            date_pattern = r'((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+\w+\s+\d+,?\s+\d{4})'
+            date_match = re.search(date_pattern, text)
+            if date_match:
+                date_str = date_match.group(1)
+                parts_date = date_str.split(',')
+                if len(parts_date) >= 2:
+                    result['day_of_week'] = parts_date[0].strip()
+                    result['race_date'] = ','.join(parts_date[1:]).strip()
+                text = text[len(date_str):].strip()
+            
+            # Extract race number (e.g., "Race 13")
+            race_num_pattern = r'Race\s+(\d+)'
+            race_num_match = re.search(race_num_pattern, text)
+            if race_num_match:
+                result['race_number'] = int(race_num_match.group(1))
+            
+            # Convert distance to furlongs
+            if result['distance']:
+                result['distance_furlongs'] = _convert_distance_to_furlongs(result['distance'])
+            
+            # Try to extract purse from race conditions on subsequent lines
+            for line in pp_text.split('\n')[:20]:
+                purse_match = re.search(r'Purse[:\s]+\$?([\d,]+)', line, re.IGNORECASE)
+                if purse_match:
+                    result['purse_amount'] = int(purse_match.group(1).replace(',', ''))
+                    break
+            
+            return result
+        
+        # Original pipe-delimited parsing continues below
         parts = [p.strip() for p in header_line.split('|')]
         
         for i, part in enumerate(parts):
@@ -353,6 +424,8 @@ def _convert_distance_to_furlongs(distance_str: str) -> float:
     - "1 1/8 Mile" → 9.0
     - "7½ Furlongs" → 7.5
     - "5.5f" → 5.5
+    - "1„ Mile" (Unicode) → 10.0
+    - "1ˆ" (Unicode) → 8.5
     
     Args:
         distance_str: Distance string from header
@@ -362,6 +435,18 @@ def _convert_distance_to_furlongs(distance_str: str) -> float:
     """
     try:
         distance_lower = distance_str.lower().strip()
+        
+        # Replace Unicode distance characters commonly used in Brisnet PPs
+        # „ = 1 1/4 mile (10 furlongs)
+        # ˆ = 1 1/16 mile (8.5 furlongs)
+        # © = 1 1/8 mile (9 furlongs)
+        distance_lower = distance_lower.replace('„', ' 1 1/4')  # 1 1/4 mile
+        distance_lower = distance_lower.replace('ˆ', ' 1 1/16')  # 1 1/16 mile
+        distance_lower = distance_lower.replace('©', ' 1 1/8')  # 1 1/8 mile
+        distance_lower = distance_lower.replace('‰', ' 1 3/16')  # 1 3/16 mile
+        distance_lower = distance_lower.replace('½', ' 1/2')
+        distance_lower = distance_lower.replace('¼', ' 1/4')
+        distance_lower = distance_lower.replace('¾', ' 3/4')
         
         # Handle miles FIRST (1 mile = 8 furlongs)
         # Must come before furlong check to handle "1 1/8 Mile" correctly
@@ -612,8 +697,9 @@ def get_hierarchy_level(
         result['base_level'] = LEVEL_MAP.get(class_type, 0)
         
         # Apply grade boost
+        # PEGASUS WC TUNING: Reduced G1 boost from 3→2 (form/speed matter more in elite races)
         if grade_level == 1:
-            result['grade_boost'] = 3
+            result['grade_boost'] = 2  # Was 3, reduced after Pegasus WC analysis
         elif grade_level == 2:
             result['grade_boost'] = 2
         elif grade_level == 3:

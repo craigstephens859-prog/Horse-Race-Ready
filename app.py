@@ -508,7 +508,7 @@ def parse_brisnet_race_header(pp_text: str) -> Dict[str, Any]:
 # -------- Race-type constants + detection --------
 # This dictionary is our constant. It measures the "reliability" of the race type.
 base_class_bias = {
-    "stakes (g1)": 0.90,
+    "stakes (g1)": 0.90,  # PEGASUS TUNING: G1 class weight reduced in rating engine (10.0→6.0)
     "stakes (g2)": 0.92,
     "stakes (g3)": 0.93,
     "stakes (listed)": 0.95,
@@ -1857,7 +1857,8 @@ def parse_recent_races_detailed(block) -> List[dict]:
 def calculate_layoff_factor(days_since_last: int) -> float:
     """
     Layoff impact on performance.
-    Returns: adjustment factor (-2.0 to +0.5)
+    Returns: adjustment factor (-5.0 to +0.5)
+    PEGASUS WC TUNING: Increased penalties for long layoffs (146-day layoff issue)
     """
     if days_since_last <= 14:  # Racing frequently (good)
         return 0.5
@@ -1869,16 +1870,35 @@ def calculate_layoff_factor(days_since_last: int) -> float:
         return -0.3
     elif days_since_last <= 90:  # Moderate layoff
         return -0.8
-    elif days_since_last <= 180:  # Long layoff
+    elif days_since_last <= 120:  # Long layoff - TUNED
         return -1.5
-    else:  # Extended absence
-        return -2.0
+    elif days_since_last <= 180:  # Extended layoff - TUNED
+        return -3.0
+    else:  # Very long absence - TUNED
+        return -5.0
 
 def calculate_form_trend(recent_finishes: List[int]) -> float:
     """
     Analyze finish positions for improvement/decline trend.
-    Returns: trend factor (-1.5 to +1.5)
+    Returns: trend factor (-1.5 to +4.0)
+    PEGASUS WC TUNING: Added win momentum bonus (Skippylongstocking won last race)
     """
+    if len(recent_finishes) < 1:
+        return 0.0
+    
+    # PEGASUS TUNING: Win momentum bonus
+    if len(recent_finishes) >= 1 and recent_finishes[0] == 1:
+        # Won most recent race
+        if len(recent_finishes) >= 2 and recent_finishes[1] == 1:
+            # Won last 2 races - hot streak
+            return 4.0
+        else:
+            # Won last race only
+            return 2.5
+    elif len(recent_finishes) >= 1 and recent_finishes[0] in [2, 3]:
+        # Place/Show last race - positive form
+        return 1.0
+    
     if len(recent_finishes) < 2:
         return 0.0
 
@@ -2575,18 +2595,32 @@ def calculate_comprehensive_class_rating(
     today_class_weight = 0.0
     today_hierarchy_level = 0
     
+    # DEBUG: Show parser status
+    if not RACE_CLASS_PARSER_AVAILABLE:
+        st.error("❌ Race Class Parser NOT AVAILABLE - using legacy weights")
+    elif not pp_text:
+        st.warning("⚠️ No PP text provided - parser cannot run")
+    
     if RACE_CLASS_PARSER_AVAILABLE and pp_text:
         try:
+            st.info("🔄 Attempting to parse race class...")
             race_class_data = parse_and_calculate_class(pp_text)
             today_class_weight = race_class_data['weight']['class_weight']
             today_hierarchy_level = race_class_data['hierarchy']['final_level']
             
             # Log parsed race info for debugging
-            st.caption(f"🔍 Race Class Analysis: {race_class_data['summary']['class_type']} "
+            st.success(f"✅ Race Class Analysis: {race_class_data['summary']['class_type']} "
                       f"(Level {today_hierarchy_level}, Weight {today_class_weight:.2f})")
+            
+            # Show breakdown
+            st.caption(f"📊 Breakdown: Hierarchy={race_class_data['weight']['breakdown']['hierarchy_score']:.2f}, "
+                      f"Purse={race_class_data['weight']['breakdown']['purse_score']:.3f}, "
+                      f"Stakes={race_class_data['weight']['breakdown']['stakes_bonus']:.2f}")
                       
         except Exception as e:
-            st.warning(f"⚠️ Race class parser error: {e}")
+            st.error(f"❌ Race class parser FAILED: {e}")
+            import traceback
+            st.code(traceback.format_exc())
             # Fall back to legacy method
             pass
 
@@ -4746,8 +4780,15 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             try:
                 race_class_data = parse_and_calculate_class(pp_text)
                 parser_class_weight = race_class_data['weight']['class_weight']
-                race_quality = race_class_data['summary']['quality_tier']  # elite/high/mid/low
-            except:
+                # Get quality and normalize to lowercase + map Medium -> mid
+                quality_raw = race_class_data['summary']['quality']  # 'Elite'/'High'/'Medium'/'Low'
+                quality_map = {'Elite': 'elite', 'High': 'high', 'Medium': 'mid', 'Low': 'low', 'Minimal': 'low'}
+                race_quality = quality_map.get(quality_raw, 'mid')
+                st.success(f"✅ Parser: {race_class_data['summary']['class_type']} | Level {race_class_data['hierarchy']['final_level']} | Weight {parser_class_weight:.2f} | Quality: {race_quality}")
+            except Exception as e:
+                st.error(f"❌ Parser failed in compute_bias_ratings: {e}")
+                import traceback
+                st.code(traceback.format_exc())
                 pass
         
         # If parser unavailable, fall back to legacy race quality detection
