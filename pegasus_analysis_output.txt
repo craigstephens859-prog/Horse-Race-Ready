@@ -1,0 +1,34 @@
+Traceback (most recent call last):
+  File "C:\Users\C Stephens\Desktop\Horse Racing Picks\analysis_pegasus_world_cup_2026.py", line 60, in <module>
+    print("\n\U0001f3c6 MOST LIKELY FINISHING ORDER:")
+  File "C:\Program Files\Python312\Lib\encodings\cp1252.py", line 19, in encode
+================================================================================
+PEGASUS WORLD CUP INVITATIONAL GRADE 1 - ANALYSIS
+================================================================================
+Track: Gulfstream Park
+Date: January 24, 2026
+Race: 13
+Distance: 1� Mile (9 Furlongs)
+Purse: $3,000,000
+Conditions: Grade I Stakes, 4yo and up
+Field Size: 14 horses
+
+================================================================================
+NEW SYSTEM: RACE CLASS PARSING
+================================================================================
+Track: Gulfstream Park
+Class Type: Unknown
+Distance: None
+Purse: $2,026
+
+>>> HIERARCHY LEVEL: 0
+>>> BASE LEVEL: 0
+>>> GRADE BOOST: +0
+>>> CLASS WEIGHT: 1.00
+
+================================================================================
+OLD SYSTEM PREDICTIONS (PRE-RACE)
+================================================================================
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f3c6' in position 2: character maps to <undefined>
