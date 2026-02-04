@@ -460,8 +460,24 @@ class UnifiedRatingEngine:
         """Class rating: purse comparison + race type hierarchy + FORM-ADJUSTED class drops"""
         rating: float = 0.0
 
-        # Race type scoring
-        today_score = self.RACE_TYPE_SCORES.get(today_race_type.lower(), 3.5)
+        # Race type scoring - normalize the input
+        today_type_lower = today_race_type.lower()
+        
+        # Direct lookup first
+        today_score = self.RACE_TYPE_SCORES.get(today_type_lower, None)
+        
+        # If not found, check for grade levels in string (handles "Grade 1 Stakes" format)
+        if today_score is None:
+            if 'g1' in today_type_lower or 'grade 1' in today_type_lower:
+                today_score = 8
+            elif 'g2' in today_type_lower or 'grade 2' in today_type_lower:
+                today_score = 7
+            elif 'g3' in today_type_lower or 'grade 3' in today_type_lower:
+                today_score = 6
+            elif 'stakes' in today_type_lower or 'stk' in today_type_lower:
+                today_score = 5
+            else:
+                today_score = 3.5  # Default middle-class
         
         # BASELINE: All horses in Grade 1 get significant baseline for being in the race
         # This ensures ratings don't collapse to near-zero when historical data is incomplete
