@@ -49,6 +49,23 @@ except ImportError:
     ANGLES_AVAILABLE = False
     compute_eight_angles = None
 
+# RACE CLASS PARSER: Comprehensive race type and purse analysis
+try:
+    from race_class_parser import (
+        parse_and_calculate_class,
+        parse_race_conditions,
+        get_hierarchy_level,
+        calculate_class_weight,
+        CLASS_MAP,
+        LEVEL_MAP
+    )
+    RACE_CLASS_PARSER_AVAILABLE = True
+except ImportError:
+    RACE_CLASS_PARSER_AVAILABLE = False
+    parse_and_calculate_class = None
+    CLASS_MAP = {}
+    LEVEL_MAP = {}
+
 # ULTRATHINK INTEGRATION: Import comprehensive rating system
 try:
     from parser_integration import ParserToRatingBridge
@@ -2110,8 +2127,8 @@ def calculate_form_cycle_rating(
 
     # 1. Layoff factor
     days_since_last = recent_races[0]['days_ago'] if recent_races else 999
-    # Use calculate_layoff_bonus (defined at line 3163) instead of calculate_layoff_factor
-    layoff_adj = calculate_layoff_bonus(days_since_last, is_marathon=False)
+    # Use calculate_layoff_factor (defined earlier in file)
+    layoff_adj = calculate_layoff_factor(days_since_last)
     form_rating += layoff_adj
 
     # 2. Form trend
@@ -2532,43 +2549,117 @@ def calculate_comprehensive_class_rating(
     today_race_type: str,
     horse_block: str,
     pedigree: dict,
-    angles_df: pd.DataFrame
+    angles_df: pd.DataFrame,
+    pp_text: str = "",  # NEW: Full PP text for race class parser
+    distance_furlongs: float = 0.0,  # NEW: Race distance
+    surface_type: str = "Dirt"  # NEW: Surface type
 ) -> float:
     """
     Comprehensive class rating considering:
-    1. Today's purse vs recent purse levels
-    2. Race type hierarchy (MCL < CLM < MSW < ALW < STK < GRD)
-    3. Class movement trend
-    4. Pedigree quality indicators
-    5. Angle-based class boosts
+    1. Today's race class hierarchy (using race_class_parser)
+    2. Today's purse vs recent purse levels  
+    3. Race type hierarchy with PROPER acronym understanding
+    4. Class movement trend with form adjustment
+    5. Pedigree quality indicators
+    6. Angle-based class boosts
+    
+    NEW: Uses race_class_parser to properly understand ALL race type acronyms
+    (MCL, CLM, MSW, ALW, AOC, SOC, STK, CST, G1, G2, G3, etc.) and calculate
+    weights based on race type + purse amount.
 
     Returns: Class rating from -3.0 to +6.0
     """
+    
+    # STEP 1: Get race class analysis from parser (if available)
+    race_class_data = None
+    today_class_weight = 0.0
+    today_hierarchy_level = 0
+    
+    if RACE_CLASS_PARSER_AVAILABLE and pp_text:
+        try:
+            race_class_data = parse_and_calculate_class(pp_text)
+            today_class_weight = race_class_data['weight']['class_weight']
+            today_hierarchy_level = race_class_data['hierarchy']['final_level']
+            
+            # Log parsed race info for debugging
+            st.caption(f"🔍 Race Class Analysis: {race_class_data['summary']['class_type']} "
+                      f"(Level {today_hierarchy_level}, Weight {today_class_weight:.2f})")
+                      
+        except Exception as e:
+            st.warning(f"⚠️ Race class parser error: {e}")
+            # Fall back to legacy method
+            pass
 
-    # Race type hierarchy scoring
+    # Race type hierarchy scoring (ENHANCED with race_class_parser data)
+    # Based on industry-standard US horse racing hierarchy (1-7 scale)
     race_type_scores = {
-        'mcl': 1, 'maiden claiming': 1, 'md cl': 1,
-        'clm': 2, 'claiming': 2, 'cl': 2,
-        'mdn': 3, 'md sp wt': 3, 'maiden special weight': 3, 'msw': 3,
-        'alw': 4, 'allowance': 4,
-        'oc': 4.5, 'optional claiming': 4.5,
-        'stk': 5, 'stakes': 5,
-        'hcp': 5.5, 'handicap': 5.5,
-        'g3': 6, 'grade 3': 6,
-        'g2': 7, 'grade 2': 7,
-        'g1': 8, 'grade 1': 8
+        # Maiden (Level 1)
+        'msw': 1, 'maiden special weight': 1, 'md sp wt': 1,
+        'mdn': 1, 'md': 1, 'maiden': 1,
+        'moc': 1, 'maiden optional claiming': 1,
+        'mcl': 1, 'maiden claiming': 1, 'md cl': 1, 'mdnclm': 1, 'mdc': 1,
+        'msc': 1, 'maiden starter claiming': 1,
+        
+        # Claiming (Level 2)
+        'clm': 2, 'claiming': 2, 'cl': 2, 'clg': 2, 'c': 2,
+        'wcl': 2, 'waiver claiming': 2, 'waiver': 2,
+        'clh': 2, 'claiming handicap': 2,
+        'cst': 2, 'claiming stakes': 2, 'clmstk': 2,  # Low-end
+        
+        # Starter Allowance (Level 3)
+        'sta': 3, 'starter allowance': 3, 'str': 3, 'starter': 3,
+        'shp': 3, 'starter handicap': 3,
+        'stb': 3, 'statebred': 3, 'state bred': 3,
+        
+        # Allowance / Trial (Level 4)
+        'alw': 4, 'allowance': 4, 'a': 4,
+        'n1x': 4, 'nw1': 4, 'allowance non-winners of 1': 4,
+        'n2x': 4, 'nw2': 4, 'allowance non-winners of 2': 4,
+        'n3x': 4, 'nw3': 4, 'allowance non-winners of 3': 4,
+        'n1l': 4, 'n2l': 4, 'n3l': 4,  # Lifetime conditions
+        'opt': 4, 'optional': 4,
+        'trl': 4, 'trial': 4,
+        
+        # Optional Claiming / High Allowance (Level 5)
+        'oc': 5, 'ocl': 5, 'optional claiming': 5,
+        'aoc': 5, 'allowance optional claiming': 5, 'ao': 5,
+        'soc': 5, 'starter optional claiming': 5,
+        
+        # Handicap (Level 6)
+        'hcp': 6, 'handicap': 6, 'h': 6, '©hcp': 6, '©': 6,
+        'och': 6, 'optional claiming handicap': 6,
+        
+        # Stakes (Level 7) - Graded, Listed, Non-Graded, Specialty
+        'stk': 7, 'stakes': 7, 's': 7,
+        'sst': 7, 'starter stakes': 7,
+        'n': 7, 'non-graded stakes': 7,
+        'l': 7, 'lr': 7, 'listed': 7, 'listed stakes': 7,
+        'g3': 7, 'grade 3': 7, 'gr3': 7, 'grade3': 7,
+        'g2': 7, 'grade 2': 7, 'gr2': 7, 'grade2': 7,
+        'g1': 7, 'grade 1': 7, 'gr1': 7, 'grade1': 7,
+        'fut': 7, 'futurity': 7, 'ftr': 7,
+        'der': 7, 'derby': 7, 'dby': 7,
+        'invit': 7, 'invitational': 7, 'inv': 7,
+        
+        # Special (Level 0)
+        'mat': 0, 'match': 0, 'match race': 0,
+        'tr': 0, 'training': 0, 'training race': 0,
     }
 
     today_type_norm = str(today_race_type).strip().lower()
-    today_score = race_type_scores.get(today_type_norm, 3.5)
+    
+    # Use hierarchy level from parser if available, otherwise use legacy scores
+    if today_hierarchy_level > 0:
+        today_score = today_hierarchy_level
+    else:
+        today_score = race_type_scores.get(today_type_norm, 3.5)
 
     # Parse recent races
     recent_races = parse_recent_class_levels(horse_block)
 
     class_rating = 0.0
     
-    # CRITICAL FIX: Check if horse was COMPETITIVE in recent races
-    # Don't reward class drops if horse was losing at higher level
+    # CRITICAL: Check if horse was COMPETITIVE in recent races
     was_competitive = False
     if recent_races:
         finishes = [r.get('finish_pos', 0) for r in recent_races[:3] if r.get('finish_pos', 0) > 0]
@@ -2584,25 +2675,37 @@ def calculate_comprehensive_class_rating(
             avg_recent_purse = np.mean(recent_purses)
             purse_ratio = today_purse / avg_recent_purse if avg_recent_purse > 0 else 1.0
 
-            # Purse movement scoring
+            # ENHANCED: Use race class weight from parser to adjust purse impact
+            purse_weight_multiplier = 1.0
+            if race_class_data:
+                # Higher quality races = purse difference matters more
+                quality = race_class_data['summary']['quality']
+                if quality == 'Elite':
+                    purse_weight_multiplier = 1.5  # G1/G2 - purse differences critical
+                elif quality == 'High':
+                    purse_weight_multiplier = 1.2  # G3/Stakes - purse matters
+                elif quality == 'Medium':
+                    purse_weight_multiplier = 1.0  # Standard weight
+                else:
+                    purse_weight_multiplier = 0.8  # Low class - purse less predictive
+
+            # Purse movement scoring (ADJUSTED by race quality)
             if purse_ratio >= 1.5:  # Major step up
-                class_rating -= 1.2
+                class_rating -= (1.2 * purse_weight_multiplier)
             elif purse_ratio >= 1.2:  # Moderate step up
-                class_rating -= 0.6
+                class_rating -= (0.6 * purse_weight_multiplier)
             elif purse_ratio >= 0.8 and purse_ratio <= 1.2:  # Same class
-                class_rating += 0.8
+                class_rating += (0.8 * purse_weight_multiplier)
             elif purse_ratio >= 0.6:  # Class drop (FORM-ADJUSTED)
-                # Only give full bonus if horse was competitive at higher level
                 if was_competitive:
-                    class_rating += 0.8  # Legitimate class drop advantage
+                    class_rating += (0.8 * purse_weight_multiplier)  # Legitimate drop
                 else:
-                    class_rating += 0.2  # Minimal bonus - just cheaper competition
-            else:  # Major drop (FORM-ADJUSTED)
-                # Red flag: Horse dropping significantly
+                    class_rating += (0.2 * purse_weight_multiplier)  # Minimal bonus
+            else:  # Major drop
                 if was_competitive:
-                    class_rating += 1.0  # Was good higher, should dominate here
+                    class_rating += (1.0 * purse_weight_multiplier)  # Should dominate
                 else:
-                    class_rating -= 0.3  # Warning: Couldn't win higher, dropping desperately
+                    class_rating -= (0.3 * purse_weight_multiplier)  # Warning flag
 
     # 2. RACE TYPE PROGRESSION
     if recent_races:
@@ -2621,14 +2724,22 @@ def calculate_comprehensive_class_rating(
         elif type_diff <= -1.0:  # Dropping in class
             class_rating += 1.2
 
-    # 3. PEDIGREE QUALITY BOOST
+    # 3. PEDIGREE QUALITY BOOST (more important in higher-class races)
     spi = pedigree.get('sire_spi') or pedigree.get('damsire_spi')
     if pd.notna(spi):
         spi_val = float(spi)
+        pedigree_multiplier = 1.0
+        
+        # Pedigree matters MORE in graded stakes
+        if race_class_data and race_class_data['summary']['is_graded']:
+            pedigree_multiplier = 1.5
+        elif race_class_data and race_class_data['summary']['is_stakes']:
+            pedigree_multiplier = 1.2
+            
         if spi_val >= 110:
-            class_rating += 0.4
+            class_rating += (0.4 * pedigree_multiplier)
         elif spi_val >= 100:
-            class_rating += 0.2
+            class_rating += (0.2 * pedigree_multiplier)
 
     # 4. ANGLE-BASED CLASS INDICATORS
     if angles_df is not None and not angles_df.empty:
@@ -2647,6 +2758,17 @@ def calculate_comprehensive_class_rating(
     if 'clm' in today_type_norm or 'claiming' in today_type_norm:
         recent_claiming = parse_claiming_prices(horse_block)
         claiming_bonus = analyze_claiming_price_movement(recent_claiming, today_purse)
+    
+    class_rating += claiming_bonus
+    
+    # 6. FINAL ADJUSTMENT: Apply race class weight from parser
+    if race_class_data:
+        # Normalize class weight (0-15 range) to our rating scale (-3 to +6)
+        # Higher class weight = tougher competition = adjust rating accordingly
+        normalized_weight = (today_class_weight - 5.0) * 0.3  # Scale to +/- range
+        class_rating += normalized_weight
+
+    return np.clip(class_rating, -3.0, 6.0)
 
     # 6. ABSOLUTE PURSE LEVEL BASELINE
     # High purse races = better horses overall
@@ -3105,82 +3227,82 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
             tweak += MODEL_CONFIG['angle_off_track_route_bonus']
 
     return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
+    # Build Cclass and Cform using comprehensive analysis
+    race_surface = surface_type
+    race_cond = condition_txt
+    race_bucket = distance_bucket(distance_txt)
 
-# Build Cclass and Cform using comprehensive analysis
-race_surface = surface_type
-race_cond = condition_txt
-race_bucket = distance_bucket(distance_txt)
+    Cclass_vals = []
+    Cform_vals = []
+    for _, r in df_final_field.iterrows():
+        name = r["Horse"]
+        ped  = pedigree_per_horse.get(name, {}) or {}
+        ang  = angles_per_horse.get(name)
 
-Cclass_vals = []
-Cform_vals = []
-for _, r in df_final_field.iterrows():
-    name = r["Horse"]
-    ped  = pedigree_per_horse.get(name, {}) or {}
-    ang  = angles_per_horse.get(name)
+        # Get horse's PP block for analysis
+        horse_block = ""
+        for _, h_name, block in split_into_horse_chunks(pp_text):
+            if h_name == name:
+                horse_block = block
+                break
 
-    # Get horse's PP block for analysis
-    horse_block = ""
-    for _, h_name, block in split_into_horse_chunks(pp_text):
-        if h_name == name:
-            horse_block = block
-            break
+        # Calculate comprehensive class rating
+        # NOW includes PP text for race class parser to properly understand race acronyms
+        comprehensive_class = calculate_comprehensive_class_rating(
+            today_purse=purse_val,
+            today_race_type=race_type_detected,
+            horse_block=horse_block,
+            pedigree=ped,
+            angles_df=ang if ang is not None else pd.DataFrame(),
+            pp_text=pp_text,  # NEW: Full PP for race analysis
+            distance_furlongs=distance_to_furlongs(distance_txt),  # NEW: Distance
+            surface_type=race_surface  # NEW: Surface type
+        )
 
-    # Calculate comprehensive class rating
-    comprehensive_class = calculate_comprehensive_class_rating(
-        today_purse=purse_val,
-        today_race_type=race_type_detected,
-        horse_block=horse_block,
-        pedigree=ped,
-        angles_df=ang if ang is not None else pd.DataFrame()
-    )
+        # Add pedigree/angle tweaks on top of class
+        tweak = _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
+        cclass_total = comprehensive_class + tweak
 
-    # Add pedigree/angle tweaks on top of class
-    tweak = _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
-    cclass_total = comprehensive_class + tweak
+        # Calculate form cycle rating
+        form_rating = calculate_form_cycle_rating(
+            horse_block=horse_block,
+            pedigree=ped,
+            angles_df=ang if ang is not None else pd.DataFrame()
+        )
 
-    # Calculate form cycle rating (includes first-time starter evaluation)
-    form_rating = calculate_form_cycle_rating(
-        horse_block=horse_block,
-        pedigree=ped,
-        angles_df=ang if ang is not None else pd.DataFrame()
-    )
-    
-    # CRITICAL FIX: Apply track bias penalties for mismatched styles
-    # Check if track has strong stalker bias using ACTUAL track bias data, not user selection
-    style_adjustment = 0.0
-    horse_style = r.get('Style', 'NA')
-    
-    # Get actual track bias impact values from track profiles
-    canon_track = _canonical_track(track_name)
-    dist_bucket = distance_bucket(distance_txt)
-    track_cfg = TRACK_BIAS_PROFILES.get(canon_track, {}).get(race_surface, {}).get(dist_bucket, {})
-    runstyle_biases = track_cfg.get('runstyle', {})
-    
-    # Strong stalker track detected if S style has > 0.3 advantage
-    stalker_impact = runstyle_biases.get('S', 0.0)
-    early_speed_impact = runstyle_biases.get('E', 0.0)
-    
-    if stalker_impact > 0.3:  # Strong stalker-favoring track
-        # Apply penalties/bonuses based on horse's style vs track bias
-        if horse_style == 'E':
-            style_adjustment -= 1.5  # Heavy penalty for early speed
-        elif horse_style == 'E/P':
-            style_adjustment -= 0.8  # Moderate penalty
-        elif horse_style == 'S':
-            style_adjustment += 1.2  # Strong bonus for stalkers
-    elif early_speed_impact > 0.3:  # Strong speed-favoring track
-        if horse_style == 'E':
-            style_adjustment += 1.2  # Bonus for early speed
-        elif horse_style == 'S':
-            style_adjustment -= 0.8  # Penalty for closers
-    
-    form_rating += style_adjustment
+        # Track bias style adjustments
+        style_adjustment = 0.0
+        horse_style = r.get('Style', 'NA')
+        
+        dist_bucket = distance_bucket(distance_txt)
+        track_cfg = TRACK_BIAS_PROFILES.get(canon_track, {}).get(race_surface, {}).get(dist_bucket, {})
+        runstyle_biases = track_cfg.get('runstyle', {})
+        
+        # Strong stalker track detected if S style has > 0.3 advantage
+        stalker_impact = runstyle_biases.get('S', 0.0)
+        early_speed_impact = runstyle_biases.get('E', 0.0)
+        
+        if stalker_impact > 0.3:  # Strong stalker-favoring track
+            # Apply penalties/bonuses based on horse's style vs track bias
+            if horse_style == 'E':
+                style_adjustment -= 1.5  # Heavy penalty for early speed
+            elif horse_style == 'E/P':
+                style_adjustment -= 0.8  # Moderate penalty
+            elif horse_style == 'S':
+                style_adjustment += 1.2  # Strong bonus for stalkers
+        elif early_speed_impact > 0.3:  # Speed-favoring track
+            if horse_style == 'E':
+                style_adjustment += 1.2  # Bonus for early speed
+            elif horse_style == 'S':
+                style_adjustment -= 0.8  # Penalty for closers
+        
+        form_rating += style_adjustment
 
-    Cclass_vals.append(round(cclass_total, 3))
-    Cform_vals.append(round(form_rating, 3))
+        Cclass_vals.append(round(cclass_total, 3))
+        Cform_vals.append(round(form_rating, 3))
 
-df_final_field["Cclass"] = Cclass_vals
-df_final_field["Cform"] = Cform_vals
+    df_final_field["Cclass"] = Cclass_vals
+    df_final_field["Cform"] = Cform_vals
 
 # ===================== B. Bias-Adjusted Ratings =====================
 
@@ -6184,6 +6306,9 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                         
                         race_date = race_date_str  # Use extracted date
                         race_id = f"{track_name}_{race_date}_R{st.session_state.get('race_num', 1)}"
+                        
+                        # Calculate race bucket for track bias lookup
+                        race_bucket = distance_bucket(distance_txt)
 
                         # Prepare COMPREHENSIVE race metadata with all context
                         race_metadata = {
