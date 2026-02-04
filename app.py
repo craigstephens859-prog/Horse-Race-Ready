@@ -4351,11 +4351,22 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 # High quality parse - use unified engine
                 engine = UnifiedRatingEngine(softmax_tau=3.0)
 
-                # Extract purse value
+                # Extract race metadata (purse, race type, distance) using comprehensive function
+                race_metadata = extract_race_metadata_from_pp_text(pp_text)
+                today_purse = race_metadata.get('purse_amount', 0)
+                
+                # Fallback to session state or defaults if extraction failed
+                if today_purse == 0:
+                    today_purse = st.session_state.get('purse_val', 20000)
+                
+                # Extract distance from PP text header (e.g., "6 Furlongs", "1 1/16 Miles")
                 import re
-                purse_match = re.search(r'\$(\d+(?:,\d+)*)', pp_text[:500])
-                today_purse = int(purse_match.group(1).replace(',', '')) if purse_match else 20000
-
+                distance_match = re.search(r'(\d+(?:\s+\d+/\d+)?)\s+(Furlong|Mile)', pp_text[:500], re.IGNORECASE)
+                extracted_distance = distance_match.group(0) if distance_match else None
+                
+                # Use extracted distance if found, otherwise use session state
+                final_distance = extracted_distance if extracted_distance else distance_txt
+                
                 # Get predictions
                 results_df = engine.predict_race(
                     pp_text=pp_text,
@@ -4363,7 +4374,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     today_race_type=race_type,
                     track_name=track_name,
                     surface_type=surface_type,
-                    distance_txt=distance_txt
+                    distance_txt=final_distance
                 )
 
                 if not results_df.empty:
