@@ -4721,50 +4721,91 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         # if prime_power_raw > 0 block, otherwise the else branch will fail
         # with UnboundLocalError when trying to use it
         
-        # Apply component weights based on race_quality
-        # These weights are already set in the race info section
-        speed_multiplier = 1.8  # Default
-        class_weight = 3.0
+        # ═══════════════════════════════════════════════════════════════════════
+        # CRITICAL: Use race_class_parser weight OR fallback to legacy weights
+        # ═══════════════════════════════════════════════════════════════════════
+        # The race_class_parser provides INDUSTRY-STANDARD hierarchy weights (1-10 scale)
+        # that properly handle ALL race types (G1=10.0, Handicap=7.0, Claiming=2.0, etc.)
+        # 
+        # Legacy system used hardcoded 2.0-3.0 weights which severely under-weighted
+        # elite races, causing G1 races to use 3.0 instead of proper 10.0 weight
+        
+        # Default component weights (used if parser unavailable)
+        speed_multiplier = 1.8
+        class_weight = 3.0  # Legacy default
         form_weight = 1.8
         
-        # Determine race quality for this horse's calculation
-        # Use race_type parameter or detect from PP text
-        race_quality = "mid"  # Default
-        try:
-            # Try to detect race quality from PP text
-            race_metadata = extract_race_metadata_from_pp_text(pp_text)
-            race_type_clean = race_metadata.get('race_type_clean', '')
-            purse_amount = race_metadata.get('purse_amount', 0)
-            
-            # Map to quality tier
-            if race_type_clean == 'stakes_graded':
-                race_quality = "elite"
-            elif race_type_clean == 'stakes' and purse_amount >= 200000:
-                race_quality = "elite"
-            elif race_type_clean in ['allowance', 'allowance_optional']:
-                race_quality = "high"
-            elif race_type_clean == 'claiming':
-                race_quality = "low"
-            elif race_type_clean == 'maiden_claiming':
-                race_quality = "low-maiden"
-            elif purse_amount >= 500000:
-                race_quality = "elite"
-        except:
-            pass  # Use default race_quality
+        # RACE CLASS PARSER: Get industry-standard weight from Section A
+        # The comprehensive_class_rating already includes parser weight, BUT
+        # we need the MULTIPLIER to scale c_class in final rating calculation
+        race_quality = "mid"  # Default for legacy path
         
-        # Set weights based on race quality
-        if race_quality == "low" or race_quality == "low-maiden":
-            speed_multiplier = 2.5
-            class_weight = 2.0
-            form_weight = 1.8
-        elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":
-            speed_multiplier = 2.2
-            class_weight = 2.5
-            form_weight = 2.0
-        else:  # elite/stakes
-            speed_multiplier = 1.8
-            class_weight = 3.0
-            form_weight = 1.8
+        # Check if we have race_class_parser data from PP text
+        parser_class_weight = None
+        if RACE_CLASS_PARSER_AVAILABLE and pp_text:
+            try:
+                race_class_data = parse_and_calculate_class(pp_text)
+                parser_class_weight = race_class_data['weight']['class_weight']
+                race_quality = race_class_data['summary']['quality_tier']  # elite/high/mid/low
+            except:
+                pass
+        
+        # If parser unavailable, fall back to legacy race quality detection
+        if parser_class_weight is None:
+            try:
+                race_metadata = extract_race_metadata_from_pp_text(pp_text)
+                race_type_clean = race_metadata.get('race_type_clean', '')
+                purse_amount = race_metadata.get('purse_amount', 0)
+                
+                # Map to quality tier
+                if race_type_clean == 'stakes_graded':
+                    race_quality = "elite"
+                elif race_type_clean == 'stakes' and purse_amount >= 200000:
+                    race_quality = "elite"
+                elif race_type_clean in ['allowance', 'allowance_optional']:
+                    race_quality = "high"
+                elif race_type_clean == 'claiming':
+                    race_quality = "low"
+                elif race_type_clean == 'maiden_claiming':
+                    race_quality = "low-maiden"
+                elif purse_amount >= 500000:
+                    race_quality = "elite"
+            except:
+                pass
+        
+        # Set component weights based on race quality
+        if parser_class_weight is not None:
+            # USE RACE_CLASS_PARSER WEIGHT (industry-standard 1-10 scale)
+            # This properly handles G1 (10.0), Handicap (7.0), Claiming (2.0), etc.
+            class_weight = parser_class_weight
+            
+            # Adjust speed/form multipliers based on quality tier
+            if race_quality == "elite":
+                speed_multiplier = 1.8  # Elite races: skill matters more than speed
+                form_weight = 2.2  # Form very important in stakes
+            elif race_quality == "high":
+                speed_multiplier = 2.0
+                form_weight = 2.0
+            elif race_quality == "low":
+                speed_multiplier = 2.5  # Speed figures matter more in claiming
+                form_weight = 1.8
+            else:  # mid
+                speed_multiplier = 2.2
+                form_weight = 2.0
+        else:
+            # LEGACY FALLBACK (if parser unavailable)
+            if race_quality == "low" or race_quality == "low-maiden":
+                speed_multiplier = 2.5
+                class_weight = 2.0
+                form_weight = 1.8
+            elif race_quality == "mid" or race_quality == "mid-maiden" or race_quality == "high":
+                speed_multiplier = 2.2
+                class_weight = 2.5
+                form_weight = 2.0
+            else:  # elite/stakes
+                speed_multiplier = 1.8
+                class_weight = 3.0  # Still wrong for G1, but best we can do without parser
+                form_weight = 1.8
         
         # Apply pace component with claiming race cap
         pace_contribution = cpace * 1.5
@@ -5330,15 +5371,18 @@ st.dataframe(
 
 # ===================== D. Strategy Builder & Classic Report =====================
 
-def build_component_breakdown(primary_df, name_to_post, name_to_odds):
+def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""):
     """
     GOLD STANDARD: Build detailed component breakdown with complete mathematical transparency.
     
     Shows exactly what the rating system sees in each horse, with:
-    - All component values with proper weighting
+    - All component values with proper weighting (using race_class_parser if available)
     - Calculated weighted contributions
     - Full traceability of rating calculation
     - Robust error handling for missing/invalid data
+    
+    Args:
+        pp_text: Full BRISNET PP text for race_class_parser analysis
     
     Returns: Markdown formatted component breakdown for top 5 horses
     """
@@ -5359,17 +5403,28 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds):
     if top_horses.empty:
         return "No horses to analyze."
 
-    # COMPONENT WEIGHTS: Official system weights (matches rating engine)
-    # TUNED 2/1/2026: Class up to 3.0, Speed down to 1.8 based on SA R6 empirical analysis
-    # Class advantage proved decisive when horses drop down - class tells more than speed figures
+    # COMPONENT WEIGHTS: Display weights for breakdown
+    # NOTE: These are DEFAULT weights for display purposes only
+    # ACTUAL weights used in rating calculation are determined by race_class_parser
+    # and vary by race type (G1=10.0, Handicap=7.0, Claiming=2.0, etc.)
     WEIGHTS = {
-        'Cclass': 3.0,   # Class is most important - long-term quality (INCREASED from 2.5)
-        'Cspeed': 1.8,   # Speed figures - raw ability (DECREASED from 2.0)
+        'Cclass': 3.0,   # Default - overridden by parser (1.0-10.0 scale)
+        'Cspeed': 1.8,   # Speed figures - raw ability
         'Cform': 1.8,    # Form cycle - current condition
         'Cpace': 1.5,    # Pace advantage - tactical fit
         'Cstyle': 1.2,   # Running style - bias fit
         'Cpost': 0.8     # Post position - track bias
     }
+    
+    # IMPORTANT: Try to get actual class weight used in calculation from parser
+    # This ensures breakdown shows true weights, not defaults
+    if RACE_CLASS_PARSER_AVAILABLE and pp_text:
+        try:
+            race_class_data = parse_and_calculate_class(pp_text)
+            actual_class_weight = race_class_data['weight']['class_weight']
+            WEIGHTS['Cclass'] = actual_class_weight  # Use actual weight from parser
+        except:
+            pass  # Fall back to default
 
     breakdown = "### Component Breakdown (Top 5 Horses)\n"
     breakdown += "_Mathematical transparency: Shows exactly what the system sees in each horse_\n\n"
@@ -5798,7 +5853,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     if total_prob > 0:
         primary_probs_dict = {h: p / total_prob for h, p in primary_probs_dict.items()}
 
-    detailed_breakdown = build_component_breakdown(primary_df, name_to_post, name_to_odds)
+    detailed_breakdown = build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=pp_text)
 
     component_report = "### What Our System Sees in Top Contenders\n\n"
     component_report += detailed_breakdown + "\n"
