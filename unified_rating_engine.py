@@ -92,6 +92,59 @@ class UnifiedRatingEngine:
         'angles': 0.10     # Per-angle bonus (8 angles × 0.10 = 0.80 max)
     }
     
+    # DYNAMIC WEIGHT MODIFIERS BY RACE TYPE
+    # Adapts component emphasis based on race quality - PhD-calibrated
+    WEIGHT_MODIFIERS_BY_RACE_TYPE = {
+        'grade_1_2': {  # Grade 1-2: Elite races - class/speed dominate
+            'class': 1.2,   # +20% emphasis on class
+            'speed': 1.3,   # +30% emphasis on speed (figures matter more)
+            'form': 1.0,    # Standard
+            'pace': 0.9,    # -10% (less pace-dependent at top level)
+            'style': 1.1,   # +10% (surface mastery matters)
+            'post': 1.0     # Standard
+        },
+        'grade_3_stakes': {  # Grade 3 & Open Stakes
+            'class': 1.1,   # +10% class
+            'speed': 1.2,   # +20% speed
+            'form': 1.0,    # Standard
+            'pace': 1.0,    # Standard
+            'style': 1.0,   # Standard
+            'post': 1.0     # Standard
+        },
+        'allowance': {  # Allowance/AOC races
+            'class': 1.0,   # Standard
+            'speed': 1.1,   # +10% speed
+            'form': 1.1,    # +10% form (consistency matters)
+            'pace': 1.1,    # +10% pace
+            'style': 1.0,   # Standard
+            'post': 1.0     # Standard
+        },
+        'maiden': {  # Maiden races
+            'class': 0.8,   # -20% (no established class)
+            'speed': 0.9,   # -10% (limited history)
+            'form': 0.7,    # -30% (inconsistent)
+            'pace': 1.2,    # +20% (pace scenario critical)
+            'style': 1.1,   # +10% (running style important)
+            'post': 1.0     # Standard
+        },
+        'claiming': {  # Claiming races
+            'class': 1.0,   # Standard
+            'speed': 1.0,   # Standard
+            'form': 1.3,    # +30% (current form critical in claiming)
+            'pace': 1.2,    # +20% (pace matters more at lower levels)
+            'style': 1.0,   # Standard
+            'post': 0.9     # -10% (less bias at lower levels)
+        },
+        'default': {  # Default multipliers
+            'class': 1.0,
+            'speed': 1.0,
+            'form': 1.0,
+            'pace': 1.0,
+            'style': 1.0,
+            'post': 1.0
+        }
+    }
+    
     # PhD-Level Feature Flags (toggle refinements for A/B testing)
     FEATURE_FLAGS = {
         'use_exponential_decay_form': True,   # +12% accuracy improvement
@@ -104,18 +157,60 @@ class UnifiedRatingEngine:
     # Form decay constant (0.01 = 69-day half-life)
     FORM_DECAY_LAMBDA = 0.01
 
-    # Race type hierarchy for class calculations
+    # Race type hierarchy for class calculations - COMPREHENSIVE COVERAGE
+    # Score range: 0.5 (lowest maiden claiming) to 8.0 (Grade 1 Stakes)
+    # Every 0.5 point = meaningful class distinction
     RACE_TYPE_SCORES = {
-        'mcl': 1, 'maiden claiming': 1,
-        'clm': 2, 'claiming': 2,
-        'mdn': 3, 'md sp wt': 3, 'maiden special weight': 3, 'msw': 3,
-        'alw': 4, 'allowance': 4,
-        'oc': 4.5, 'optional claiming': 4.5,
-        'stk': 5, 'stakes': 5,
-        'hcp': 5.5, 'handicap': 5.5,
-        'g3': 6, 'grade 3': 6,
-        'g2': 7, 'grade 2': 7,
-        'g1': 8, 'grade 1': 8
+        # === MAIDEN CLAIMING (Lowest) ===
+        'mcl': 1.0, 'maiden claiming': 1.0, 'mdn clm': 1.0, 'md clm': 1.0,
+        'maiden clm': 1.0, 'mdn claiming': 1.0,
+        
+        # === CLAIMING (Low to Mid-Low) ===
+        'clm': 2.0, 'claiming': 2.0, 'clm price': 2.0,
+        'clm10000': 1.5, 'clm16000': 2.0, 'clm25000': 2.5,  # Tiered by price
+        'clm32000': 2.8, 'clm40000': 3.0, 'clm50000': 3.2,
+        
+        # === MAIDEN SPECIAL WEIGHT (Mid) ===
+        'mdn': 3.0, 'md sp wt': 3.0, 'maiden special weight': 3.0, 
+        'msw': 3.0, 'maiden': 3.0, 'mdn sp wt': 3.0,
+        
+        # === STARTER ALLOWANCE (Mid) ===
+        'str': 3.5, 'starter allowance': 3.5, 'str alw': 3.5,
+        'starter handicap': 3.5, 'str hcp': 3.5,
+        
+        # === ALLOWANCE (Mid-High) ===
+        'alw': 4.0, 'allowance': 4.0, 'n1x': 4.0, 'n2x': 4.2, 'n3x': 4.5,
+        'allowance n1x': 4.0, 'allowance n2x': 4.2, 'allowance n3x': 4.5,
+        
+        # === ALLOWANCE OPTIONAL CLAIMING (Mid-High) ===
+        'aoc': 4.5, 'oc': 4.5, 'optional claiming': 4.5,
+        'allowance optional claiming': 4.5, 'alw optional': 4.5,
+        
+        # === STAKES (High) ===
+        'stk': 5.0, 'stakes': 5.0, 'stake': 5.0,
+        'listed': 5.2, 'listed stakes': 5.2,  # Listed = below graded but above regular stakes
+        
+        # === HANDICAP (High) ===
+        'hcp': 5.5, 'handicap': 5.5, 'h': 5.5,
+        
+        # === GRADED STAKES (Elite) ===
+        'g3': 6.0, 'grade 3': 6.0, 'grade iii': 6.0, 'griii': 6.0,
+        'g3 stakes': 6.0, 'grade 3 stakes': 6.0,
+        
+        'g2': 7.0, 'grade 2': 7.0, 'grade ii': 7.0, 'grii': 7.0,
+        'g2 stakes': 7.0, 'grade 2 stakes': 7.0,
+        
+        'g1': 8.0, 'grade 1': 8.0, 'grade i': 8.0, 'gri': 8.0,
+        'g1 stakes': 8.0, 'grade 1 stakes': 8.0,
+        
+        # === SPECIAL CONDITIONS (Variations) ===
+        'waiver claiming': 2.2, 'waiver': 2.2, 'wcl': 2.2,
+        'trial': 4.8,  # Trials often high quality
+        'futurity': 5.5, 'derby': 6.5,  # Special events
+        
+        # === INTERNATIONAL EQUIVALENT PATTERNS ===
+        'group 1': 8.0, 'group 2': 7.0, 'group 3': 6.0,  # European pattern
+        'gr1': 8.0, 'gr2': 7.0, 'gr3': 6.0
     }
 
     def __init__(self, softmax_tau: float = 3.0):
@@ -407,7 +502,10 @@ class UnifiedRatingEngine:
         if self.FEATURE_FLAGS['use_mud_adjustment']:
             mud_adjustment = self._adjust_for_off_track(horse, condition_txt)
 
-        # WEIGHTED COMBINATION WITH UNCERTAINTY PROPAGATION
+        # WEIGHTED COMBINATION WITH DYNAMIC RACE-TYPE ADJUSTMENT
+        # Get dynamically adjusted weights for this race type
+        dynamic_weights = self._get_dynamic_weights(today_race_type)
+        
         component_ratings_dict = {
             'class': (cclass, cclass_std),
             'form': (cform, cform_std),
@@ -423,14 +521,14 @@ class UnifiedRatingEngine:
         for name, (mean, std) in component_ratings_dict.items():
             component_ratings_bayesian[name] = BayesianRating(mean=mean, std=std)
         
-        # Calculate weighted sum with uncertainty
+        # Calculate weighted sum with DYNAMIC weights (adjusted per race type)
         final_mean, final_std = calculate_final_rating_with_uncertainty(
             component_ratings_bayesian,
-            self.WEIGHTS
+            dynamic_weights  # Use race-type-specific weights
         )
         
         # Add bonuses (these don't have uncertainty, so add deterministically)
-        angles_bonus = angles_total * self.WEIGHTS['angles']
+        angles_bonus = angles_total * dynamic_weights['angles']
         final_rating = final_mean + angles_bonus + tier2 + mud_adjustment
         final_rating_std = final_std
         confidence_level = 1.0 - (final_std / (abs(final_mean) + 1e-6))
@@ -455,40 +553,169 @@ class UnifiedRatingEngine:
             final_rating_std=round(final_rating_std, 3),
             confidence_level=round(confidence_level, 3)
         )
+    
+    def _get_dynamic_weights(self, race_type: str) -> Dict[str, float]:
+        """
+        Get dynamically adjusted weights based on race type.
+        Applies race-specific multipliers to base weights for optimal component emphasis.
+        
+        INTELLIGENT WEIGHT ADJUSTMENT:
+        - Grade 1-2: Emphasize class/speed (+20-30%) because elite horses dominate
+        - Stakes: Slight speed emphasis (+20%)
+        - Allowance: Balanced with form consistency (+10%)
+        - Maiden: Emphasize pace/style (+10-20%), de-emphasize class/form (-20-30%)
+        - Claiming: Emphasize form/pace (+20-30%) because current condition matters most
+        
+        Args:
+            race_type: Today's race type (Grade 1, Claiming, MSW, etc.)
+        
+        Returns:
+            Dict of adjusted weights for this specific race type
+        """
+        # Determine race category
+        race_type_lower = race_type.lower()
+        
+        # Map race type to modifier category
+        if any(term in race_type_lower for term in ['g1', 'grade 1', 'g2', 'grade 2', 'group 1', 'group 2']):
+            modifier_key = 'grade_1_2'
+        elif any(term in race_type_lower for term in ['g3', 'grade 3', 'group 3', 'stakes', 'stk', 'handicap']):
+            modifier_key = 'grade_3_stakes'
+        elif any(term in race_type_lower for term in ['allowance', 'alw', 'optional', 'aoc', 'n1x', 'n2x', 'n3x']):
+            modifier_key = 'allowance'
+        elif any(term in race_type_lower for term in ['maiden', 'mdn', 'msw']):
+            modifier_key = 'maiden'
+        elif any(term in race_type_lower for term in ['claiming', 'clm', 'waiver', 'wcl']):
+            modifier_key = 'claiming'
+        else:
+            modifier_key = 'default'
+        
+        # Get modifiers for this race category
+        modifiers = self.WEIGHT_MODIFIERS_BY_RACE_TYPE[modifier_key]
+        
+        # Apply modifiers to base weights
+        dynamic_weights = {}
+        for component, base_weight in self.WEIGHTS.items():
+            if component in modifiers:
+                dynamic_weights[component] = base_weight * modifiers[component]
+            else:
+                dynamic_weights[component] = base_weight
+        
+        logger.debug(f"Dynamic weights for {race_type} ({modifier_key}): {dynamic_weights}")
+        
+        return dynamic_weights
 
     def _calc_class(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
-        """Class rating: purse comparison + race type hierarchy + FORM-ADJUSTED class drops"""
+        """
+        Class rating: purse comparison + race type hierarchy + FORM-ADJUSTED class drops
+        
+        COMPREHENSIVE RACE TYPE WEIGHTING:
+        - Grade 1 (8.0): +3.0 baseline - Elite championship caliber
+        - Grade 2 (7.0): +2.5 baseline - High-end stakes
+        - Grade 3 (6.0): +2.0 baseline - Quality stakes
+        - Stakes/Handicap (5.0-5.5): +1.5 baseline - Open stakes
+        - AOC/High Allowance (4.5): +1.0 baseline - Strong allowance
+        - Mid Allowance (4.0-4.2): +0.5 baseline - Standard allowance
+        - MSW/Low Allowance (3.0-3.5): +0.2 baseline - Starter level
+        - Claiming (2.0-3.2): 0.0 baseline - By purse only
+        - Maiden Claiming (1.0-1.5): -0.3 baseline - Lowest tier
+        """
         rating: float = 0.0
 
         # Race type scoring - normalize the input
         today_type_lower = today_race_type.lower()
         
-        # Direct lookup first
+        # Direct lookup first (handles all variations)
         today_score = self.RACE_TYPE_SCORES.get(today_type_lower, None)
         
-        # If not found, check for grade levels in string (handles "Grade 1 Stakes" format)
+        # If not found, intelligent substring matching for complex formats
         if today_score is None:
-            if 'g1' in today_type_lower or 'grade 1' in today_type_lower:
-                today_score = 8
-            elif 'g2' in today_type_lower or 'grade 2' in today_type_lower:
-                today_score = 7
-            elif 'g3' in today_type_lower or 'grade 3' in today_type_lower:
-                today_score = 6
+            # Grade levels (handles "Grade 1 Stakes", "G1 Handicap", etc.)
+            if any(term in today_type_lower for term in ['g1', 'grade 1', 'grade i', 'group 1']):
+                today_score = 8.0
+            elif any(term in today_type_lower for term in ['g2', 'grade 2', 'grade ii', 'group 2']):
+                today_score = 7.0
+            elif any(term in today_type_lower for term in ['g3', 'grade 3', 'grade iii', 'group 3']):
+                today_score = 6.0
+            # Stakes types
+            elif 'handicap' in today_type_lower and 'stakes' in today_type_lower:
+                today_score = 5.5  # Stakes Handicap
+            elif 'listed' in today_type_lower:
+                today_score = 5.2  # Listed Stakes
             elif 'stakes' in today_type_lower or 'stk' in today_type_lower:
-                today_score = 5
+                today_score = 5.0  # Open Stakes
+            # Allowance types
+            elif 'optional' in today_type_lower or 'aoc' in today_type_lower:
+                today_score = 4.5  # Allowance Optional Claiming
+            elif 'n3x' in today_type_lower:
+                today_score = 4.5  # Restricted allowance (high)
+            elif 'n2x' in today_type_lower:
+                today_score = 4.2  # Restricted allowance (mid)
+            elif 'n1x' in today_type_lower or 'alw' in today_type_lower or 'allowance' in today_type_lower:
+                today_score = 4.0  # Standard allowance
+            elif 'starter' in today_type_lower:
+                today_score = 3.5  # Starter allowance
+            # Maiden types
+            elif 'maiden' in today_type_lower:
+                if 'clm' in today_type_lower or 'claiming' in today_type_lower:
+                    today_score = 1.0  # Maiden Claiming
+                else:
+                    today_score = 3.0  # Maiden Special Weight
+            # Claiming (check for embedded purse amounts)
+            elif 'clm' in today_type_lower or 'claiming' in today_type_lower:
+                # Try to extract claiming price for tiered scoring
+                import re
+                clm_match = re.search(r'clm[^\d]*(\d+)', today_type_lower)
+                if clm_match:
+                    clm_price = int(clm_match.group(1))
+                    if clm_price >= 50000:
+                        today_score = 3.2
+                    elif clm_price >= 40000:
+                        today_score = 3.0
+                    elif clm_price >= 32000:
+                        today_score = 2.8
+                    elif clm_price >= 25000:
+                        today_score = 2.5
+                    elif clm_price >= 16000:
+                        today_score = 2.0
+                    else:
+                        today_score = 1.5
+                else:
+                    today_score = 2.0  # Default claiming
+            # Waiver claiming
+            elif 'waiver' in today_type_lower:
+                today_score = 2.2
+            # Fallback
             else:
                 today_score = 3.5  # Default middle-class
         
-        # BASELINE: All horses in Grade 1 get significant baseline for being in the race
-        # This ensures ratings don't collapse to near-zero when historical data is incomplete
+        # GRANULAR BASELINE: Weighted bonuses by race tier
+        # Every horse gets a baseline for the quality of race they're entering
         if today_score >= 8.0:  # Grade 1
             rating += 3.0
         elif today_score >= 7.0:  # Grade 2
             rating += 2.5
         elif today_score >= 6.0:  # Grade 3
             rating += 2.0
+        elif today_score >= 5.5:  # Handicap/High Stakes
+            rating += 1.5
         elif today_score >= 5.0:  # Stakes
             rating += 1.5
+        elif today_score >= 4.5:  # AOC/N3X (Strong allowance)
+            rating += 1.0
+        elif today_score >= 4.0:  # N2X/N1X/Standard Allowance
+            rating += 0.5
+        elif today_score >= 3.5:  # Starter Allowance
+            rating += 0.2
+        elif today_score >= 3.0:  # MSW
+            rating += 0.2
+        elif today_score >= 2.5:  # High-end Claiming (25k-50k)
+            rating += 0.0  # Neutral - let purse differentiate
+        elif today_score >= 2.0:  # Mid Claiming (16k-25k)
+            rating += 0.0
+        elif today_score >= 1.5:  # Low Claiming (10k-16k)
+            rating -= 0.2
+        else:  # Maiden Claiming (<10k) - Lowest tier
+            rating -= 0.3
 
         # CRITICAL FIX: Check if horse was COMPETITIVE in recent races
         # Don't reward class drops if horse was losing at higher level
@@ -498,7 +725,7 @@ class UnifiedRatingEngine:
             recent_top3_count = sum(1 for finish in horse.recent_finishes[:3] if finish <= 3)
             was_competitive = recent_top3_count >= 1
 
-        # Purse comparison
+        # Purse comparison (ADJUSTED: More granular for claiming tiers)
         if horse.recent_purses and today_purse > 0:
             avg_recent = np.mean(horse.recent_purses)
             if avg_recent > 0:
@@ -506,17 +733,17 @@ class UnifiedRatingEngine:
 
                 if purse_ratio >= 1.5:  # Major step up
                     rating -= 1.2
-                elif purse_ratio >= 1.2:
+                elif purse_ratio >= 1.2:  # Moderate step up
                     rating -= 0.6
                 elif 0.8 <= purse_ratio <= 1.2:  # Same class
                     rating += 0.8
-                elif purse_ratio >= 0.6:  # Class drop (REDUCED from +1.5)
+                elif purse_ratio >= 0.6:  # Class drop (FORM-ADJUSTED)
                     # Only give full bonus if horse was competitive at higher level
                     if was_competitive:
                         rating += 0.8  # Legitimate class drop advantage
                     else:
                         rating += 0.2  # Minimal bonus - just getting cheaper competition
-                else:  # Major drop (REDUCED from +2.5)
+                else:  # Major drop (RED FLAG)
                     # Red flag: Horse dropping significantly, likely weak
                     if was_competitive:
                         rating += 1.0  # Was good higher, should dominate here
