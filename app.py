@@ -447,25 +447,76 @@ def distance_bucket(distance_txt: str) -> str:
 
 # -------- Canonical track names + aliases --------
 TRACK_ALIASES = {
+    # === Major / Grade 1 Tracks ===
+    "Aqueduct": ["aqueduct", "aqu"],
+    "Belmont Park": ["belmont park", "belmont at aqueduct", "aqueduct at belmont", "belmont at the big a", "big a", "belmont", "bel"],
+    "Churchill Downs": ["churchill downs", "churchill", "cd"],
     "Del Mar": ["del mar", "dmr"],
+    "Gulfstream Park": ["gulfstream park", "gulfstream", "gp"],
     "Keeneland": ["keeneland", "kee"],
-    "Churchill Downs": ["churchill downs", "cd", "churchill"],
-    "Kentucky Downs": ["kentucky downs", "kd"],
+    "Laurel Park": ["laurel park", "laurel", "lrl"],
+    "Oaklawn Park": ["oaklawn park", "oaklawn", "op"],
+    "Pimlico": ["pimlico", "pim"],
+    "Santa Anita": ["santa anita park", "santa anita", "sa"],
     "Saratoga": ["saratoga", "sar"],
-    "Santa Anita": ["santa anita", "sa", "santa anita park"],
+    # === Secondary / Regional Tracks ===
+    "Ak-Sar-Ben": ["ak-sar-ben", "aksarben", "akr"],
+    "Albuquerque Downs": ["albuquerque downs", "albuquerque", "abq"],
+    "Arapahoe Park": ["arapahoe park", "arapahoe", "arp"],
+    "Arlington Park": ["arlington park", "arlington", "ap"],
+    "Belterra Park": ["belterra park", "belterra", "btp"],
+    "Canterbury Park": ["canterbury park", "canterbury", "cbp"],
+    "Century Mile": ["century mile", "cym"],
+    "Charles Town": ["charles town", "charlestown", "ct"],
+    "Colonial Downs": ["colonial downs", "colonial", "cln"],
+    "Columbus": ["columbus", "clb"],
+    "Delaware Park": ["delaware park", "delaware", "del"],
+    "Delta Downs": ["delta downs", "ded"],
+    "Ellis Park": ["ellis park", "ellis", "elp"],
+    "Emerald Downs": ["emerald downs", "emerald", "emr", "emd"],
+    "Evangeline Downs": ["evangeline downs", "evangeline", "evd"],
+    "Fair Grounds": ["fair grounds", "fairgrounds", "fg"],
+    "Fair Meadows": ["fair meadows", "fmr"],
+    "Fairmount Park": ["fairmount park", "fanduel fairmount", "cah", "collinsville", "fmp"],
+    "Finger Lakes": ["finger lakes", "fl"],
+    "Fonner Park": ["fonner park", "fonner", "fon"],
+    "Fort Erie": ["fort erie", "fe"],
+    "Golden Gate Fields": ["golden gate fields", "golden gate", "ggf", "gg"],
+    "Grants Pass": ["grants pass", "grp"],
+    "Great Lakes Downs": ["great lakes downs", "great lakes", "gld"],
+    "Gulfstream Park West": ["gulfstream park west", "gulfstream west", "gpw"],
+    "Hastings": ["hastings", "hst"],
+    "Hawthorne": ["hawthorne", "haw"],
+    "Horseshoe Indianapolis": ["horseshoe indianapolis", "indiana grand", "ind", "indy", "hsi"],
+    "Kentucky Downs": ["kentucky downs", "kd"],
+    "Laurel Park": ["laurel park", "laurel", "lrl"],
+    "Lone Star Park": ["lone star park", "lone star", "ls"],
+    "Los Alamitos": ["los alamitos", "lam"],
+    "Louisiana Downs": ["louisiana downs", "lad"],
+    "Mahoning Valley": ["mahoning valley", "mahoning", "mvr"],
+    "Monmouth Park": ["monmouth park", "monmouth", "mth"],
     "Mountaineer": ["mountaineer", "mnr"],
-    "Charles Town": ["charlestown", "charles town", "ct"],
-    "Gulfstream": ["gulfstream", "gulfstream park", "gp"],
-    "Tampa Bay Downs": ["tampa", "tampa bay downs", "tam"],
-    "Turf Paradise": ["turf paradise", "tup", "turf"],
-    "Belmont Park": ["belmont", "belmont park", "bel", "aqueduct at belmont", "belmont at aqueduct", "big a"],
-    "Horseshoe Indianapolis": ["horseshoe indianapolis", "indiana grand", "ind", "indy"],
-    "Penn National": ["penn national", "pen"],
-    "Presque Isle Downs": ["presque isle", "presque isle downs", "pid"],
+    "Parx Racing": ["parx racing", "parx", "philadelphia park", "prx"],
+    "Penn National": ["penn national", "penn", "pen"],
+    "Pleasanton": ["pleasanton", "pln"],
+    "Portland Meadows": ["portland meadows", "portland", "pm"],
+    "Prairie Meadows": ["prairie meadows", "prairie", "prm"],
+    "Presque Isle Downs": ["presque isle downs", "presque isle", "pid"],
+    "Remington Park": ["remington park", "remington", "rp"],
+    "Retama Park": ["retama park", "retama", "ret"],
+    "Ruidoso Downs": ["ruidoso downs", "ruidoso", "rud"],
+    "Sam Houston": ["sam houston race park", "sam houston", "hou"],
+    "Santa Rosa": ["santa rosa", "sr"],
+    "Sunland Park": ["sunland park", "sunland", "sun"],
+    "Sunray Park": ["sunray park", "sunray", "sry"],
+    "Suffolk Downs": ["suffolk downs", "suffolk", "suf"],
+    "Tampa Bay Downs": ["tampa bay downs", "tampa bay", "tampa", "tam"],
+    "Thistledown": ["thistledown", "tdn"],
+    "Turfway Park": ["turfway park", "turfway", "tp"],
+    "Turf Paradise": ["turf paradise", "tup"],
+    "Will Rogers Downs": ["will rogers downs", "will rogers", "wrd"],
     "Woodbine": ["woodbine", "wo"],
-    "Evangeline Downs": ["evangeline", "evangeline downs", "evd"],
-    "Fairmount Park": ["fairmount park", "fanduel fairmount", "cah", "collinsville"],
-    "Finger Lakes": ["finger lakes", "fl"]
+    "Zia Park": ["zia park", "zia", "zp"],
 }
 _CANON_BY_TOKEN = {}
 for canon, toks in TRACK_ALIASES.items():
@@ -554,7 +605,97 @@ def parse_brisnet_race_header(pp_text: str) -> Dict[str, Any]:
     parts = [p.strip() for p in header_line.split('|')]
 
     if len(parts) < 2:
-        # No pipes - return empty (will fall back to individual parsers)
+        # ===== Non-pipe format parser =====
+        # Format: "Ultimate PP's w/ QuickPlay Comments Oaklawn Park Alw 12500s 6 Furlongs 4&up Thursday, February 05, 2026 Race 9"
+        text = header_line
+
+        # Strip "Ultimate PP's w/ QuickPlay Comments" prefix
+        text = re.sub(r'^Ultimate PP.*?Comments\s+', '', text, flags=re.IGNORECASE).strip()
+
+        # --- Extract Race Number (anchored at end, e.g., "Race 9") ---
+        race_num_match = re.search(r'\bRace\s+(\d+)\s*$', text, re.IGNORECASE)
+        if race_num_match:
+            try:
+                result['race_number'] = int(race_num_match.group(1))
+            except (ValueError, TypeError):
+                pass
+            text = text[:race_num_match.start()].strip()
+
+        # --- Extract Date (e.g., "Thursday, February 05, 2026") ---
+        date_pattern = r'((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+\w+\s+\d{1,2},?\s+\d{4})'
+        date_match = re.search(date_pattern, text, re.IGNORECASE)
+        if date_match:
+            date_str = date_match.group(1)
+            comma_parts = date_str.split(',', 1)
+            if len(comma_parts) >= 2:
+                result['day_of_week'] = comma_parts[0].strip()
+                result['race_date'] = comma_parts[1].strip()
+            text = text[:date_match.start()].strip().rstrip(',').strip()
+
+        # --- Extract Distance (e.g., "6 Furlongs", "1 1/16 Miles", "1„ Mile") ---
+        dist_pattern = r'([\d½¼¾„ˆ]+(?:\s*[\d½¼¾/]+)?\s*(?:Furlongs?|Miles?|Yards?)\b)'
+        dist_match = re.search(dist_pattern, text, re.IGNORECASE)
+        if dist_match:
+            result['distance'] = dist_match.group(1).strip()
+            text = text[:dist_match.start()].strip() + ' ' + text[dist_match.end():].strip()
+            text = text.strip()
+
+        # --- Extract Age/Sex restrictions (e.g., "4&up", "3yo Fillies", "F&M") ---
+        age_sex_pattern = r'\b(\d+&up|3yo|4yo|F&M|Fillies|Mares|Colts|Geldings|C&G)\b'
+        age_sex_matches = re.findall(age_sex_pattern, text, re.IGNORECASE)
+        for m in age_sex_matches:
+            ml = m.lower()
+            if re.match(r'\d+&up|\d+yo', ml):
+                result['age_restriction'] = m
+            elif re.match(r'fillies?|mares?|colts?|geldings?|f&m|c&g', ml):
+                result['sex_restriction'] = m.title()
+        # Remove matched age/sex tokens from text
+        text = re.sub(age_sex_pattern, '', text, flags=re.IGNORECASE).strip()
+
+        # --- Extract Track Name ---
+        # Strategy 1: Match against known track names (longest match first for accuracy)
+        text_lower = text.lower().strip()
+        matched_track = ''
+        matched_len = 0
+        for canon, toks in TRACK_ALIASES.items():
+            for t in toks:
+                if text_lower.startswith(t) and len(t) > matched_len:
+                    # Verify word boundary (not a partial match)
+                    if len(text_lower) == len(t) or not text_lower[len(t)].isalpha():
+                        matched_track = canon
+                        matched_len = len(t)
+        if matched_track:
+            result['track_name'] = matched_track
+            text = text[matched_len:].strip()
+        else:
+            # Strategy 2: Everything before the first race-type keyword is the track name
+            race_type_boundary = re.search(
+                r'\b(Alw|Clm|Stk|Hcp|Mdn|Msw|Aoc|Mcl|Wmc|Oc|Soc|Str|G1|G2|G3|PWC|'
+                r'©|¨|§|Allowance|Claiming|Stakes|Handicap|Maiden|Optional)\b',
+                text, re.IGNORECASE
+            )
+            if race_type_boundary:
+                candidate = text[:race_type_boundary.start()].strip()
+                if candidate and len(candidate) > 2:
+                    result['track_name'] = candidate
+                    text = text[race_type_boundary.start():].strip()
+            else:
+                # Strategy 3: Everything before any digit sequence is the track name
+                digit_boundary = re.search(r'\b\d', text)
+                if digit_boundary and digit_boundary.start() > 2:
+                    result['track_name'] = text[:digit_boundary.start()].strip()
+                    text = text[digit_boundary.start():].strip()
+
+        # --- Extract Race Type + Purse from remaining text ---
+        # e.g., "Alw 12500s", "Clm 25000", "©Hcp 50000", "Str 40000"
+        type_purse_match = re.search(r'([©¨§]?\w+)\s+(\d+)\w*', text)
+        if type_purse_match:
+            result['race_type'] = type_purse_match.group(1)
+            try:
+                result['purse_amount'] = int(type_purse_match.group(2))
+            except (ValueError, TypeError):
+                pass
+
         return result
 
     # Parse each section
