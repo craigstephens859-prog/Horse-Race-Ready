@@ -4873,6 +4873,38 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         except BaseException:
             pass
 
+        # ======================== DISTANCE MOVEMENT ANALYSIS (NEW) ========================
+        # Integrates analyze_distance_pattern() into tier2_bonus calculations
+        # Rewards horses proven at today's distance, penalizes unproven stretching out
+        try:
+            # Parse past races from PP text for this horse
+            past_races = parse_recent_class_levels(pp_text)  # Reuse existing parser
+            if past_races:
+                distance_analysis = analyze_distance_pattern(past_races, distance_txt)
+                distance_bonus = distance_analysis.get('bonus', 0.0)
+                
+                # Additional bonus for experience at distance
+                experience_count = distance_analysis.get('experience_count', 0)
+                if experience_count >= 3:
+                    distance_bonus += 0.10  # Proven at distance
+                elif experience_count == 0:
+                    distance_bonus -= 0.08  # Never raced this distance
+                
+                # Stretch out / cut back adjustments
+                distance_change = distance_analysis.get('distance_change', 'unknown')
+                if distance_change == 'stretch_out' and not is_marathon:
+                    # Check if horse has good closing ability (LP figures)
+                    # Horses stretching out need strong late pace
+                    pass  # Already handled in analyze_distance_pattern
+                elif distance_change == 'cut_back':
+                    # Cutting back often positive for speed horses
+                    if style in ['E', 'E/P']:
+                        distance_bonus += 0.05  # Speed horse cutting back
+                
+                tier2_bonus += distance_bonus
+        except BaseException:
+            pass  # Fail silently if distance analysis fails
+
         # COMPREHENSIVE: Workout Analysis (V2 with marathon awareness)
         # FUTURE ENHANCEMENT: Full workout parsing from BRISNET PP text
         # Currently using basic workout detection. Advanced parsing would extract:
