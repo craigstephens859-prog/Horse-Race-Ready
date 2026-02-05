@@ -123,6 +123,20 @@ except ImportError as e:
     LEARNED_WEIGHTS = {}
     print(f"Adaptive learning not available: {e}")
 
+# INTELLIGENT LEARNING ENGINE: High-IQ pattern analysis from training sessions
+try:
+    from intelligent_learning_engine import (
+        IntelligentLearningEngine,
+        analyze_and_learn_from_result
+    )
+    INTELLIGENT_LEARNING_AVAILABLE = True
+    print("✅ Intelligent Learning Engine loaded")
+except ImportError as e:
+    INTELLIGENT_LEARNING_AVAILABLE = False
+    IntelligentLearningEngine = None
+    analyze_and_learn_from_result = None
+    print(f"Intelligent learning not available: {e}")
+
 # SECURITY: Import input validation and protection utilities
 try:
     from security_validators import (
@@ -7648,6 +7662,47 @@ else:
                                                         except Exception as cal_err:
                                                             logger.warning(f"Auto-calibration failed: {cal_err}")
 
+                                                        # INTELLIGENT LEARNING: High-IQ pattern analysis (from training sessions)
+                                                        try:
+                                                            if INTELLIGENT_LEARNING_AVAILABLE and analyze_and_learn_from_result:
+                                                                # Build predictions list from horses_df
+                                                                predictions_list = []
+                                                                for _, row in horses_df.iterrows():
+                                                                    pred = {
+                                                                        'program_number': int(row.get('program_number', row.get('post', 0))),
+                                                                        'horse_name': row.get('horse_name', 'Unknown'),
+                                                                        'predicted_rank': int(row.get('predicted_rank', 99)),
+                                                                        'rating': float(row.get('rating', 0)),
+                                                                        'c_form': float(row.get('Cform', row.get('c_form', 0.5))),
+                                                                        'c_class': float(row.get('Cclass', row.get('c_class', 0.5))),
+                                                                        'pace_style': row.get('Pace_Style', row.get('pace_style', '')),
+                                                                        'last_fig': row.get('speed_last', row.get('last_fig', 0)),
+                                                                        'speed_figures': row.get('speed_figures', []),
+                                                                        'angles': row.get('angles', [])
+                                                                    }
+                                                                    predictions_list.append(pred)
+                                                                
+                                                                # Call intelligent learning analysis
+                                                                learning_result = analyze_and_learn_from_result(
+                                                                    db_path=gold_db.db_path,
+                                                                    race_id=race_id,
+                                                                    predictions=predictions_list,
+                                                                    actual_results=finish_order
+                                                                )
+                                                                
+                                                                # Show insights if any were found
+                                                                if learning_result.get('insights_found', 0) > 0:
+                                                                    insights = learning_result.get('insights', [])
+                                                                    if insights:
+                                                                        st.toast(
+                                                                            f"🎓 Found {len(insights)} learning patterns: {insights[0]['pattern']}", 
+                                                                            icon="💡"
+                                                                        )
+                                                                        # Store for display
+                                                                        st.session_state['last_learning_insights'] = insights
+                                                        except Exception as learn_err:
+                                                            logger.warning(f"Intelligent learning failed: {learn_err}")
+
                                                         # Clear the input
                                                         st.session_state[f"finish_input_{race_id}"] = ""
 
@@ -7709,6 +7764,69 @@ else:
                             help="Total training examples (5 per completed race)")
 
                     st.success(f"🔒 **Data Persistence Verified:** All data stored in `{gold_db.db_path}` - survives browser close/reopen!")
+
+                    # 4.5 Show Intelligent Learning Insights (if any)
+                    if 'last_learning_insights' in st.session_state and st.session_state['last_learning_insights']:
+                        st.markdown("#### 🎓 Latest Learning Insights")
+                        insights = st.session_state['last_learning_insights']
+                        
+                        with st.expander(f"📊 Found {len(insights)} pattern(s) from last race analysis", expanded=True):
+                            for i, insight in enumerate(insights, 1):
+                                pattern_icons = {
+                                    'best_recent_speed': '⚡',
+                                    'class_drop': '📉',
+                                    'layoff_cycle_bounce': '🔄',
+                                    'lone_presser_hot_pace': '🏃',
+                                    'form_speed_override': '📈',
+                                    'post_bias_alignment': '🎯'
+                                }
+                                icon = pattern_icons.get(insight['pattern'], '💡')
+                                
+                                st.markdown(f"""
+                                **{icon} Pattern {i}: {insight['pattern'].replace('_', ' ').title()}**
+                                - Horse: **{insight['horse']}**
+                                - {insight['description']}
+                                - Confidence: {insight['confidence']*100:.0f}%
+                                """)
+                            
+                            st.info("💡 These insights are automatically stored and used to improve future predictions!")
+                    
+                    # 4.6 Show Pattern Learning History
+                    if INTELLIGENT_LEARNING_AVAILABLE:
+                        try:
+                            engine = IntelligentLearningEngine(gold_db.db_path)
+                            learnings = engine.get_accumulated_learnings()
+                            
+                            if learnings.get('total_races_analyzed', 0) > 0:
+                                st.markdown("#### 📚 Accumulated Learning History")
+                                
+                                col_a, col_b = st.columns(2)
+                                with col_a:
+                                    st.metric(
+                                        "Races Analyzed", 
+                                        learnings['total_races_analyzed'],
+                                        help="Total races where patterns were identified"
+                                    )
+                                
+                                with col_b:
+                                    top_patterns = list(learnings.get('pattern_frequency', {}).keys())[:3]
+                                    if top_patterns:
+                                        st.metric(
+                                            "Top Patterns",
+                                            ', '.join([p.replace('_', ' ').title()[:15] for p in top_patterns]),
+                                            help="Most frequently identified winning patterns"
+                                        )
+                                
+                                # Show pattern frequency
+                                pattern_freq = learnings.get('pattern_frequency', {})
+                                if pattern_freq:
+                                    with st.expander("📈 Pattern Frequency Details"):
+                                        for pattern, data in pattern_freq.items():
+                                            count = data.get('count', 0)
+                                            avg_imp = data.get('avg_improvement', 0)
+                                            st.write(f"- **{pattern.replace('_', ' ').title()}**: {count} times (avg rank improvement: {avg_imp:.1f})")
+                        except Exception as learn_hist_err:
+                            pass  # Silently skip if learning history fails
 
                     # 4. Get last 10 saved results
                     cursor.execute("""
