@@ -6118,24 +6118,13 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                                                                                                  nC)}\n"
         if nA >= 2:
             ex_box_combos = get_box_combos(nA, 2)
-            blueprint_report += f"* **Exacta Box (A-Group):** `{', '.join(map(str,
-                                                                              [int(name_to_post.get(h,
-                                                                                                    '0')) for h in A_group]))}` BOX - {get_bet_cost(1.00,
-                                                                                                                                                    ex_box_combos)}\n"
+            blueprint_report += f"* **Exacta Box (A-Group):** `{', '.join(map(str, [int(name_to_post.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(1.00, ex_box_combos)}\n"
 
         # Trifecta Examples
-        blueprint_report += f"* **Trifecta Part-Wheel:** `A / B / C` ({nA}x{nB}x{nC}) - {
-            get_min_cost_str(
-                0.50,
-                nA,
-                nB,
-                nC)}\n"
+        blueprint_report += f"* **Trifecta Part-Wheel:** `A / B / C` ({nA}x{nB}x{nC}) - {get_min_cost_str(0.50, nA, nB, nC)}\n"
         if nA >= 3:
             tri_box_combos = get_box_combos(nA, 3)
-            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str,
-                                                                                [int(name_to_post.get(h,
-                                                                                                      '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50,
-                                                                                                                                                      tri_box_combos)}\n"
+            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str, [int(name_to_post.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
 
         blueprint_report += "_Structure: Use A-horses on top, spread underneath with B and C._\n"
 
@@ -6147,12 +6136,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         blueprint_report += f"* **Exacta (Part-Wheel):** `A / B` ({nA}x{nB}) - {get_min_cost_str(1.00, nA, nB)}\n"
         if nA >= 1 and nB >= 1 and nC >= 1:  # Check if groups have members for straight example
             blueprint_report += "* **Straight Trifecta:** `Top A / Top B / Top C` (1 combo) - Consider at higher base (e.g., $1 or $2).\n"
-        blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B / C` ({nA}x{nB}x{nC}) - {
-            get_min_cost_str(
-                0.50,
-                nA,
-                nB,
-                nC)}\n"
+        blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B / C` ({nA}x{nB}x{nC}) - {get_min_cost_str(0.50, nA, nB, nC)}\n"
         blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B / C / D` ({nA}x{nB}x{nC}x{nD}) - {
             get_min_cost_str(
                 0.10,
@@ -6161,74 +6145,20 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                 nC,
                 nD)}\n"
         if field_size >= 7:  # Only suggest SH5 if 7+ runners
-            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B / C / D / ALL` ({nA}x{nB}x{nC}x{nD}x{nAll}) - {
-                get_min_cost_str(
-                    0.10,
-                    nA,
-                    nB,
-                    nC,
-                    nD,
-                    nAll)}\n"
+            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B / C / D / ALL` ({nA}x{nB}x{nC}x{nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB, nC, nD, nAll)}\n"
 
         # --- Value-Hunter Blueprint ---
         blueprint_report += "\n#### Value-Hunter Profile Plan\n"
         blueprint_report += "_Focus: Use A-Group (includes overlays) ON TOP, spread wider underneath._\n"
         blueprint_report += "* **Win Bets:** Consider betting all **A-Group** horses.\n"
-        blueprint_report += f"* **Exacta (Part-Wheel):** `A / B,C` ({nA}x{nB +
-                                                                          nC}) - {get_min_cost_str(1.00, nA, nB +
-                                                                                                   nC)}\n"
+        blueprint_report += f"* **Exacta (Part-Wheel):** `A / B,C` ({nA}x{nB + nC}) - {get_min_cost_str(1.00, nA, nB + nC)}\n"
         if nA >= 3:  # Example box if A group is large enough
             tri_box_combos = get_box_combos(nA, 3)
-            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str,
-                                                                                [int(name_to_post.get(h,
-                                                                                                      '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50,
-                                                                                                                                                      tri_box_combos)}\n"
-        blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B,C / B,C,D` ({nA}x{
-            nB +
-            nC}x{
-            nB +
-            nC +
-            nD}) - {
-            get_min_cost_str(
-                0.50,
-                nA,
-                nB +
-                nC,
-                nB +
-                nC +
-                nD)}\n"
-        blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B,C / B,C,D / ALL` ({nA}x{
-            nB +
-            nC}x{
-            nB +
-            nC +
-            nD}x{nAll}) - {
-            get_min_cost_str(
-                0.10,
-                nA,
-                nB +
-                nC,
-                nB +
-                nC +
-                nD,
-                nAll)}\n"
+            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str, [int(name_to_post.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
+        blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B,C / B,C,D` ({nA}x{nB + nC}x{nB + nC + nD}) - {get_min_cost_str(0.50, nA, nB + nC, nB + nC + nD)}\n"
+        blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B,C / B,C,D / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll)}\n"
         if field_size >= 7:  # Only suggest SH5 if 7+ runners
-            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{
-                nB +
-                nC}x{
-                nB +
-                nC +
-                nD}x{nAll}x{nAll}) - {
-                get_min_cost_str(
-                    0.10,
-                    nA,
-                    nB +
-                    nC,
-                    nB +
-                    nC +
-                    nD,
-                    nAll,
-                    nAll)}\n"
+            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll, nAll)}\n"
 
     # --- GOLD STANDARD: Build probability dictionary with validation ---
     primary_probs_dict = {}
@@ -6277,9 +6207,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     for pos, (horse, prob) in enumerate(finishing_order, 1):
         post = name_to_post.get(horse, '?')
         odds = name_to_odds.get(horse, '?')
-        finishing_order_report += f"* **{
-            position_names[pos]} • #{post} {horse}** (Odds: {odds}) — {
-            prob * 100:.1f}% conditional probability\n"
+        finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** (Odds: {odds}) — {prob * 100:.1f}% conditional probability\n"
 
     finishing_order_report += "\n💡 **Use These Rankings:** Build your exotic tickets using this exact finishing order for optimal probability-based coverage.\n\n"
 
@@ -6296,14 +6224,12 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         # Exacta part-wheel
         ex_combos = nA * (nB + min(nC, 2))
         ex_cost = min(int(ex_combos * 0.50), 14)
-        bankroll_report += f"* **Exacta** (${ex_cost}): A / B,C (top 2 from C) - ${ex_cost /
-                                                                                   ex_combos:.2f} base × {ex_combos} combos\n"
+        bankroll_report += f"* **Exacta** (${ex_cost}): A / B,C (top 2 from C) - ${ex_cost / ex_combos:.2f} base × {ex_combos} combos\n"
 
         # Trifecta
         tri_combos = nA * (nB + min(nC, 2)) * (nB + nC + min(nD, 2))
         tri_cost = min(int(tri_combos * 0.30), 12)
-        bankroll_report += f"* **Trifecta** (${tri_cost}): A / B,C / B,C,D - ${tri_cost /
-                                                                               tri_combos:.2f} base × {tri_combos} combos\n"
+        bankroll_report += f"* **Trifecta** (${tri_cost}): A / B,C / B,C,D - ${tri_cost / tri_combos:.2f} base × {tri_combos} combos\n"
 
         # Superfecta
         super_cost = 50 - win_cost - ex_cost - tri_cost
@@ -6322,15 +6248,13 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
         # Trifecta
         tri_combos = nA * nB * nC
-        bankroll_report += f"* **Trifecta** ($12): A / B / C - ${12 /
-                                                                 max(tri_combos, 1):.2f} base × {tri_combos} combos\n"
+        bankroll_report += f"* **Trifecta** ($12): A / B / C - ${12 / max(tri_combos, 1):.2f} base × {tri_combos} combos\n"
 
         # Superfecta
         bankroll_report += f"* **Superfecta** ($8): A / B / C / D - scaled to fit budget\n"
 
     bankroll_report += f"\n**Total Investment:** $50 (optimized)\n"
-    bankroll_report += f"**Risk Level:** {strategy_profile} approach - {
-        'Wider coverage, value-based' if strategy_profile == 'Value Hunter' else 'Concentrated on top selection'}\n"
+    bankroll_report += f"**Risk Level:** {strategy_profile} approach - {'Wider coverage, value-based' if strategy_profile == 'Value Hunter' else 'Concentrated on top selection'}\n"
     bankroll_report += f"\n💡 **Use Finishing Order Predictions:** The probability rankings above show the most likely finishers for each position. Build your tickets using horses with highest probabilities for each slot.\n"
 
     # --- Smart Money Alert Section ---
@@ -6993,12 +6917,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 
                         if success:
                             st.success(f"💾 **Auto-saved to gold database:** `{race_id}`")
-                            st.info(
-                                f"📊 Saved {
-                                    len(horses_data)} horses with {
-                                    len(
-                                        [
-                                            k for k in horses_data[0].keys() if k.startswith('rating_') or k.startswith('angle_')])} ML features each")
+                            st.info(f"📊 Saved {len(horses_data)} horses with {len([k for k in horses_data[0].keys() if k.startswith('rating_') or k.startswith('angle_')])} ML features each")
                             st.session_state['last_saved_race_id'] = race_id
                             st.info("🏁 After race completes, submit actual top 5 finishers in **Section E** below!")
                         else:
@@ -7370,8 +7289,7 @@ else:
                             total_horses_saved,
                             help="Total training examples (5 per completed race)")
 
-                    st.success(
-                        f"🔒 **Data Persistence Verified:** All data stored in `{gold_db.db_path}` - survives browser close/reopen!")
+                    st.success(f"🔒 **Data Persistence Verified:** All data stored in `{gold_db.db_path}` - survives browser close/reopen!")
 
                     # 4. Get last 10 saved results
                     cursor.execute("""
