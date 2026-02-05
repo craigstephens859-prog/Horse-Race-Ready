@@ -6809,6 +6809,12 @@ else:
                         df_final_field["Post"].values,
                         index=df_final_field["Horse"]
                     ).to_dict()
+                    
+                    # Store Section A data in session state for Section E validation
+                    # This ensures the validation uses the ACTUAL post numbers from the race setup
+                    post_to_name = {int(v): k for k, v in name_to_post.items()}
+                    st.session_state['section_a_posts'] = set(int(v) for v in name_to_post.values())
+                    st.session_state['section_a_post_to_name'] = post_to_name
 
                     # CRITICAL FIX: Prioritize Live Odds over ML odds (just like Fair % calculation does)
                     name_to_odds = {}
@@ -7533,8 +7539,27 @@ else:
                         st.caption("Enter program numbers separated by commas and press ENTER to auto-save")
 
                         # Get horse data for validation and display
-                        program_numbers = sorted([int(h['program_number']) for h in horses])
-                        horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
+                        # First try to use Section A data from session state (most accurate)
+                        section_a_posts = st.session_state.get('section_a_posts', set())
+                        section_a_post_to_name = st.session_state.get('section_a_post_to_name', {})
+                        
+                        # Fall back to database data if Section A data not available
+                        db_program_numbers = sorted([int(h['program_number']) for h in horses])
+                        db_horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
+                        
+                        # Use Section A data if available, otherwise use database
+                        if section_a_posts:
+                            program_numbers = sorted(section_a_posts)
+                            horse_names_dict = section_a_post_to_name
+                        else:
+                            program_numbers = db_program_numbers
+                            horse_names_dict = db_horse_names_dict
+                        
+                        # Create combined set of valid programs (both Section A and database)
+                        all_known_programs = set(program_numbers) | set(db_program_numbers)
+                        
+                        # Also allow program numbers up to max + buffer for late changes
+                        max_program = max(all_known_programs) if all_known_programs else field_size
 
                         # Text input for finish order - NO callback (simpler approach)
                         finish_input = st.text_input(
