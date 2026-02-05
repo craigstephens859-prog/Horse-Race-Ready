@@ -6158,6 +6158,9 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         smart_money_horses = []
     if name_to_ml is None:
         name_to_ml = {}
+    
+    # Initialize primary_probs_dict early to prevent UnboundLocalError
+    primary_probs_dict = {}
 
     # --- ELITE: Calculate Most Likely Finishing Order (Sequential Selection Algorithm) ---
     def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> List[Tuple[str, float]]:
