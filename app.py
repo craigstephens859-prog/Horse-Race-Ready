@@ -6089,11 +6089,9 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             1 / top_ml_dec)) and top_ml_dec < 4  # Define underlay as < 3/1
 
     if is_overlay:
-        contender_report += f"\n**Value Note:** Top pick **#{
-            name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
+        contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
     elif is_underlay:
-        contender_report += f"\n**Value Note:** Top pick **#{
-            name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
+        contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
 
     # --- 5. Build Simplified Blueprint Section ---
     blueprint_report = "### Betting Strategy Blueprints (Scale Base Bets to Budget: Max ~$100 Recommended)\n"
