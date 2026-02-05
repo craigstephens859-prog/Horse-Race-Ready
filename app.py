@@ -5804,8 +5804,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
         breakdown += f"- **Quirin Points:** {quirin} - BRISNET early pace points\n"
 
         # FINAL RATING: Includes all angles and bonuses
-        breakdown += f"- **Final Rating:** {
-            final_rating:.2f} (includes 8 elite angles + tier 2 bonuses + track bias)\n\n"
+        breakdown += f"- **Final Rating:** {final_rating:.2f} (includes 8 elite angles + tier 2 bonuses + track bias)\n\n"
 
     breakdown += "_Note: Positive values = advantages, negative = disadvantages. Weighted contributions show impact on final rating._\n"
 
