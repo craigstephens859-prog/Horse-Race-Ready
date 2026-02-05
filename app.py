@@ -1869,12 +1869,7 @@ def calculate_exotics_biased(fair_probs: Dict[str, float],
 
         sh5_rows.append(
             {
-                "Ticket": f"{
-                    horses[i]} → {
-                    horses[j]} → {
-                    horses[k]} → {
-                        horses[l]} → {
-                            horses[m]}",
+                "Ticket": f"{horses[i]} → {horses[j]} → {horses[k]} → {horses[l]} → {horses[m]}",
                 "Prob": prob_ijklm})
 
     sh5_total = sum(r["Prob"] for r in sh5_rows) or 1.0
