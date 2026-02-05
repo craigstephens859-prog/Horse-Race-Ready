@@ -6108,9 +6108,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             blueprint_report += "* **Win Bet:** Focus on top **A-Group** horse(s).\n"
 
         # Exacta Examples
-        blueprint_report += f"* **Exacta Part-Wheel:** `A / B,C` ({nA}x{nB +
-                                                                        nC}) - {get_min_cost_str(1.00, nA, nB +
-                                                                                                 nC)}\n"
+        blueprint_report += f"* **Exacta Part-Wheel:** `A / B,C` ({nA}x{nB + nC}) - {get_min_cost_str(1.00, nA, nB + nC)}\n"
         if nA >= 2:
             ex_box_combos = get_box_combos(nA, 2)
             blueprint_report += f"* **Exacta Box (A-Group):** `{', '.join(map(str, [int(name_to_post.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(1.00, ex_box_combos)}\n"
