@@ -1,0 +1,27 @@
+Horse,Post,Rating,Pace_Style,Quirin,ML_Odds,Jockey,Trainer,Speed_Figs,Angles_Count,Angles_Total,Parse_Confidence,Cclass,Cform,Cspeed,Cpace,Cstyle,Cpost,Tier2_Bonus,Probability,Fair_Odds,Fair_Odds_AM,Predicted_Finish,P_Win_Logit,P_Place_Logit,P_Show_Logit,Expected_Finish_Logit,Finish_CI_Lower,Finish_CI_Upper
+Disco Time,1,,E/P,5.0,8,Prat Flavien,Unknown,N/A,0,4.095238095238096,0.4,,,,,,,0.0,,,+nan,1,,,,,1.0,12.0
+British Isles,2,,E/P,5.0,20,Herrera Diego A,Unknown,N/A,0,3.216015344042196,0.4,,,,,,,0.0,,,+nan,2,,,,,1.0,12.0
+"days since last race
+
+3 Full Serrano",77,,E,8.0,12,Rosario Joel,Unknown,N/A,0,3.7194917286022533,0.4,,,,,,,0.0,,,+nan,3,,,,,1.0,12.0
+"days since last race
+
+4 Banishing",84,,E/P,5.0,20,Ortiz Jose L,Unknown,N/A,0,3.766482857827859,0.4,,,,,,,0.0,,,+nan,4,,,,,1.0,12.0
+"days since last race
+
+5 Skippylongstocking",42,,E/P,4.0,15,Gaffalione Tyler,Unknown,N/A,0,4.193284698199587,0.4,,,,,,,0.0,,,+nan,5,,,,,1.0,12.0
+Tappan Street,7,,E/P,4.0,6,Saez Luis,Unknown,N/A,0,4.179812994485735,0.4,,,,,,,0.0,,,+nan,6,,,,,1.0,12.0
+Poster,8,,P,2.0,20,Alvarado Junior,Unknown,N/A,0,4.05363564749803,0.4,,,,,,,0.0,,,+nan,7,,,,,1.0,12.0
+"days since last race
+
+9 Captain Cook",35,,E/P,8.0,15,Velazquez John R,Unknown,N/A,0,4.190590357456816,0.4,,,,,,,0.0,,,+nan,8,,,,,1.0,12.0
+"days since last race
+
+10 Mika",98,,E,8.0,10,Franco Manuel,Unknown,N/A,0,3.8604651162790695,0.4,,,,,,,0.0,,,+nan,9,,,,,1.0,12.0
+"days since last race
+
+11 White Abarrio",49,,E/P,4.0,4,Unknown,Unknown,N/A,0,3.531527211699832,0.3,,,,,,,0.0,,,+nan,10,,,,,1.0,12.0
+Brotha Keny,12,,E/P,4.0,30,Castellano Javier,Unknown,N/A,0,3.991894144375564,0.4,,,,,,,0.0,,,+nan,11,,,,,1.0,12.0
+"days since last race
+
+13 Lightning Tones",60,,S,2.0,30,Morelos Jose E,Unknown,N/A,0,4.004041511114155,0.4,,,,,,,0.0,,,+nan,12,,,,,1.0,12.0
