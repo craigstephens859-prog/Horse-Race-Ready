@@ -94,13 +94,14 @@ class UnifiedRatingEngine:
     
     # DYNAMIC WEIGHT MODIFIERS BY RACE TYPE
     # Adapts component emphasis based on race quality - PhD-calibrated
+    # CALIBRATION UPDATE (Feb 4, 2026): Reduced class bias after Pegasus validation
     WEIGHT_MODIFIERS_BY_RACE_TYPE = {
-        'grade_1_2': {  # Grade 1-2: Elite races - class/speed dominate
-            'class': 1.2,   # +20% emphasis on class
-            'speed': 1.3,   # +30% emphasis on speed (figures matter more)
-            'form': 1.0,    # Standard
-            'pace': 0.9,    # -10% (less pace-dependent at top level)
-            'style': 1.1,   # +10% (surface mastery matters)
+        'grade_1_2': {  # Grade 1-2: Elite races - more balanced weighting
+            'class': 1.0,   # REDUCED from 1.2 - paper class deceives in G1
+            'speed': 1.1,   # REDUCED from 1.3 - speed figs less predictive
+            'form': 1.2,    # INCREASED from 1.0 - current form critical even in G1
+            'pace': 1.1,    # INCREASED from 0.9 - pace matters MORE in G1
+            'style': 1.2,   # INCREASED from 1.1 - running style critical
             'post': 1.0     # Standard
         },
         'grade_3_stakes': {  # Grade 3 & Open Stakes
@@ -977,16 +978,18 @@ class UnifiedRatingEngine:
             recent_top3_count = sum(1 for finish in horse.recent_finishes[:3] if finish <= 3)
             was_competitive = recent_top3_count >= 1
 
-        # Purse comparison
+        # Purse comparison (PEGASUS CALIBRATION: Stepping up kills)
         if horse.recent_purses and today_purse > 0:
             avg_recent = np.mean(horse.recent_purses)
             if avg_recent > 0:
                 purse_ratio = today_purse / avg_recent
 
-                if purse_ratio >= 1.5:  # Major step up
-                    rating -= 1.2
+                if purse_ratio >= 2.0:  # Massive step up (e.g., $50k → $100k+)
+                    rating -= 3.5  # INCREASED from -1.2
+                elif purse_ratio >= 1.5:  # Major step up
+                    rating -= 2.0  # INCREASED from -1.2
                 elif purse_ratio >= 1.2:  # Moderate step up
-                    rating -= 0.6
+                    rating -= 1.0  # INCREASED from -0.6
                 elif 0.8 <= purse_ratio <= 1.2:  # Same class
                     rating += 0.8
                 elif purse_ratio >= 0.6:  # Class drop
@@ -994,20 +997,29 @@ class UnifiedRatingEngine:
                 else:  # Major drop
                     rating += 1.0 if was_competitive else -0.3
 
-        # Race type progression
+        # Race type progression (PEGASUS CALIBRATION: Big jumps are lethal)
         if horse.race_types:
             recent_scores = [self.RACE_TYPE_SCORES.get(rt.lower(), 3.5) for rt in horse.race_types]
             avg_recent_type = np.mean(recent_scores)
             type_diff = today_score - avg_recent_type
 
-            if type_diff >= 2.0:
-                rating -= 1.5
-            elif type_diff >= 1.0:
-                rating -= 0.8
+            # Stepping UP in class (type_diff > 0)
+            if type_diff >= 3.0:  # e.g., Allowance → G1 (3+ level jump)
+                rating -= 4.5  # MASSIVE penalty - rarely works
+            elif type_diff >= 2.0:  # e.g., G3 → G1 (2 level jump)
+                rating -= 3.0  # INCREASED from -1.5 (validated by Mika)
+            elif type_diff >= 1.5:  # NEW: 1.5 level jump
+                rating -= 2.0
+            elif type_diff >= 1.0:  # e.g., Allowance → Stakes
+                rating -= 1.5  # INCREASED from -0.8
+            elif type_diff >= 0.5:  # Minor step up
+                rating -= 0.5  # NEW penalty
+            # Same level (within 0.5)
             elif abs(type_diff) < 0.5:
                 rating += 0.5
+            # Dropping DOWN in class (type_diff < 0)
             elif type_diff <= -1.0:
-                rating += 1.2
+                rating += 1.5  # INCREASED from 1.2 - dropping class helps
 
         # Pedigree quality
         if horse.sire_spi and horse.sire_spi >= 110:
@@ -1050,50 +1062,50 @@ class UnifiedRatingEngine:
             return float(np.clip(rating, -2.0, 3.0))
 
         # Layoff factor (PEGASUS TUNING: More aggressive penalties for long layoffs)
-        # White Abarrio 146-day layoff was heavily under-penalized
+        # Validation: White Abarrio 146-day layoff finished 2nd despite heavy penalty
         if horse.days_since_last is not None:
             days = horse.days_since_last
             if days <= 14:
-                rating += 0.5
+                rating += 0.8  # INCREASED: Sharp horses
             elif days <= 30:
-                rating += 0.3
+                rating += 0.4  # INCREASED: Optimal freshness
             elif days <= 60:
                 rating += 0.0
             elif days <= 90:
-                rating -= 0.5
+                rating -= 0.8  # INCREASED penalty
             elif days <= 120:
-                rating -= 1.5  # INCREASED from -1.0
+                rating -= 2.0  # INCREASED from -1.5
             elif days <= 180:
-                rating -= 3.0  # INCREASED from -1.0
+                rating -= 4.0  # INCREASED from -3.0
             else:
-                rating -= 5.0  # INCREASED from -2.0
+                rating -= 6.0  # INCREASED from -5.0
 
-        # Form trend (PEGASUS TUNING: Reward winners more aggressively)
-        # Skippylongstocking won last out but wasn't rewarded enough
+        # Form trend (PEGASUS TUNING: Reward winners MORE aggressively)
+        # Validation: Skippylongstocking won last out and WON AGAIN
         if horse.recent_finishes and len(horse.recent_finishes) >= 3:
             finishes = horse.recent_finishes[:5]
 
             # Improving trend
             if finishes[0] < finishes[1] < finishes[2]:
-                rating += 1.5
+                rating += 2.0  # INCREASED from 1.5
             elif finishes[0] < finishes[1]:
-                rating += 0.8
+                rating += 1.2  # INCREASED from 0.8
 
             # Declining trend
             if finishes[0] > finishes[1] > finishes[2]:
-                rating -= 1.2
+                rating -= 1.5  # INCREASED penalty
 
-            # Recent win bonus (INCREASED: +0.8 → +2.5)
+            # Recent win bonus (CRITICAL: Winners repeat!)
             if finishes[0] == 1:
-                rating += 2.5  # INCREASED from 0.8
+                rating += 3.5  # INCREASED from 2.5
                 
-                # Back-to-back wins bonus (NEW)
+                # Back-to-back wins bonus
                 if len(finishes) >= 2 and finishes[1] == 1:
-                    rating += 4.0  # Total +6.5 for winning streak
+                    rating += 5.0  # Total +8.5 for winning streak
 
-            # Recent place/show bonus (NEW)
+            # Recent place/show bonus
             elif finishes[0] in [2, 3]:
-                rating += 1.0  # Reward in-the-money finishes
+                rating += 1.5  # INCREASED from 1.0
 
             # Consistency bonus
             if all(f <= 3 for f in finishes):
