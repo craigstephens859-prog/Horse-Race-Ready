@@ -6065,14 +6065,11 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     # --- 3. Build Pace Projection ---
     pace_report = "### Pace Projection\n"
     if ppi_val > 0.5:
-        pace_report += f"* **Fast Pace Likely (PPI {
-            ppi_val:+.2f}):** Favors horses that can press or stalk ('E/P', 'P') and potentially closers ('S') if leaders tire. Pure speed ('E') might fade.\n"
+        pace_report += f"* **Fast Pace Likely (PPI {ppi_val:+.2f}):** Favors horses that can press or stalk ('E/P', 'P') and potentially closers ('S') if leaders tire. Pure speed ('E') might fade.\n"
     elif ppi_val < -0.5:
-        pace_report += f"* **Slow Pace Likely (PPI {
-            ppi_val:+.2f}):** Favors horses near the lead ('E', 'E/P'). Closers ('P', 'S') may find it hard to catch up.\n"
+        pace_report += f"* **Slow Pace Likely (PPI {ppi_val:+.2f}):** Favors horses near the lead ('E', 'E/P'). Closers ('P', 'S') may find it hard to catch up.\n"
     else:
-        pace_report += f"* **Moderate Pace Expected (PPI {
-            ppi_val:+.2f}):** Fair for most styles. Tactical speed ('E/P') is often useful.\n"
+        pace_report += f"* **Moderate Pace Expected (PPI {ppi_val:+.2f}):** Fair for most styles. Tactical speed ('E/P') is often useful.\n"
 
     # --- 4. Build Contender Analysis (Simplified) ---
     contender_report = "### Contender Analysis\n"
