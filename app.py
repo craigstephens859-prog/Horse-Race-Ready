@@ -6346,22 +6346,39 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         return f"{final_combos} combos = **${cost:.2f}** (at {base_str} base)"
     # ===================================================
 
-    # --- 2. A/B/C/D Grouping Logic (Simplified) ---
+    # --- 2. A/B/C/D Grouping Logic (with Odds Drift Gate) ---
     A_group, B_group, C_group, D_group = [], [], [], []
 
     all_horses = primary_df['Horse'].tolist()
     pos_ev_horses = set(df_ol[df_ol["EV per $1"] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
 
+    # ═══════════════════════════════════════════════════════════════
+    # PEGASUS 2026 TUNING: Block horses with massive odds drift from A-Group
+    # British Isles 20/1 → 50/1 should NEVER have been in A-Group
+    # ═══════════════════════════════════════════════════════════════
+    blocked_from_A = set()
+    dumb_money_horses = st.session_state.get('dumb_money_horses', [])
+    if dumb_money_horses:
+        for h in dumb_money_horses:
+            if h.get('ratio', 1.0) > 2.0:  # 2x+ drift = blocked from A-Group
+                blocked_from_A.add(h['name'])
+    
+    # Filter out blocked horses from A-group consideration
+    eligible_for_A = [h for h in all_horses if h not in blocked_from_A]
+
     if strategy_profile == "Confident":
-        A_group = all_horses[:1]
-        if len(all_horses) > 1 and primary_df.iloc[1]['R'] > (
-                primary_df.iloc[0]['R'] * 0.90):  # Only add #2 if very close
-            A_group.append(all_horses[1])
-    else:  # Value Hunter - Prioritize top pick + overlays
-        A_group = list(set([all_horses[0]]) | pos_ev_horses)
+        A_group = [eligible_for_A[0]] if eligible_for_A else [all_horses[0]] if all_horses else []
+        if len(eligible_for_A) > 1:
+            second_horse = eligible_for_A[1]
+            first_rating = primary_df[primary_df['Horse'] == eligible_for_A[0]]['R'].iloc[0] if eligible_for_A else 0
+            second_rating = primary_df[primary_df['Horse'] == second_horse]['R'].iloc[0]
+            if second_rating > (first_rating * 0.90):  # Only add #2 if very close
+                A_group.append(second_horse)
+    else:  # Value Hunter - Prioritize top pick + overlays (excluding blocked horses)
+        eligible_overlays = pos_ev_horses - blocked_from_A
+        A_group = list(set([eligible_for_A[0]] if eligible_for_A else []) | eligible_overlays)
         if len(A_group) > 4:  # Cap A group size for Value Hunter
-            A_group = sorted(A_group, key=lambda h: primary_df[primary_df['Horse'] == h].index[0])[
-                :4]  # Keep top 4 ranked from the value pool
+            A_group = sorted(A_group, key=lambda h: primary_df[primary_df['Horse'] == h].index[0])[:4]
 
     B_group = [h for h in all_horses if h not in A_group][:3]
     C_group = [h for h in all_horses if h not in A_group and h not in B_group][:4]
@@ -6847,6 +6864,62 @@ else:
                 # TUP R5: #8 Naval Escort had ML 5/1 → Live 2/1 (60% drop) detected
                 # System detected smart money but didn't boost ratings - FIX IT
 
+                # ═══════════════════════════════════════════════════════════════
+                # PEGASUS 2026 TUNING: Odds Drift OUT Penalty
+                # British Isles 20/1 → 50/1 = money LEAVING (penalize heavily)
+                # White Abarrio 4/1 → 9/2 = money STAYING (existing smart money bonus)
+                # ═══════════════════════════════════════════════════════════════
+                
+                dumb_money_horses = []  # Horses with odds drifting OUT (money leaving)
+                
+                for _, row in df_final_field.iterrows():
+                    horse_name = row.get('Horse')
+                    live_odds = row.get('Live Odds', '')
+                    ml_odds = row.get('ML', '')
+                    
+                    if live_odds and ml_odds:
+                        try:
+                            live_decimal = odds_to_decimal(live_odds)
+                            ml_decimal = odds_to_decimal(ml_odds)
+                            
+                            if live_decimal > 0 and ml_decimal > 0:
+                                ratio = live_decimal / ml_decimal
+                                
+                                # DUMB MONEY: Odds drifting OUT significantly
+                                # British Isles: 20/1 → 50/1 = ratio 2.5 = major red flag
+                                if ratio > 1.5:  # Odds up 50%+ = money leaving
+                                    drift_pct = (ratio - 1) * 100
+                                    dumb_money_horses.append({
+                                        'name': horse_name,
+                                        'post': row.get('Post'),
+                                        'ml': ml_odds,
+                                        'live': live_odds,
+                                        'ratio': ratio,
+                                        'drift_pct': drift_pct
+                                    })
+                        except Exception:
+                            pass
+
+                # Apply PENALTY to horses with money leaving (odds drifting out)
+                if dumb_money_horses:
+                    for idx, row in primary_df.iterrows():
+                        horse_drift = next((h for h in dumb_money_horses if h['name'] == row['Horse']), None)
+                        if horse_drift:
+                            ratio = horse_drift['ratio']
+                            # Scaled penalty: bigger drift = bigger penalty
+                            if ratio > 2.0:
+                                penalty = -3.0  # Massive penalty for 2x+ drift (British Isles case)
+                            elif ratio > 1.5:
+                                penalty = -1.5  # Moderate penalty for 50%+ drift
+                            else:
+                                penalty = 0.0
+                            
+                            primary_df.at[idx, 'R'] = row['R'] + penalty
+
+                # Store dumb_money_horses for A-Group gate
+                st.session_state['dumb_money_horses'] = dumb_money_horses
+
+                # Apply BONUS to horses with money coming IN (smart money)
                 if smart_money_horses:
                     smart_money_names = [h['name'] for h in smart_money_horses]
                     smart_money_bonus = 2.5  # Significant boost for sharp action
@@ -6856,8 +6929,8 @@ else:
                         if row['Horse'] in smart_money_names:
                             primary_df.at[idx, 'R'] = row['R'] + smart_money_bonus
 
-                    # Re-sort after applying Smart Money bonus
-                    primary_sorted = primary_df.sort_values(by="R", ascending=False)
+                # Re-sort after applying all odds-based adjustments
+                primary_sorted = primary_df.sort_values(by="R", ascending=False)
 
                 top_table = primary_sorted[['Horse', 'R', 'Fair %', 'Fair Odds']].head(5).to_markdown(index=False)
 
