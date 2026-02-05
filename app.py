@@ -3612,6 +3612,39 @@ def style_match_score(running_style_bias: str, style: str, quirin: float) -> flo
         base += MODEL_CONFIG['style_quirin_bonus']
     return float(np.clip(base, -1.0, 1.0))
 
+
+def style_match_score_multi(running_style_biases: list, style: str, quirin: float) -> float:
+    """Calculate style match score from multiple selected running style biases (aggregates bonuses)"""
+    if not running_style_biases:
+        return 0.0
+    
+    stl = (style or "NA").upper()
+    table = MODEL_CONFIG['style_match_table']
+    
+    try:
+        q = float(quirin)
+    except Exception:
+        q = np.nan
+    
+    total_bonus = 0.0
+    
+    # Aggregate bonuses from all selected running style biases
+    for bias_choice in running_style_biases:
+        # Map choice to label
+        bias_label = _style_bias_label_from_choice(bias_choice)
+        bias_lower = bias_label.strip().lower()
+        
+        bonus = table.get(bias_lower, table["fair/neutral"]).get(stl, 0.0)
+        
+        # Add Quirin bonus if applicable
+        if stl in ("E", "E/P") and pd.notna(q) and q >= MODEL_CONFIG['style_quirin_threshold']:
+            bonus += MODEL_CONFIG['style_quirin_bonus']
+        
+        if bonus > 0:  # Only add positive bonuses
+            total_bonus += bonus
+    
+    return float(np.clip(total_bonus, -1.0, 1.0))
+
 # ======================== Phase 1: Enhanced Parsing Functions ========================
 
 
@@ -4551,13 +4584,43 @@ def post_bias_score(post_bias_pick: str, post_str: str) -> float:
     return float(np.clip(fn(post), -0.5, 0.5))
 
 
+def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
+    """Calculate post bias score from multiple selected post biases (aggregates bonuses)"""
+    if not post_bias_picks:
+        return 0.0
+    
+    # ELITE: Use optimized post parser
+    post = _parse_post_number(post_str)
+    if not post:
+        return 0.0
+    
+    total_bonus = 0.0
+    table = {
+        "favors rail (1)": lambda p: MODEL_CONFIG['post_bias_rail_bonus'] if p == 1 else 0.0,
+        "favors inner (1-3)": lambda p: MODEL_CONFIG['post_bias_inner_bonus'] if p and 1 <= p <= 3 else 0.0,
+        "favors mid (4-7)": lambda p: MODEL_CONFIG['post_bias_mid_bonus'] if p and 4 <= p <= 7 else 0.0,
+        "favors outside (8+)": lambda p: MODEL_CONFIG['post_bias_outside_bonus'] if p and p >= 8 else 0.0,
+        "no significant post bias": lambda p: 0.0
+    }
+    
+    # Aggregate bonuses from all selected post biases
+    for pick in post_bias_picks:
+        pick_lower = (pick or "").strip().lower()
+        fn = table.get(pick_lower, table["no significant post bias"])
+        bonus = fn(post)
+        if bonus > 0:  # Only add positive bonuses (horse matches this bias category)
+            total_bonus += bonus
+    
+    return float(np.clip(total_bonus, -0.5, 0.5))
+
+
 def compute_bias_ratings(df_styles: pd.DataFrame,
                          surface_type: str,
                          distance_txt: str,
                          condition_txt: str,
                          race_type: str,
-                         running_style_bias: str,
-                         post_bias_pick: str,
+                         running_style_bias,  # Can be list or str
+                         post_bias_pick,  # Can be list or str
                          ppi_value: float = 0.0,  # ppi_value arg seems unused, ppi_map is recalculated
                          pedigree_per_horse: Optional[Dict[str, dict]] = None,
                          track_name: str = "",
@@ -4569,6 +4632,8 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
     sums to Arace and R. Returns rating table.
 
     ULTRATHINK V2: Can use unified rating engine if available and PP text provided.
+    
+    UPDATED: Now accepts lists of biases to aggregate bonuses from ALL selected biases.
     """
     cols = [
         "#",
@@ -4746,15 +4811,20 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             speed_map[horse_name] = (horse_fig - race_avg_fig) * MODEL_CONFIG['speed_fig_weight']
 
     rows = []
-    mapped_bias = _style_bias_label_from_choice(running_style_bias)
+    
+    # Convert single values to lists for uniform processing
+    style_biases = running_style_bias if isinstance(running_style_bias, list) else [running_style_bias]
+    post_biases_list = post_bias_pick if isinstance(post_bias_pick, list) else [post_bias_pick]
+    
     for _, row in df_styles.iterrows():
         post = str(row.get("Post", row.get("#", "")))
         name = str(row.get("Horse"))
         style = _style_norm(row.get("Style") or row.get("OverrideStyle") or row.get("DetectedStyle"))
         quirin = row.get("Quirin", np.nan)  # Keep as potential NaN
 
-        cstyle = style_match_score(mapped_bias, style, quirin)  # Pass potential NaN
-        cpost = post_bias_score(post_bias_pick, post)
+        # Use multi-bias functions to aggregate bonuses from ALL selected biases
+        cstyle = style_match_score_multi(style_biases, style, quirin)
+        cpost = post_bias_score_multi(post_biases_list, post)
         cpace = float(ppi_map.get(name, 0.0))
         cspeed = float(speed_map.get(name, 0.0))  # Speed component from figures
 
@@ -5527,9 +5597,10 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame,
     return result
 
 
-# Build scenarios
-scenarios = [(s, p) for s in running_style_biases for p in post_biases]
-tabs = st.tabs([f"S: {s} | P: {p}" for s, p in scenarios])
+# Build scenarios - UPDATED: Create unified scenario using ALL selected biases
+# Instead of cartesian product, we aggregate bonuses from all selections
+scenarios = [("COMBINED", "COMBINED")]  # Single unified scenario
+tabs = st.tabs(["Combined Bias Analysis"])
 all_scenario_ratings = {}
 
 # Simple weight presets (placeholders retained)
@@ -5551,7 +5622,10 @@ for i, (rbias, pbias) in enumerate(scenarios):
         # Debug info for track bias detection
         canon_track = _canonical_track(track_name)
         dist_bucket = distance_bucket(distance_txt)
+        style_display = ", ".join(running_style_biases)
+        post_display = ", ".join(post_biases)
         st.caption(f"🔍 Track Bias Detection: {canon_track} • {surface_type} • {dist_bucket}")
+        st.caption(f"📊 Selected Biases - Running Styles: {style_display} | Post Positions: {post_display}")
 
         ratings_df = compute_bias_ratings(
             df_styles=df_final_field.copy(),  # Pass a copy to avoid modifying original
@@ -5559,8 +5633,8 @@ for i, (rbias, pbias) in enumerate(scenarios):
             distance_txt=distance_txt,
             condition_txt=condition_txt,
             race_type=race_type_detected,
-            running_style_bias=rbias,
-            post_bias_pick=pbias,
+            running_style_bias=running_style_biases,  # Pass full list
+            post_bias_pick=post_biases,  # Pass full list
             # ppi_value=ppi_val, # Removed as it's recalculated inside
             pedigree_per_horse=pedigree_per_horse,
             track_name=track_name,
@@ -5645,7 +5719,11 @@ if scenarios:
         st.session_state['primary_d'] = primary_df
         st.session_state['primary_probs'] = primary_probs
 
-        st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
+        # Display ALL selected biases, not just the first scenario
+        style_biases_display = ", ".join(running_style_biases)
+        post_biases_display = ", ".join(post_biases)
+        st.info(f"**Combined Scenario Analysis** • Profile: `{strategy_profile}` • PPI: {ppi_val:+.2f}")
+        st.caption(f"📊 **Active Biases:** Running Styles: `{style_biases_display}` | Post Positions: `{post_biases_display}` (All bonuses aggregated)")
     else:
         st.error("Primary scenario ratings not found. Check calculations.")
         primary_df, primary_probs = pd.DataFrame(), {}  # Assign defaults
