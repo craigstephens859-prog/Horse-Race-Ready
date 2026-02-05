@@ -682,12 +682,7 @@ class UnifiedRatingEngine:
             adjusted_weights['cstyle'] = weights['cstyle'] * iv
 
             logger.debug(
-                f"  → Track Bias Run Style IV={
-                    iv:.2f}: style {
-                    cstyle:.2f}→{
-                    adjusted_cstyle:.2f}, weight {
-                    weights['cstyle']:.2f}→{
-                        adjusted_weights['cstyle']:.2f}")
+                f"  → Track Bias Run Style IV={iv:.2f}: style {cstyle:.2f}→{adjusted_cstyle:.2f}, weight {weights['cstyle']:.2f}→{adjusted_weights['cstyle']:.2f}")
 
             # Log if dominant/favorable marker present
             if horse.track_bias_markers == '++':
@@ -705,12 +700,7 @@ class UnifiedRatingEngine:
             adjusted_weights['cpost'] = weights['cpost'] * iv
 
             logger.debug(
-                f"  → Track Bias Post IV={
-                    iv:.2f}: post {
-                    cpost:.2f}→{
-                    adjusted_cpost:.2f}, weight {
-                    weights['cpost']:.2f}→{
-                        adjusted_weights['cpost']:.2f}")
+                f"  → Track Bias Post IV={iv:.2f}: post {cpost:.2f}→{adjusted_cpost:.2f}, weight {weights['cpost']:.2f}→{adjusted_weights['cpost']:.2f}")
 
         return adjusted_cstyle, adjusted_cpost, adjusted_weights
 

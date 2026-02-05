@@ -292,10 +292,7 @@ class AutoCalibrationEngine:
         for component, change in calibration_event['weight_changes'].items():
             direction = "↑" if change > 0 else "↓" if change < 0 else "→"
             logger.info(
-                f"   {component}: {
-                    old_weights[component]:.2f} {direction} {
-                    self.base_weights[component]:.2f} ({
-                    change:+.3f})")
+                f"   {component}: {old_weights[component]:.2f} {direction} {self.base_weights[component]:.2f} ({change:+.3f})")
 
         return calibration_event
 
