@@ -4700,9 +4700,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         # Add success message
                         scratched_count = len(results_df) - len(results_df_filtered)
                         if scratched_count > 0:
-                            st.info(
-                                f"🎯 Using Unified Rating Engine (Elite Parser confidence: {
-                                    avg_confidence:.1%}) - {scratched_count} scratched horse(s) excluded")
+                            st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%}) - {scratched_count} scratched horse(s) excluded")
                         else:
                             st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%})")
 
