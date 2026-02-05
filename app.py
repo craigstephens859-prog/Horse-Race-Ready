@@ -4625,7 +4625,8 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                          pedigree_per_horse: Optional[Dict[str, dict]] = None,
                          track_name: str = "",
                          pp_text: str = "",
-                         figs_df: pd.DataFrame = None) -> pd.DataFrame:
+                         figs_df: pd.DataFrame = None,
+                         dynamic_weights: dict = None) -> pd.DataFrame:
     """
     Reads 'Cclass' and 'Cform' from df_styles (pre-built), adds Cstyle/Cpost/Cpace/Cspeed (+Atrack),
     plus Tier 2 bonuses (Impact Values, SPI, Surface Stats, AWD),
@@ -4828,7 +4829,10 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         cpace = float(ppi_map.get(name, 0.0))
         cspeed = float(speed_map.get(name, 0.0))  # Speed component from figures
 
-        a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
+        # Track bias with dynamic weight multiplier
+        dw = dynamic_weights or {}
+        track_bias_mult = dw.get('track_bias', 1.0)
+        a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, style, post) * track_bias_mult
 
         # Get pre-computed Cclass and Cform from df_styles (calculated in Section A)
         c_class = float(row.get("Cclass", 0.0))
@@ -5195,14 +5199,24 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             if pace_contribution > 0.75:
                 pace_contribution = 0.75
 
-        # Calculate weighted components (available for both PP and non-PP paths)
+        # ═══════════════════════════════════════════════════════════════════════
+        # DYNAMIC WEIGHTING: Apply user's race parameter-based weights
+        # These weights are calculated from: surface, distance, condition, race type, purse
+        # ═══════════════════════════════════════════════════════════════════════
+        dw = dynamic_weights or {}
+        class_form_mult = dw.get('class_form', 1.0)
+        pace_speed_mult = dw.get('pace_speed', 1.0)
+        style_post_mult = dw.get('style_post', 1.0)
+        track_bias_mult = dw.get('track_bias', 1.0)
+
+        # Calculate weighted components with dynamic multipliers applied
         weighted_components = (
-            c_class * class_weight +
-            c_form * form_weight +
-            cspeed * speed_multiplier +
-            pace_contribution +
-            cstyle * 1.2 +
-            cpost * 0.8
+            c_class * class_weight * class_form_mult +
+            c_form * form_weight * class_form_mult +
+            cspeed * speed_multiplier * pace_speed_mult +
+            pace_contribution * pace_speed_mult +
+            cstyle * 1.2 * style_post_mult +
+            cpost * 0.8 * style_post_mult
         )
 
         # Now check if Prime Power is available
@@ -5317,13 +5331,20 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     pace_contribution = 0.75  # Cap at +0.75 in claiming
                     pace_cap_applied = True
 
+            # Apply dynamic weights (same as non-PP path)
+            dw = dynamic_weights or {}
+            class_form_mult = dw.get('class_form', 1.0)
+            pace_speed_mult = dw.get('pace_speed', 1.0)
+            style_post_mult = dw.get('style_post', 1.0)
+            track_bias_mult = dw.get('track_bias', 1.0)
+
             weighted_components = (
-                c_class * class_weight +
-                c_form * form_weight +
-                cspeed * speed_multiplier +  # Boost speed in claiming/allowance
-                pace_contribution +  # Capped in claiming races
-                cstyle * 1.2 +
-                cpost * 0.8
+                c_class * class_weight * class_form_mult +
+                c_form * form_weight * class_form_mult +
+                cspeed * speed_multiplier * pace_speed_mult +  # Boost speed in claiming/allowance
+                pace_contribution * pace_speed_mult +  # Capped in claiming races
+                cstyle * 1.2 * style_post_mult +
+                cpost * 0.8 * style_post_mult
             )
 
             # ═══════════════════════════════════════════════════════════════════════
@@ -5603,19 +5624,195 @@ scenarios = [("COMBINED", "COMBINED")]  # Single unified scenario
 tabs = st.tabs(["Combined Bias Analysis"])
 all_scenario_ratings = {}
 
-# Simple weight presets (placeholders retained)
+# ============ DYNAMIC WEIGHT FUNCTIONS (Race Parameter Integration) ============
+# These functions dynamically adjust factor weights based on race conditions
 
 
-def get_weight_preset(surface, distance): return {"class_form": 1.0, "trs_jky": 1.0}
-def apply_strategy_profile_to_weights(w, profile): return w
-def adjust_by_race_type(w, rt): return w
-def apply_purse_scaling(w, purse): return w if w else {}
+def get_weight_preset(surface: str, distance: str) -> dict:
+    """
+    Generate base weights based on surface type and distance.
+    
+    Surface Logic:
+    - Dirt: Speed figures and pace more predictive
+    - Turf: Class/form and pedigree more predictive
+    - Synthetic: Balanced approach
+    
+    Distance Logic:
+    - Sprint (≤7f): Pace/speed dominates
+    - Route (≥8f): Class/stamina more important
+    """
+    surf = (surface or "Dirt").strip().lower()
+    dist_bucket = distance_bucket(distance) if distance else "8f+"
+    
+    base = {
+        "class_form": 1.0,
+        "pace_speed": 1.0,
+        "style_post": 1.0,
+        "track_bias": 1.0,
+        "trs_jky": 1.0
+    }
+    
+    # Surface adjustments
+    if "turf" in surf:
+        base["class_form"] = 1.25  # Class more predictive on turf
+        base["pace_speed"] = 0.85  # Pace less dominant on turf
+        base["track_bias"] = 1.15  # Turf biases can be strong
+    elif "synth" in surf or "all-weather" in surf:
+        base["class_form"] = 1.10
+        base["pace_speed"] = 0.95
+    else:  # Dirt
+        base["pace_speed"] = 1.15  # Speed/pace more dominant on dirt
+        base["class_form"] = 1.0
+    
+    # Distance adjustments
+    if dist_bucket == "≤6f":  # Sprint
+        base["pace_speed"] *= 1.20  # Pace critical in sprints
+        base["class_form"] *= 0.90  # Class less predictive in sprints
+    elif dist_bucket == "6.5–7f":  # Middle distance
+        base["pace_speed"] *= 1.05
+        base["class_form"] *= 1.05
+    else:  # Route (8f+)
+        base["pace_speed"] *= 0.85  # Pace less dominant in routes
+        base["class_form"] *= 1.20  # Class/stamina key in routes
+    
+    return base
+
+
+def apply_strategy_profile_to_weights(weights: dict, profile: str) -> dict:
+    """
+    Adjust weights based on user's strategy profile.
+    
+    Confident: Favor top-rated horses (class/form emphasis)
+    Value Hunter: Look for overlays (pace/track bias emphasis)
+    """
+    if not weights:
+        return {"class_form": 1.0, "trs_jky": 1.0}
+    
+    w = weights.copy()
+    profile_lower = (profile or "").lower()
+    
+    if "value" in profile_lower:
+        # Value hunters look for pace/bias edges
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 1.15
+        w["track_bias"] = w.get("track_bias", 1.0) * 1.20
+        w["class_form"] = w.get("class_form", 1.0) * 0.90
+    else:  # Confident
+        # Confident players trust class/form
+        w["class_form"] = w.get("class_form", 1.0) * 1.15
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 0.95
+    
+    return w
+
+
+def adjust_by_race_type(weights: dict, race_type: str) -> dict:
+    """
+    Adjust weights based on race type/class.
+    
+    Stakes (G1-G3): Class separation critical, pace less dominant
+    Allowance: Balanced
+    Claiming: Form/recent races more important than class
+    Maiden: Pedigree/debut angles more important
+    """
+    if not weights:
+        return {"class_form": 1.0, "trs_jky": 1.0}
+    
+    w = weights.copy()
+    rt = (race_type or "").lower()
+    
+    if "g1" in rt or "g2" in rt:
+        # Elite stakes - class differences narrow, form is key
+        w["class_form"] = w.get("class_form", 1.0) * 1.30
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 0.85
+        w["trs_jky"] = w.get("trs_jky", 1.0) * 1.15  # Top jockeys matter
+    elif "g3" in rt or "stakes" in rt:
+        w["class_form"] = w.get("class_form", 1.0) * 1.20
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 0.90
+    elif "allowance" in rt:
+        # Balanced approach for allowance
+        w["class_form"] = w.get("class_form", 1.0) * 1.05
+    elif "claiming" in rt or "clm" in rt:
+        # Claiming - form/recent performance key, class less predictive
+        w["class_form"] = w.get("class_form", 1.0) * 0.80
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 1.15
+    elif "maiden" in rt:
+        # Maiden - limited data, pedigree/angles matter
+        w["class_form"] = w.get("class_form", 1.0) * 0.90
+        w["track_bias"] = w.get("track_bias", 1.0) * 1.10
+    
+    return w
+
+
+def apply_purse_scaling(weights: dict, purse: int) -> dict:
+    """
+    Scale weights based on purse amount (proxy for overall race quality).
+    
+    Higher purse = more reliable data, tighter competition
+    Lower purse = more variance, pace/bias edges more exploitable
+    """
+    if not weights:
+        return {"class_form": 1.0, "trs_jky": 1.0}
+    
+    w = weights.copy()
+    purse_val = purse or 0
+    
+    if purse_val >= 500000:  # Major stakes ($500k+)
+        w["class_form"] = w.get("class_form", 1.0) * 1.25
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 0.90
+        w["trs_jky"] = w.get("trs_jky", 1.0) * 1.20
+    elif purse_val >= 100000:  # Quality stakes/allowance
+        w["class_form"] = w.get("class_form", 1.0) * 1.10
+        w["trs_jky"] = w.get("trs_jky", 1.0) * 1.10
+    elif purse_val >= 50000:  # Mid-level
+        pass  # Use base weights
+    elif purse_val >= 20000:  # Lower claiming
+        w["class_form"] = w.get("class_form", 1.0) * 0.90
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 1.10
+        w["track_bias"] = w.get("track_bias", 1.0) * 1.15
+    else:  # Bottom level
+        w["class_form"] = w.get("class_form", 1.0) * 0.80
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 1.15
+        w["track_bias"] = w.get("track_bias", 1.0) * 1.20
+    
+    return w
+
+
+def apply_condition_adjustment(weights: dict, condition: str) -> dict:
+    """
+    Adjust weights based on track condition.
+    
+    Fast/Firm: Standard weights
+    Good/Yielding: Stamina/class slightly more important
+    Muddy/Sloppy/Heavy: Off-track specialists, pace less predictive
+    """
+    if not weights:
+        return {"class_form": 1.0, "trs_jky": 1.0}
+    
+    w = weights.copy()
+    cond = (condition or "fast").lower()
+    
+    if "mud" in cond or "slop" in cond or "heavy" in cond:
+        # Off-track - pace scenarios disrupted
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 0.80
+        w["class_form"] = w.get("class_form", 1.0) * 1.15
+        w["track_bias"] = w.get("track_bias", 1.0) * 1.30  # Rail/post matters more
+    elif "good" in cond or "yield" in cond:
+        w["pace_speed"] = w.get("pace_speed", 1.0) * 0.95
+        w["class_form"] = w.get("class_form", 1.0) * 1.05
+    # Fast/Firm = no adjustment
+    
+    return w
 
 
 base_weights = get_weight_preset(surface_type, distance_txt)
 profiled_weights = apply_strategy_profile_to_weights(base_weights, strategy_profile)
 racetype_weights = adjust_by_race_type(profiled_weights, race_type_detected)
-final_weights = apply_purse_scaling(racetype_weights, purse_val)
+purse_weights = apply_purse_scaling(racetype_weights, purse_val)
+final_weights = apply_condition_adjustment(purse_weights, condition_txt)
+
+# Display active dynamic weights for transparency
+st.caption(f"⚙️ **Dynamic Weights Applied:** Surface: {surface_type} | Distance: {distance_txt} | Condition: {condition_txt} | Race Type: {race_type_detected} | Purse: ${purse_val:,}")
+weights_display = " | ".join([f"{k}: {v:.2f}" for k, v in final_weights.items()])
+st.caption(f"📊 **Factor Weights:** {weights_display}")
 
 for i, (rbias, pbias) in enumerate(scenarios):
     with tabs[i]:
@@ -5639,7 +5836,8 @@ for i, (rbias, pbias) in enumerate(scenarios):
             pedigree_per_horse=pedigree_per_horse,
             track_name=track_name,
             pp_text=pp_text,
-            figs_df=figs_df  # Pass speed figures
+            figs_df=figs_df,  # Pass speed figures
+            dynamic_weights=final_weights  # Pass dynamic weights based on race parameters
         )
         ratings_df = apply_enhancements_and_figs(
             ratings_df=ratings_df,
