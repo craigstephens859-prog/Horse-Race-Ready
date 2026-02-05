@@ -6859,6 +6859,17 @@ else:
                                                         
                                                         st.toast(f"🏁 Results saved! Winner: #{finish_order[0]} {horse_names_dict[finish_order[0]]}", icon="✅")
                                                         
+                                                        # AUTO-CALIBRATION: Learn from result
+                                                        try:
+                                                            from auto_calibration_engine import auto_calibrate_on_result_submission
+                                                            calibration_result = auto_calibrate_on_result_submission(gold_db.db_path)
+                                                            
+                                                            if calibration_result.get('status') != 'skipped':
+                                                                accuracy = calibration_result.get('winner_accuracy', 0) * 100
+                                                                st.toast(f"🤖 Model auto-calibrated! Winner accuracy: {accuracy:.1f}%", icon="🧠")
+                                                        except Exception as cal_err:
+                                                            logger.warning(f"Auto-calibration failed: {cal_err}")
+                                                        
                                                         # Clear the input
                                                         st.session_state[f"finish_input_{race_id}"] = ""
                                                         
