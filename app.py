@@ -105,6 +105,24 @@ except Exception as e:
     gold_db = None
     print(f"Gold database initialization error: {e}")
 
+# ADAPTIVE LEARNING v2: Auto-calibration with persistent learned weights
+# Loads weights that have been tuned from historical race results
+try:
+    from auto_calibration_engine_v2 import (
+        get_live_learned_weights,
+        AutoCalibrationEngine,
+        auto_calibrate_on_result_submission
+    )
+    ADAPTIVE_LEARNING_AVAILABLE = True
+    
+    # Load learned weights at startup (persisted from past calibrations)
+    LEARNED_WEIGHTS = get_live_learned_weights("gold_high_iq.db")
+    print(f"✅ Loaded {len(LEARNED_WEIGHTS)} learned weights from database")
+except ImportError as e:
+    ADAPTIVE_LEARNING_AVAILABLE = False
+    LEARNED_WEIGHTS = {}
+    print(f"Adaptive learning not available: {e}")
+
 # SECURITY: Import input validation and protection utilities
 try:
     from security_validators import (
@@ -7582,17 +7600,23 @@ else:
                                                         st.toast(
                                                             f"🏁 Results saved! Winner: #{finish_order[0]} {horse_names_dict[finish_order[0]]}", icon="✅")
 
-                                                        # AUTO-CALIBRATION: Learn from result
+                                                        # AUTO-CALIBRATION v2: Learn from result with persistence
                                                         try:
-                                                            from auto_calibration_engine import auto_calibrate_on_result_submission
-                                                            calibration_result = auto_calibrate_on_result_submission(
-                                                                gold_db.db_path)
+                                                            if ADAPTIVE_LEARNING_AVAILABLE:
+                                                                calibration_result = auto_calibrate_on_result_submission(
+                                                                    gold_db.db_path)
 
-                                                            if calibration_result.get('status') != 'skipped':
-                                                                accuracy = calibration_result.get(
-                                                                    'winner_accuracy', 0) * 100
-                                                                st.toast(
-                                                                    f"🤖 Model auto-calibrated! Winner accuracy: {accuracy:.1f}%", icon="🧠")
+                                                                if calibration_result.get('status') != 'skipped':
+                                                                    accuracy = calibration_result.get(
+                                                                        'winner_accuracy', 0) * 100
+                                                                    top3_acc = calibration_result.get(
+                                                                        'top3_accuracy', 0) * 100
+                                                                    st.toast(
+                                                                        f"🧠 Model learned! Winner: {accuracy:.0f}% | Top-3: {top3_acc:.0f}%", icon="📈")
+                                                            else:
+                                                                # Fall back to v1 if v2 not available
+                                                                from auto_calibration_engine import auto_calibrate_on_result_submission as v1_calibrate
+                                                                v1_calibrate(gold_db.db_path)
                                                         except Exception as cal_err:
                                                             logger.warning(f"Auto-calibration failed: {cal_err}")
 
@@ -7701,34 +7725,121 @@ else:
         # Tab 3: Auto-Calibration Monitor
         with tab_calibration:
             st.markdown("""
-            ### 🤖 Real-Time Model Learning Monitor
+            ### 🤖 Real-Time Adaptive Learning Monitor
             
             This dashboard shows **proof** that your model is automatically learning from each race result.
-            After every result submission, the system adjusts component weights using gradient descent.
+            After every result submission, the system adjusts component weights using gradient descent
+            and **persists the learned weights to the database** so they survive restarts.
             """)
             
-            # Load current weights from unified_rating_engine
+            # Load current learned weights from database (v2 system)
             try:
-                import importlib
-                import unified_rating_engine
-                importlib.reload(unified_rating_engine)
+                if ADAPTIVE_LEARNING_AVAILABLE:
+                    # Load directly from database - these are the ACTUAL weights being used
+                    db_learned_weights = get_live_learned_weights("gold_high_iq.db")
+                    
+                    st.markdown("#### 🧠 Learned Component Weights (From Database)")
+                    st.caption("These weights have been automatically tuned from historical race results")
+                    
+                    # Display core weights as metrics
+                    cols = st.columns(6)
+                    weight_names = ['class', 'speed', 'form', 'pace', 'style', 'post']
+                    for idx, weight_name in enumerate(weight_names):
+                        with cols[idx]:
+                            weight_val = db_learned_weights.get(weight_name, 0.0)
+                            default_val = {'class': 2.5, 'speed': 2.0, 'form': 1.8, 'pace': 1.5, 'style': 2.0, 'post': 0.8}.get(weight_name, 0)
+                            delta = weight_val - default_val
+                            st.metric(
+                                weight_name.capitalize(),
+                                f"{weight_val:.2f}",
+                                delta=f"{delta:+.2f}" if delta != 0 else None,
+                                delta_color="normal",
+                                help=f"Learned emphasis on {weight_name} factor (default: {default_val})"
+                            )
+                    
+                    # Show odds drift learning
+                    st.markdown("---")
+                    st.markdown("#### 💰 Odds Drift Learning (Pegasus 2026 Tuned)")
+                    cols2 = st.columns(4)
+                    
+                    odds_weights = {
+                        'odds_drift_penalty': ('Drift OUT Penalty', -3.0),
+                        'smart_money_bonus': ('Smart $ Bonus', 2.5),
+                        'a_group_drift_gate': ('A-Group Gate', 2.0)
+                    }
+                    
+                    col_idx = 0
+                    for key, (label, default) in odds_weights.items():
+                        with cols2[col_idx]:
+                            val = db_learned_weights.get(key, default)
+                            st.metric(label, f"{val:.1f}", help=f"Default: {default}")
+                        col_idx += 1
+                    
+                    st.success("✅ **Weights persist to database** - survive app restarts and Render redeploys!")
+                    
+                    # Show calibration history from database
+                    st.markdown("---")
+                    st.markdown("#### 📈 Calibration History (from Database)")
+                    
+                    try:
+                        import sqlite3
+                        conn = sqlite3.connect("gold_high_iq.db", timeout=5.0)
+                        cursor = conn.cursor()
+                        
+                        cursor.execute("""
+                            SELECT 
+                                calibration_timestamp,
+                                races_analyzed,
+                                winner_accuracy,
+                                top3_accuracy,
+                                improvements_json
+                            FROM calibration_history
+                            ORDER BY calibration_timestamp DESC
+                            LIMIT 10
+                        """)
+                        
+                        cal_history = cursor.fetchall()
+                        conn.close()
+                        
+                        if cal_history:
+                            cal_df = pd.DataFrame(cal_history, columns=[
+                                'Timestamp', 'Races', 'Winner %', 'Top-3 %', 'Improvements'
+                            ])
+                            cal_df['Winner %'] = (cal_df['Winner %'] * 100).round(1).astype(str) + '%'
+                            cal_df['Top-3 %'] = (cal_df['Top-3 %'] * 100).round(1).astype(str) + '%'
+                            cal_df['Timestamp'] = pd.to_datetime(cal_df['Timestamp']).dt.strftime('%m/%d %I:%M %p')
+                            cal_df = cal_df.drop(columns=['Improvements'])
+                            
+                            st.dataframe(cal_df, use_container_width=True, hide_index=True)
+                            st.caption(f"📚 System has learned from **{cal_df['Races'].sum()}** total race analyses")
+                        else:
+                            st.info("📋 No calibration history yet. Submit race results to start learning!")
+                    
+                    except Exception as db_err:
+                        st.warning(f"Could not load calibration history: {db_err}")
                 
-                current_weights = unified_rating_engine.BASE_WEIGHTS.copy()
-                
-                st.markdown("#### 🎯 Current Component Weights")
-                st.caption("These weights determine how much each factor influences the final rating")
-                
-                # Display weights as metrics
-                cols = st.columns(6)
-                weight_names = ['class', 'speed', 'form', 'pace', 'style', 'post']
-                for idx, weight_name in enumerate(weight_names):
-                    with cols[idx]:
-                        weight_val = current_weights.get(weight_name, 0.0)
-                        st.metric(
-                            weight_name.capitalize(),
-                            f"{weight_val:.3f}",
-                            help=f"Current emphasis on {weight_name} factor"
-                        )
+                else:
+                    # Fallback to v1 system
+                    import importlib
+                    import unified_rating_engine
+                    importlib.reload(unified_rating_engine)
+                    
+                    current_weights = unified_rating_engine.BASE_WEIGHTS.copy()
+                    
+                    st.markdown("#### 🎯 Current Component Weights")
+                    st.caption("These weights determine how much each factor influences the final rating")
+                    
+                    # Display weights as metrics
+                    cols = st.columns(6)
+                    weight_names = ['class', 'speed', 'form', 'pace', 'style', 'post']
+                    for idx, weight_name in enumerate(weight_names):
+                        with cols[idx]:
+                            weight_val = current_weights.get(weight_name, 0.0)
+                            st.metric(
+                                weight_name.capitalize(),
+                                f"{weight_val:.3f}",
+                                help=f"Current emphasis on {weight_name} factor"
+                            )
                 
                 st.markdown("---")
                 
