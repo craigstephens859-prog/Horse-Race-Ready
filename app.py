@@ -5055,11 +5055,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 quality_raw = race_class_data['summary']['quality']  # 'Elite'/'High'/'Medium'/'Low'
                 quality_map = {'Elite': 'elite', 'High': 'high', 'Medium': 'mid', 'Low': 'low', 'Minimal': 'low'}
                 race_quality = quality_map.get(quality_raw, 'mid')
-                st.success(
-                    f"✅ Parser: {
-                        race_class_data['summary']['class_type']} | Level {
-                        race_class_data['hierarchy']['final_level']} | Weight {
-                        parser_class_weight:.2f} | Quality: {race_quality}")
+                st.success(f"✅ Parser: {race_class_data['summary']['class_type']} | Level {race_class_data['hierarchy']['final_level']} | Weight {parser_class_weight:.2f} | Quality: {race_quality}")
             except Exception as e:
                 st.error(f"❌ Parser failed in compute_bias_ratings: {e}")
                 import traceback
