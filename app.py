@@ -6934,8 +6934,7 @@ if GOLD_DB_AVAILABLE and gold_db is not None:
 
         st.header(f"E. Gold High-IQ System 🏆 - {total_saved} Races Saved")
         if total_saved > 0:
-            st.success(f"💾 **Database Active:** {stats.get('total_races',
-                                                           0)} races with results, {len(pending_races)} pending results")
+            st.success(f"💾 **Database Active:** {stats.get('total_races', 0)} races with results, {len(pending_races)} pending results")
     except BaseException:
         st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
 else:
