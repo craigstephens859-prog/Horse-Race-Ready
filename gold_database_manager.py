@@ -254,11 +254,11 @@ class GoldHighIQDatabase:
         finish_order_programs: List[int]
     ) -> bool:
         """
-        Submit actual race results (top 5 finish positions).
+        Submit actual race results (top 4 finish positions).
         
         Args:
             race_id: Race identifier
-            finish_order_programs: List of program numbers [1st, 2nd, 3rd, 4th, 5th]
+            finish_order_programs: List of program numbers [1st, 2nd, 3rd, 4th]
         
         Returns:
             True if successful
@@ -284,8 +284,8 @@ class GoldHighIQDatabase:
             all_horses = cursor.fetchall()
             horse_dict = {row[1]: row for row in all_horses}  # program_number -> row
             
-            # Insert results into gold_high_iq table
-            for actual_position, program_num in enumerate(finish_order_programs, 1):
+            # Insert results into gold_high_iq table (handles top 4 or top 5)
+            for actual_position, program_num in enumerate(finish_order_programs[:4], 1):
                 if program_num not in horse_dict:
                     logger.warning(f"Program #{program_num} not found in race {race_id}")
                     continue
@@ -296,7 +296,7 @@ class GoldHighIQDatabase:
                 
                 # Calculate metrics
                 prediction_error = abs(predicted_rank - actual_position)
-                was_top5_correct = (predicted_rank <= 5 and actual_position <= 5)
+                was_top4_correct = (predicted_rank <= 4 and actual_position <= 4)
                 
                 # Build features JSON
                 features = {
@@ -331,7 +331,7 @@ class GoldHighIQDatabase:
                     result_id, race_id, horse_id, actual_position,
                     program_num, horse_row[2], horse_row[3], horse_row[4],
                     horse_row[5], predicted_rank, json.dumps(features),
-                    prediction_error, was_top5_correct,
+                    prediction_error, was_top4_correct,
                     datetime.now().isoformat()
                 ))
             
@@ -339,12 +339,18 @@ class GoldHighIQDatabase:
             winner_name = horse_dict[finish_order_programs[0]][2] if finish_order_programs[0] in horse_dict else 'Unknown'
             
             # Calculate accuracy metrics
-            predicted_top5 = sorted(all_horses, key=lambda x: x[6])[:5]  # Sort by predicted_rank
-            predicted_top5_programs = [h[1] for h in predicted_top5]
+            predicted_top4 = sorted(all_horses, key=lambda x: x[6])[:4]  # Sort by predicted_rank
+            predicted_top4_programs = [h[1] for h in predicted_top4]
             
-            top1_correct = (predicted_top5_programs[0] == finish_order_programs[0])
-            top3_correct_count = len(set(predicted_top5_programs[:3]) & set(finish_order_programs[:3]))
-            top5_correct_count = len(set(predicted_top5_programs[:5]) & set(finish_order_programs[:5]))
+            top1_correct = (predicted_top4_programs[0] == finish_order_programs[0])
+            top3_correct_count = len(set(predicted_top4_programs[:3]) & set(finish_order_programs[:3]))
+            top4_correct_count = len(set(predicted_top4_programs[:4]) & set(finish_order_programs[:4]))
+            
+            # Get horse names safely (handle case where program might not be in dict)
+            def safe_horse_name(programs, idx):
+                if idx < len(programs) and programs[idx] in horse_dict:
+                    return horse_dict[programs[idx]][2]
+                return 'Unknown'
             
             cursor.execute("""
                 INSERT OR REPLACE INTO race_results_summary
@@ -354,14 +360,14 @@ class GoldHighIQDatabase:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 race_id,
-                horse_dict[finish_order_programs[0]][2] if finish_order_programs[0] in horse_dict else 'Unknown',
-                horse_dict[finish_order_programs[1]][2] if finish_order_programs[1] in horse_dict else 'Unknown',
-                horse_dict[finish_order_programs[2]][2] if finish_order_programs[2] in horse_dict else 'Unknown',
-                horse_dict[finish_order_programs[3]][2] if finish_order_programs[3] in horse_dict else 'Unknown',
-                horse_dict[finish_order_programs[4]][2] if finish_order_programs[4] in horse_dict else 'Unknown',
+                safe_horse_name(finish_order_programs, 0),
+                safe_horse_name(finish_order_programs, 1),
+                safe_horse_name(finish_order_programs, 2),
+                safe_horse_name(finish_order_programs, 3),
+                'N/A',  # 5th place not required anymore
                 top1_correct,
                 top3_correct_count,
-                top5_correct_count,
+                top4_correct_count,  # Using top4 instead of top5
                 datetime.now().isoformat()
             ))
             
