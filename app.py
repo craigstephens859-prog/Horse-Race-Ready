@@ -6986,8 +6986,8 @@ else:
         pending_races = gold_db.get_pending_races(limit=20)
 
         # Create tabs for Gold High-IQ System
-        tab_overview, tab_results, tab_retrain = st.tabs(
-            ["📊 Dashboard", "🏁 Submit Actual Top 5", "🚀 Retrain Model"]
+        tab_overview, tab_results, tab_calibration, tab_retrain = st.tabs(
+            ["📊 Dashboard", "🏁 Submit Actual Top 5", "🤖 Auto-Calibration Monitor", "🚀 Retrain Model"]
         )
 
         # Tab 1: Dashboard
@@ -7331,7 +7331,146 @@ else:
                     st.error(f"❌ Database verification failed: {str(e)}")
                     st.warning("⚠️ This may indicate database corruption or file permission issues.")
 
-        # Tab 3: Retrain Model
+        # Tab 3: Auto-Calibration Monitor
+        with tab_calibration:
+            st.markdown("""
+            ### 🤖 Real-Time Model Learning Monitor
+            
+            This dashboard shows **proof** that your model is automatically learning from each race result.
+            After every result submission, the system adjusts component weights using gradient descent.
+            """)
+            
+            # Load current weights from unified_rating_engine
+            try:
+                import importlib
+                import unified_rating_engine
+                importlib.reload(unified_rating_engine)
+                
+                current_weights = unified_rating_engine.BASE_WEIGHTS.copy()
+                
+                st.markdown("#### 🎯 Current Component Weights")
+                st.caption("These weights determine how much each factor influences the final rating")
+                
+                # Display weights as metrics
+                cols = st.columns(6)
+                weight_names = ['class', 'speed', 'form', 'pace', 'style', 'post']
+                for idx, weight_name in enumerate(weight_names):
+                    with cols[idx]:
+                        weight_val = current_weights.get(weight_name, 0.0)
+                        st.metric(
+                            weight_name.capitalize(),
+                            f"{weight_val:.3f}",
+                            help=f"Current emphasis on {weight_name} factor"
+                        )
+                
+                st.markdown("---")
+                
+                # Load calibration history
+                import os
+                import json
+                history_file = "calibration_history.json"
+                
+                if os.path.exists(history_file):
+                    with open(history_file, 'r') as f:
+                        calibration_history = json.load(f)
+                    
+                    if calibration_history:
+                        st.markdown("#### 📈 Recent Calibration Events")
+                        st.caption(f"Showing last {min(len(calibration_history), 20)} auto-calibration updates")
+                        
+                        # Create DataFrame from history
+                        history_records = []
+                        for event in calibration_history[-20:]:  # Last 20 events
+                            record = {
+                                'Timestamp': event.get('timestamp', 'N/A'),
+                                'Races Used': event.get('num_races', 0),
+                                'Winner Acc': f"{event.get('winner_accuracy', 0) * 100:.1f}%",
+                                'Avg Loss': f"{event.get('avg_loss', 0):.4f}",
+                            }
+                            
+                            # Add weight changes
+                            weight_updates = event.get('weight_updates', {})
+                            for w_name in weight_names:
+                                if w_name in weight_updates:
+                                    delta = weight_updates[w_name]
+                                    record[f'{w_name.capitalize()} Δ'] = f"{delta:+.4f}"
+                            
+                            history_records.append(record)
+                        
+                        if history_records:
+                            history_df = pd.DataFrame(history_records)
+                            st.dataframe(history_df, use_container_width=True, hide_index=True)
+                            
+                            # Show learning progress
+                            st.markdown("#### 📊 Learning Progress")
+                            
+                            # Calculate total calibrations
+                            total_calibrations = len(calibration_history)
+                            recent_accuracy = calibration_history[-1].get('winner_accuracy', 0) * 100 if calibration_history else 0
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric(
+                                    "Total Calibrations",
+                                    total_calibrations,
+                                    help="Number of times the model has auto-adjusted"
+                                )
+                            with col2:
+                                st.metric(
+                                    "Latest Winner Accuracy",
+                                    f"{recent_accuracy:.1f}%",
+                                    help="Most recent winner prediction accuracy"
+                                )
+                            with col3:
+                                # Calculate average loss trend
+                                if len(calibration_history) >= 2:
+                                    recent_loss = calibration_history[-1].get('avg_loss', 0)
+                                    previous_loss = calibration_history[-2].get('avg_loss', 0)
+                                    loss_delta = recent_loss - previous_loss
+                                    st.metric(
+                                        "Loss Change",
+                                        f"{recent_loss:.4f}",
+                                        delta=f"{loss_delta:.4f}",
+                                        delta_color="inverse",
+                                        help="Lower is better - model is learning to minimize prediction error"
+                                    )
+                                else:
+                                    st.metric("Loss Change", "N/A", help="Need 2+ calibrations to show trend")
+                            
+                            st.success("✅ **Auto-Calibration Active:** Model updates after every race result submission")
+                            
+                            # Show weight evolution chart (if enough data)
+                            if len(calibration_history) >= 5:
+                                st.markdown("#### 📉 Weight Evolution Over Time")
+                                
+                                # Extract weight history
+                                weight_history = {w: [] for w in weight_names}
+                                timestamps = []
+                                
+                                for event in calibration_history[-20:]:
+                                    timestamps.append(event.get('timestamp', ''))
+                                    weights = event.get('current_weights', {})
+                                    for w_name in weight_names:
+                                        weight_history[w_name].append(weights.get(w_name, 0))
+                                
+                                # Create line chart data
+                                chart_data = pd.DataFrame(weight_history, index=timestamps)
+                                st.line_chart(chart_data)
+                                st.caption("📌 Watch how weights adjust based on race outcomes - evidence of real-time learning!")
+                        else:
+                            st.info("📋 No calibration events recorded yet. Submit race results to trigger auto-learning!")
+                    else:
+                        st.info("📋 No calibration history yet. The model will auto-calibrate after you submit race results.")
+                else:
+                    st.info(f"📋 Calibration history file not found: `{history_file}`")
+                    st.caption("The system will create this file automatically after the first auto-calibration event.")
+                
+            except Exception as e:
+                st.error(f"❌ Error loading calibration data: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+
+        # Tab 4: Retrain Model
         with tab_retrain:
             st.markdown("""
             ### Retrain ML Model with Real Data
