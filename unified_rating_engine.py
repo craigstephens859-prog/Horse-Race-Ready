@@ -531,14 +531,26 @@ class UnifiedRatingEngine:
         # Get dynamically adjusted weights for this race type
         dynamic_weights = self._get_dynamic_weights(today_race_type)
         
+        # === TRACK BIAS ADJUSTMENTS ===
+        # Apply Impact Values to adjust style and post ratings
+        cstyle, cpost, dynamic_weights = self._apply_track_bias_adjustments(
+            horse, cstyle, cpost, dynamic_weights
+        )
+        # Update the Bayesian ratings with adjusted values
         component_ratings_dict = {
             'class': (cclass, cclass_std),
             'form': (cform, cform_std),
             'speed': (cspeed, cspeed_std),
             'pace': (cpace, cpace_std),
-            'style': (cstyle, cstyle_std),
-            'post': (cpost, cpost_std)
+            'style': (cstyle, cstyle_std),  # Now adjusted for track bias
+            'post': (cpost, cpost_std)      # Now adjusted for track bias
         }
+        
+        # === RELIABILITY-BASED CONFIDENCE WEIGHTING ===
+        # Apply confidence adjustments based on data freshness
+        component_ratings_dict = self._apply_reliability_confidence_weighting(
+            horse, component_ratings_dict
+        )
         
         # Convert tuples to BayesianRating objects for aggregation
         from bayesian_rating_framework import BayesianRating
@@ -628,6 +640,111 @@ class UnifiedRatingEngine:
         logger.debug(f"Dynamic weights for {race_type} ({modifier_key}): {dynamic_weights}")
         
         return dynamic_weights
+
+    def _apply_track_bias_adjustments(
+        self, 
+        horse: HorseData, 
+        cstyle: float, 
+        cpost: float, 
+        weights: Dict[str, float]
+    ) -> Tuple[float, float, Dict[str, float]]:
+        """
+        Apply Track Bias Impact Values to adjust run style and post position weights.
+        
+        Track Bias IVs indicate effectiveness multipliers:
+        - E=1.22 means early speed is 22% more effective
+        - S=0.62 means closers are 38% less effective
+        - Post 8+=1.38 means outside posts are 38% more effective
+        
+        Args:
+            horse: HorseData with track_bias fields
+            cstyle: Base style rating
+            cpost: Base post rating
+            weights: Current weight dictionary
+        
+        Returns:
+            (adjusted_cstyle, adjusted_cpost, adjusted_weights)
+        """
+        adjusted_cstyle = cstyle
+        adjusted_cpost = cpost
+        adjusted_weights = weights.copy()
+        
+        # Apply run style Impact Value
+        if horse.track_bias_run_style_iv is not None:
+            iv = horse.track_bias_run_style_iv
+            # IV acts as a multiplier on the style component
+            adjusted_cstyle = cstyle * iv
+            
+            # Also adjust the weight to amplify/dampen importance
+            adjusted_weights['cstyle'] = weights['cstyle'] * iv
+            
+            logger.debug(f"  → Track Bias Run Style IV={iv:.2f}: style {cstyle:.2f}→{adjusted_cstyle:.2f}, weight {weights['cstyle']:.2f}→{adjusted_weights['cstyle']:.2f}")
+            
+            # Log if dominant/favorable marker present
+            if horse.track_bias_markers == '++':
+                logger.debug(f"  → Run style is DOMINANT (++) for this track")
+            elif horse.track_bias_markers == '+':
+                logger.debug(f"  → Run style is FAVORABLE (+) for this track")
+        
+        # Apply post position Impact Value
+        if horse.track_bias_post_iv is not None:
+            iv = horse.track_bias_post_iv
+            # IV acts as a multiplier on the post component
+            adjusted_cpost = cpost * iv
+            
+            # Also adjust the weight
+            adjusted_weights['cpost'] = weights['cpost'] * iv
+            
+            logger.debug(f"  → Track Bias Post IV={iv:.2f}: post {cpost:.2f}→{adjusted_cpost:.2f}, weight {weights['cpost']:.2f}→{adjusted_weights['cpost']:.2f}")
+        
+        return adjusted_cstyle, adjusted_cpost, adjusted_weights
+
+    def _apply_reliability_confidence_weighting(
+        self, 
+        horse: HorseData,
+        rating_components: Dict[str, float]
+    ) -> Dict[str, float]:
+        """
+        Apply confidence weighting based on reliability indicators.
+        
+        Reliability indicators show data freshness/quality:
+        - "*" (asterisk) = 2+ races in 90 days → RELIABLE → 1.5x weight
+        - "." (dot) = Earned at today's distance → STANDARD → 1.0x weight
+        - "()" (parentheses) = Race >90 days ago → STALE → 0.7x weight
+        
+        Affects class, speed, and form ratings (components derived from past performances).
+        
+        Args:
+            horse: HorseData with reliability_indicator
+            rating_components: Dict of component ratings
+        
+        Returns:
+            Adjusted rating_components dict
+        """
+        adjusted_components = rating_components.copy()
+        
+        if horse.reliability_indicator:
+            multiplier = 1.0
+            
+            if horse.reliability_indicator == "asterisk":
+                multiplier = 1.5  # Recent, reliable data
+                logger.debug(f"  → Reliability: ASTERISK (2+ races in 90 days) → 1.5x confidence")
+            elif horse.reliability_indicator == "dot":
+                multiplier = 1.0  # Standard reliability
+                logger.debug(f"  → Reliability: DOT (today's distance) → 1.0x confidence")
+            elif horse.reliability_indicator == "parentheses":
+                multiplier = 0.7  # Stale data
+                logger.debug(f"  → Reliability: PARENTHESES (>90 days) → 0.7x confidence")
+            
+            # Apply to data-dependent components
+            if multiplier != 1.0:
+                for component in ['cclass', 'cspeed', 'cform']:
+                    if component in adjusted_components:
+                        old_val = adjusted_components[component]
+                        adjusted_components[component] = old_val * multiplier
+                        logger.debug(f"    {component}: {old_val:.2f} → {adjusted_components[component]:.2f}")
+        
+        return adjusted_components
 
     def _calculate_claiming_score(self, claiming_price: float) -> float:
         """
@@ -829,6 +946,30 @@ class UnifiedRatingEngine:
             if purse_bonus > 0:
                 logger.debug(f"  → Purse bonus: ${today_purse:,.0f} adds +{purse_bonus:.2f}")
         
+        # === STEP 3.5: RACE RATING (RR) & CLASS RATING (CR) ADJUSTMENT ===
+        # RR measures competition quality, CR measures performance vs that competition
+        if horse.race_rating is not None:
+            # RR > 115 = elite competition, RR < 95 = weak competition
+            rr_bonus = (horse.race_rating - 105) / 20.0  # Centered at 105, scaled
+            rr_bonus = np.clip(rr_bonus, -1.0, 1.5)  # Allow +1.5 for elite competition
+            rating += rr_bonus
+            logger.debug(f"  → RR={horse.race_rating} adds {rr_bonus:+.2f} (competition quality)")
+        
+        if horse.class_rating_individual is not None:
+            # CR measures how well horse performed vs the competition
+            # CR > 115 = dominated the field, CR < 95 = struggled
+            cr_bonus = (horse.class_rating_individual - 105) / 25.0  # Slightly less weight than RR
+            cr_bonus = np.clip(cr_bonus, -0.8, 1.2)
+            rating += cr_bonus
+            logger.debug(f"  → CR={horse.class_rating_individual} adds {cr_bonus:+.2f} (individual performance)")
+        
+        # ACL (Average Competitive Level) - shows ceiling when ITM
+        if horse.acl is not None:
+            acl_bonus = (horse.acl - 105) / 30.0  # Moderate weight
+            acl_bonus = np.clip(acl_bonus, -0.5, 0.8)
+            rating += acl_bonus
+            logger.debug(f"  → ACL={horse.acl:.1f} adds {acl_bonus:+.2f} (ITM performance level)")
+        
         # === STEP 4: FORM-ADJUSTED CLASS EVALUATION ===
         # Check if horse was competitive in recent races
         was_competitive = False
@@ -1006,6 +1147,31 @@ class UnifiedRatingEngine:
 
         # Count early types (basic)
         num_speed: int = sum(1 for h in horses_in_race if h.pace_style in ['E', 'E/P'])
+
+        # === RACE SHAPES ANALYSIS (1c, 2c beaten lengths vs par) ===
+        # Negative values = faster than par (ahead), Positive = slower than par (behind)
+        if hasattr(horse, 'race_shape_1c') and horse.race_shape_1c is not None:
+            shape_1c = horse.race_shape_1c
+            shape_2c = horse.race_shape_2c if hasattr(horse, 'race_shape_2c') and horse.race_shape_2c is not None else 0
+            
+            # Analyze pace scenario preference
+            if shape_1c < -3 and shape_2c < -3:
+                # Horse was ahead of par at both calls = true speed horse
+                if num_speed == 1:
+                    rating += 1.5  # Lone speed with proven ability
+                else:
+                    rating -= 0.5  # Will duel with others
+                logger.debug(f"  Race shapes: 1c={shape_1c:.1f}, 2c={shape_2c:.1f} → speed horse")
+            elif shape_1c > 3 and shape_2c < 0:
+                # Behind early, closed well = strong closer
+                if num_speed >= 3:
+                    rating += 1.0  # Hot pace to close into
+                logger.debug(f"  Race shapes: 1c={shape_1c:.1f}, 2c={shape_2c:.1f} → closer")
+            elif shape_1c < 0 and shape_2c > 2:
+                # Led early, faded = pace vulnerability
+                if num_speed >= 2:
+                    rating -= 1.2  # Won't last in hot pace
+                logger.debug(f"  Race shapes: 1c={shape_1c:.1f}, 2c={shape_2c:.1f} → fades")
 
         # ENHANCED: Use comprehensive early_speed_pct if available
         if hasattr(horse, 'early_speed_pct') and horse.early_speed_pct is not None:

@@ -123,6 +123,38 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     # === ENHANCED PACE DATA ===
     early_speed_pct: Optional[float] = None  # % of races showing early speed (0-100)
 
+    # === BRIS RACE RATINGS (from running lines) ===
+    race_rating: Optional[int] = None  # RR - measures competition quality/level
+    class_rating_individual: Optional[int] = None  # CR - performance vs that competition
+    
+    # === RACE SHAPES (pace scenario vs par) ===
+    race_shape_1c: Optional[float] = None  # Beaten lengths vs par at first call
+    race_shape_2c: Optional[float] = None  # Beaten lengths vs par at second call
+    
+    # === RELIABILITY INDICATORS ===
+    reliability_indicator: Optional[str] = None  # "*" (reliable), "." (distance), "()" (stale)
+    
+    # === RACE SUMMARY ADVANCED METRICS ===
+    acl: Optional[float] = None  # Average Competitive Level when ITM
+    r1: Optional[int] = None  # Race rating from most recent race
+    r2: Optional[int] = None  # Race rating from 2nd most recent race
+    r3: Optional[int] = None  # Race rating from 3rd most recent race
+    back_speed: Optional[int] = None  # Best speed at today's distance/surface in last year
+    best_pace_e1: Optional[int] = None  # Peak E1 at today's distance/surface
+    best_pace_e2: Optional[int] = None  # Peak E2 at today's distance/surface
+    best_pace_lp: Optional[int] = None  # Peak LP (late pace) at today's distance/surface
+    
+    # === TRACK BIAS IMPACT VALUES ===
+    track_bias_run_style_iv: Optional[float] = None  # Run style effectiveness multiplier (e.g., E=1.22)
+    track_bias_post_iv: Optional[float] = None  # Post position effectiveness multiplier
+    track_bias_markers: Optional[str] = None  # "++" or "+" indicating dominant/favorable
+    
+    # === PEDIGREE RATINGS (breeding suitability) ===
+    pedigree_fast: Optional[int] = None  # Fast track breeding rating
+    pedigree_off: Optional[int] = None  # Off track (muddy/sloppy) breeding rating
+    pedigree_distance: Optional[int] = None  # Distance breeding rating
+    pedigree_turf: Optional[int] = None  # Turf breeding rating
+
     # === VALIDATION ===
     parsing_confidence: float = 1.0  # Overall confidence
     warnings: List[str] = field(default_factory=list)
@@ -697,6 +729,46 @@ class GoldStandardBRISNETParser:
             
             # EARLY SPEED PERCENTAGE
             horse.early_speed_pct = self._calculate_early_speed_pct(horse)
+
+            # RACE RATING (RR) & CLASS RATING (CR)
+            rr, cr = self._parse_rr_cr_from_running_lines(block)
+            horse.race_rating = rr
+            horse.class_rating_individual = cr
+            
+            # RACE SHAPES (pace scenario vs par)
+            shape_1c, shape_2c = self._parse_race_shapes(block)
+            horse.race_shape_1c = shape_1c
+            horse.race_shape_2c = shape_2c
+            
+            # RELIABILITY INDICATOR
+            horse.reliability_indicator = self._parse_reliability_indicator(block)
+            
+            # ACL and R1/R2/R3
+            acl, r1, r2, r3 = self._parse_acl_and_recent_ratings(block)
+            horse.acl = acl
+            horse.r1 = r1
+            horse.r2 = r2
+            horse.r3 = r3
+            
+            # BACK SPEED & BEST PACE
+            back_speed, bp_e1, bp_e2, bp_lp = self._parse_back_speed_best_pace(block)
+            horse.back_speed = back_speed
+            horse.best_pace_e1 = bp_e1
+            horse.best_pace_e2 = bp_e2
+            horse.best_pace_lp = bp_lp
+            
+            # TRACK BIAS IMPACT VALUES
+            run_style_iv, post_iv, markers = self._parse_track_bias_impact_values(block, horse.pace_style, horse.post)
+            horse.track_bias_run_style_iv = run_style_iv
+            horse.track_bias_post_iv = post_iv
+            horse.track_bias_markers = markers
+            
+            # PEDIGREE RATINGS
+            ped_fast, ped_off, ped_dist, ped_turf = self._parse_pedigree_ratings(block)
+            horse.pedigree_fast = ped_fast
+            horse.pedigree_off = ped_off
+            horse.pedigree_distance = ped_dist
+            horse.pedigree_turf = ped_turf
 
             # PRIME POWER
             pp_value, pp_rank = self._parse_prime_power(block)
@@ -1313,6 +1385,398 @@ class GoldStandardBRISNETParser:
         else:
             # Unknown
             return None
+
+    # ============ PRIME POWER ============
+
+    def _parse_prime_power(self, block: str) -> Tuple[Optional[float], Optional[int]]:
+        """Parse BRISNET Prime Power rating and rank"""
+        match = self.PRIME_POWER_PATTERN.search(block)
+        if match:
+            try:
+                value = float(match.group(1))
+                rank = int(match.group(2))
+                return value, rank
+            except Exception:
+                pass
+        return None, None
+
+    # ============ RACE RATING (RR) & CLASS RATING (CR) ============
+    
+    def _parse_rr_cr_from_running_lines(self, block: str) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Parse RR (Race Rating) and CR (Class Rating) from running lines.
+        
+        BRISNET Encoding:
+        - RR appears as ¨¨¬ followed by race type (e.g., "¨¨¬ OC50k/n1x-c")
+        - CR appears as ¨¨® before E1 speed figure (e.g., "¨¨® 86 91/ 98")
+        
+        Example line:
+        27Sep25SA© 6f ft :22© :45 :57© 1:09© ¦ ¨¨¬ OC50k/n1x-c ¨¨® 86 91/ 98
+                                            ^^^RR=113      ^^^CR=118
+        
+        The special characters encode numeric values.
+        Returns: (race_rating, class_rating_individual)
+        """
+        rr = None
+        cr = None
+        
+        # Look for RR pattern: special chars before race type
+        # The ¨¨¬ pattern encodes RR value
+        rr_pattern = re.search(r'¨¨([¬­®¯°±²³´µ¶·¸¹º»])', block)
+        if rr_pattern:
+            # Map special characters to values (¬=113, ­=114, etc.)
+            char_map = {
+                '¬': 113, '­': 114, '®': 115, '¯': 116, '°': 117,
+                '±': 118, '²': 119, '³': 120, '´': 121, 'µ': 122,
+                '¶': 123, '·': 124, '¸': 125, '¹': 126, 'º': 127,
+                '»': 128, '¼': 129, '½': 130, '¾': 131, '¿': 132
+            }
+            rr = char_map.get(rr_pattern.group(1))
+        
+        # Alternative: Look for explicit RR value in format "RR 113" or "RR:113"
+        rr_explicit = re.search(r'RR[:\s]+(\d{2,3})', block, re.IGNORECASE)
+        if rr_explicit and not rr:
+            try:
+                rr = int(rr_explicit.group(1))
+            except Exception:
+                pass
+        
+        # Look for CR pattern: special chars before speed figures
+        # The ¨¨® pattern encodes CR value
+        cr_pattern = re.search(r'¨¨([¬­®¯°±²³´µ¶·¸¹º»])\s+\d{2,3}\s+\d{2,3}/', block)
+        if cr_pattern:
+            char_map = {
+                '¬': 113, '­': 114, '®': 115, '¯': 116, '°': 117,
+                '±': 118, '²': 119, '³': 120, '´': 121, 'µ': 122,
+                '¶': 123, '·': 124, '¸': 125, '¹': 126, 'º': 127,
+                '»': 128, '¼': 129, '½': 130, '¾': 131, '¿': 132
+            }
+            cr = char_map.get(cr_pattern.group(1))
+        
+        # Alternative: Look for explicit CR value
+        cr_explicit = re.search(r'CR[:\s]+(\d{2,3})', block, re.IGNORECASE)
+        if cr_explicit and not cr:
+            try:
+                cr = int(cr_explicit.group(1))
+            except Exception:
+                pass
+        
+        return rr, cr
+    
+    # ============ RACE SHAPES (Pace Scenario vs Par) ============
+    
+    def _parse_race_shapes(self, block: str) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Parse race shapes (1c, 2c) - beaten lengths vs par at calls.
+        
+        Format in Race Summary:
+        E1 E2/ LP 1c 2c SPD
+        86 91/ 98 -5 -6 95
+        
+        Positive values = slower than par (beaten by par)
+        Negative values = faster than par (ahead of par)
+        
+        Returns: (race_shape_1c, race_shape_2c)
+        """
+        shape_1c = None
+        shape_2c = None
+        
+        # Look for "1c" and "2c" column headers followed by values
+        # Pattern: Look for lines with "1c" and "2c" labels, then extract numbers from next line
+        race_shapes_section = re.search(
+            r'(?:E1|SPD).*?1c\s+2c.*?\n.*?(-?\d+)\s+(-?\d+)',
+            block,
+            re.IGNORECASE | re.DOTALL
+        )
+        
+        if race_shapes_section:
+            try:
+                shape_1c = float(race_shapes_section.group(1))
+                shape_2c = float(race_shapes_section.group(2))
+            except Exception:
+                pass
+        
+        # Alternative pattern: Direct format like "1c -5 2c -6"
+        alt_pattern = re.search(r'1c\s+(-?\d+)\s+2c\s+(-?\d+)', block, re.IGNORECASE)
+        if alt_pattern and (shape_1c is None or shape_2c is None):
+            try:
+                shape_1c = float(alt_pattern.group(1))
+                shape_2c = float(alt_pattern.group(2))
+            except Exception:
+                pass
+        
+        return shape_1c, shape_2c
+    
+    # ============ RELIABILITY INDICATORS ============
+    
+    def _parse_reliability_indicator(self, block: str) -> Optional[str]:
+        """
+        Parse reliability indicators from race summary ratings.
+        
+        Indicators:
+        - "*" or "*91*" = 2+ races in last 90 days (RELIABLE)
+        - "." or "95." = Earned at today's distance
+        - "()" or "(91)" = Race >90 days ago (LESS RELIABLE)
+        
+        Priority: asterisk > dot > parentheses
+        Returns: "asterisk", "dot", "parentheses", or None
+        """
+        # Look in race summary section for these patterns
+        # Check for asterisked ratings (highest reliability)
+        if re.search(r'\*\d{2,3}\*|\*\s*\d{2,3}', block):
+            return "asterisk"
+        
+        # Check for dotted ratings (today's distance)
+        if re.search(r'\d{2,3}\.', block):
+            return "dot"
+        
+        # Check for parenthesized ratings (stale data)
+        if re.search(r'\(\d{2,3}\)', block):
+            return "parentheses"
+        
+        return None
+    
+    # ============ ACL and R1/R2/R3 ============
+    
+    def _parse_acl_and_recent_ratings(self, block: str) -> Tuple[Optional[float], Optional[int], Optional[int], Optional[int]]:
+        """
+        Parse ACL (Average Competitive Level) and R1/R2/R3 (last 3 race ratings).
+        
+        Format in Race Summary:
+        ACL: 115.7
+        R1 R2 R3
+        115 115 116
+        
+        ACL = Average level when in-the-money (ITM)
+        R1/R2/R3 = Individual race ratings for last 3 starts
+        
+        Returns: (acl, r1, r2, r3)
+        """
+        acl = None
+        r1 = None
+        r2 = None
+        r3 = None
+        
+        # Parse ACL
+        acl_match = re.search(r'ACL[:\s]+(\d+\.?\d*)', block, re.IGNORECASE)
+        if acl_match:
+            try:
+                acl = float(acl_match.group(1))
+            except Exception:
+                pass
+        
+        # Parse R1/R2/R3
+        # Look for "R1 R2 R3" header followed by values
+        r123_match = re.search(
+            r'R1\s+R2\s+R3\s+(\d{2,3})\s+(\d{2,3})\s+(\d{2,3})',
+            block,
+            re.IGNORECASE
+        )
+        if r123_match:
+            try:
+                r1 = int(r123_match.group(1))
+                r2 = int(r123_match.group(2))
+                r3 = int(r123_match.group(3))
+            except Exception:
+                pass
+        
+        return acl, r1, r2, r3
+    
+    # ============ BACK SPEED & BEST PACE ============
+    
+    def _parse_back_speed_best_pace(self, block: str) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+        """
+        Parse Back Speed and Best Pace figures from race summary.
+        
+        Back Speed = Best speed at today's distance/surface in last year
+        Best Pace = Peak E1/E2/LP at today's distance/surface
+        
+        Format:
+        Back Speed: 95
+        Best Pace: E1 89 E2 95 LP 98
+        
+        Returns: (back_speed, best_pace_e1, best_pace_e2, best_pace_lp)
+        """
+        back_speed = None
+        best_pace_e1 = None
+        best_pace_e2 = None
+        best_pace_lp = None
+        
+        # Parse Back Speed
+        bs_match = re.search(r'Back\s+Speed[:\s]+(\d{2,3})', block, re.IGNORECASE)
+        if bs_match:
+            try:
+                back_speed = int(bs_match.group(1))
+            except Exception:
+                pass
+        
+        # Parse Best Pace components
+        bp_match = re.search(
+            r'Best\s+Pace[:\s]+E1[:\s]+(\d{2,3})\s+E2[:\s]+(\d{2,3})\s+LP[:\s]+(\d{2,3})',
+            block,
+            re.IGNORECASE
+        )
+        if bp_match:
+            try:
+                best_pace_e1 = int(bp_match.group(1))
+                best_pace_e2 = int(bp_match.group(2))
+                best_pace_lp = int(bp_match.group(3))
+            except Exception:
+                pass
+        
+        # Alternative shorter format: "BP: 89 95 98"
+        alt_bp_match = re.search(r'BP[:\s]+(\d{2,3})\s+(\d{2,3})\s+(\d{2,3})', block, re.IGNORECASE)
+        if alt_bp_match and (best_pace_e1 is None):
+            try:
+                best_pace_e1 = int(alt_bp_match.group(1))
+                best_pace_e2 = int(alt_bp_match.group(2))
+                best_pace_lp = int(alt_bp_match.group(3))
+            except Exception:
+                pass
+        
+        return back_speed, best_pace_e1, best_pace_e2, best_pace_lp
+    
+    # ============ TRACK BIAS IMPACT VALUES ============
+    
+    def _parse_track_bias_impact_values(self, block: str, pace_style: str, post: str) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+        """
+        Parse Track Bias Impact Values for run style and post position.
+        
+        Format:
+        Runstyle: E E/P P S
+        Impact Values: 1.22 1.07 1.00 0.62
+                      ^^++ (dominant marker)
+        
+        Post: 1 2 3 4 5 6 7 8+
+        Impact: 0.95 1.02 1.05 1.08 1.10 1.12 1.15 1.38
+                                                    ^^+ (favorable marker)
+        
+        Returns: (run_style_iv, post_iv, markers)
+        """
+        run_style_iv = None
+        post_iv = None
+        markers = None
+        
+        # Parse run style Impact Values
+        rs_match = re.search(
+            r'Runstyle[:\s]+E\s+E/?P\s+P\s+S\s+Impact\s+Values?[:\s]+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)',
+            block,
+            re.IGNORECASE
+        )
+        if rs_match:
+            try:
+                e_iv = float(rs_match.group(1))
+                ep_iv = float(rs_match.group(2))
+                p_iv = float(rs_match.group(3))
+                s_iv = float(rs_match.group(4))
+                
+                # Map to horse's pace style
+                if pace_style == 'E':
+                    run_style_iv = e_iv
+                elif pace_style == 'E/P' or pace_style == 'EP':
+                    run_style_iv = ep_iv
+                elif pace_style == 'P':
+                    run_style_iv = p_iv
+                elif pace_style == 'S':
+                    run_style_iv = s_iv
+                
+                # Check for ++ or + markers
+                marker_check = re.search(r'(E|E/?P|P|S)[\s=]+([\d.]+)(\+{1,2})', block, re.IGNORECASE)
+                if marker_check:
+                    markers = marker_check.group(3)  # "++" or "+"
+            except Exception:
+                pass
+        
+        # Parse post position Impact Values
+        try:
+            post_num = int(post.rstrip('A-Z'))  # Handle posts like "1A"
+            
+            post_match = re.search(
+                r'Post[:\s]+(?:\d+\s+)+Impact[:\s]+((?:[\d.]+\s+)+)',
+                block,
+                re.IGNORECASE
+            )
+            if post_match:
+                post_ivs = [float(x) for x in post_match.group(1).split()]
+                # Map post number to index (1→0, 2→1, etc.)
+                # Handle 8+ posts (typically index 7)
+                if post_num >= 8 and len(post_ivs) > 7:
+                    post_iv = post_ivs[7]  # 8+ position
+                elif 1 <= post_num <= len(post_ivs):
+                    post_iv = post_ivs[post_num - 1]
+        except Exception:
+            pass
+        
+        return run_style_iv, post_iv, markers
+    
+    # ============ PEDIGREE RATINGS ============
+    
+    def _parse_pedigree_ratings(self, block: str) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+        """
+        Parse pedigree breeding ratings.
+        
+        Ratings indicate suitability for:
+        - Fast track
+        - Off track (muddy/sloppy)
+        - Distance
+        - Turf
+        
+        Format varies, could be:
+        "Pedigree: Fast 85 Off 72 Dist 90 Turf 78"
+        or in separate lines/sections
+        
+        Returns: (fast, off, distance, turf)
+        """
+        pedigree_fast = None
+        pedigree_off = None
+        pedigree_distance = None
+        pedigree_turf = None
+        
+        # Try comprehensive pattern
+        ped_match = re.search(
+            r'Pedigree[:\s]+Fast[:\s]+(\d{1,3}).*?Off[:\s]+(\d{1,3}).*?Dist(?:ance)?[:\s]+(\d{1,3}).*?Turf[:\s]+(\d{1,3})',
+            block,
+            re.IGNORECASE | re.DOTALL
+        )
+        if ped_match:
+            try:
+                pedigree_fast = int(ped_match.group(1))
+                pedigree_off = int(ped_match.group(2))
+                pedigree_distance = int(ped_match.group(3))
+                pedigree_turf = int(ped_match.group(4))
+            except Exception:
+                pass
+        else:
+            # Try individual patterns
+            fast_match = re.search(r'Fast[:\s]+(\d{1,3})', block, re.IGNORECASE)
+            if fast_match:
+                try:
+                    pedigree_fast = int(fast_match.group(1))
+                except Exception:
+                    pass
+            
+            off_match = re.search(r'Off[:\s]+(\d{1,3})', block, re.IGNORECASE)
+            if off_match:
+                try:
+                    pedigree_off = int(off_match.group(1))
+                except Exception:
+                    pass
+            
+            dist_match = re.search(r'Dist(?:ance)?[:\s]+(\d{1,3})', block, re.IGNORECASE)
+            if dist_match:
+                try:
+                    pedigree_distance = int(dist_match.group(1))
+                except Exception:
+                    pass
+            
+            turf_match = re.search(r'Turf[:\s]+(\d{1,3})', block, re.IGNORECASE)
+            if turf_match:
+                try:
+                    pedigree_turf = int(turf_match.group(1))
+                except Exception:
+                    pass
+        
+        return pedigree_fast, pedigree_off, pedigree_distance, pedigree_turf
 
     # ============ PRIME POWER ============
 
