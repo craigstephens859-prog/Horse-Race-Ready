@@ -156,6 +156,67 @@ except ImportError as e:
 st.set_page_config(page_title="Horse Race Ready — IQ Mode", page_icon="🏇", layout="wide")
 st.title("🏇  Horse Race Ready — IQ Mode")
 
+# ============ COMMUNITY DATABASE STATS BANNER ============
+# Prominently show that races are being saved for the community
+try:
+    if GOLD_DB_AVAILABLE and gold_db is not None:
+        import sqlite3
+        conn = sqlite3.connect(gold_db.db_path, timeout=5.0)
+        cursor = conn.cursor()
+        
+        # Get total races analyzed
+        cursor.execute("SELECT COUNT(DISTINCT race_id) FROM races_analyzed")
+        total_analyzed = cursor.fetchone()[0]
+        
+        # Get races with results
+        cursor.execute("SELECT COUNT(DISTINCT race_id) FROM gold_high_iq")
+        with_results = cursor.fetchone()[0]
+        
+        # Get most recent save timestamp
+        cursor.execute("""
+            SELECT analyzed_timestamp FROM races_analyzed 
+            ORDER BY analyzed_timestamp DESC LIMIT 1
+        """)
+        last_save = cursor.fetchone()
+        last_save_time = last_save[0] if last_save else "No races yet"
+        
+        conn.close()
+        
+        # Display community banner
+        if total_analyzed > 0:
+            cols = st.columns([2, 2, 2, 3])
+            with cols[0]:
+                st.metric("🌐 Community Races", total_analyzed, help="All races analyzed by users - permanently saved!")
+            with cols[1]:
+                st.metric("✅ Results Entered", with_results, help="Races with actual finish results")
+            with cols[2]:
+                pending = total_analyzed - with_results
+                st.metric("⏳ Awaiting Results", pending, help="Races needing actual finish positions")
+            with cols[3]:
+                if last_save_time and last_save_time != "No races yet":
+                    try:
+                        from datetime import datetime as dt_banner
+                        save_dt = dt_banner.fromisoformat(last_save_time.replace('T', ' ').split('.')[0])
+                        time_ago = (dt_banner.now() - save_dt).total_seconds()
+                        if time_ago < 60:
+                            time_str = f"{int(time_ago)}s ago"
+                        elif time_ago < 3600:
+                            time_str = f"{int(time_ago/60)}m ago"
+                        elif time_ago < 86400:
+                            time_str = f"{int(time_ago/3600)}h ago"
+                        else:
+                            time_str = f"{int(time_ago/86400)}d ago"
+                        st.metric("🕐 Last Save", time_str, help=f"Full timestamp: {last_save_time}")
+                    except:
+                        st.metric("🕐 Last Save", "Recently")
+                else:
+                    st.metric("🕐 Last Save", "None yet")
+            
+            st.caption("💾 **Database Auto-Saves:** All analyzed races persist permanently. Come back anytime!")
+except Exception as banner_err:
+    pass  # Silently fail if database not ready yet
+# ============ END COMMUNITY BANNER ============
+
 # ---------- Durable state ----------
 if "parsed" not in st.session_state:
     st.session_state["parsed"] = False
@@ -7473,6 +7534,67 @@ else:
                     st.metric("Top-3 Accuracy", f"{stats.get('top3_accuracy', 0.0):.1%}")
                 with col3:
                     st.metric("Top-5 Accuracy", f"{stats.get('top5_accuracy', 0.0):.1%}")
+
+            # COMMUNITY RACES TABLE - Show all saved races
+            st.markdown("---")
+            st.markdown("#### 🌐 Community Races Log (All Users)")
+            st.caption("All races analyzed by the community - permanently saved to database")
+            
+            try:
+                import sqlite3
+                conn = sqlite3.connect(gold_db.db_path, timeout=5.0)
+                cursor = conn.cursor()
+                
+                # Get all races with status
+                cursor.execute("""
+                    SELECT 
+                        r.race_id,
+                        r.track_code,
+                        r.race_date,
+                        r.race_number,
+                        r.field_size,
+                        r.analyzed_timestamp,
+                        CASE WHEN g.race_id IS NOT NULL THEN '✅ Results' ELSE '⏳ Pending' END as status
+                    FROM races_analyzed r
+                    LEFT JOIN (SELECT DISTINCT race_id FROM gold_high_iq) g ON r.race_id = g.race_id
+                    ORDER BY r.analyzed_timestamp DESC
+                    LIMIT 50
+                """)
+                
+                all_races = cursor.fetchall()
+                conn.close()
+                
+                if all_races:
+                    # Create dataframe
+                    races_df = pd.DataFrame(all_races, columns=[
+                        'Race ID', 'Track', 'Date', 'Race #', 'Horses', 'Saved At', 'Status'
+                    ])
+                    
+                    # Format timestamp
+                    races_df['Saved At'] = pd.to_datetime(races_df['Saved At']).dt.strftime('%m/%d %I:%M %p')
+                    
+                    # Display with status colors
+                    st.dataframe(
+                        races_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Status": st.column_config.TextColumn(
+                                "Status",
+                                help="✅ = Results entered | ⏳ = Awaiting results"
+                            )
+                        }
+                    )
+                    
+                    # Summary
+                    completed = len([r for r in all_races if '✅' in r[6]])
+                    pending = len([r for r in all_races if '⏳' in r[6]])
+                    st.caption(f"Showing last 50 races | ✅ {completed} completed | ⏳ {pending} pending")
+                else:
+                    st.info("📋 No races saved yet. Analyze a race above to begin!")
+                    
+            except Exception as races_err:
+                st.warning(f"Could not load race log: {races_err}")
 
         # Tab 2: Submit Actual Top 5
         with tab_results:
