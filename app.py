@@ -16,6 +16,7 @@ import os
 import re
 import math
 import time
+import logging
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 from itertools import product
@@ -23,6 +24,10 @@ from itertools import product
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Try importing ML Engine for Phase 2 functionality
 try:
