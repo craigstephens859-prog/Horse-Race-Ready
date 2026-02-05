@@ -154,7 +154,14 @@ class UnifiedRatingEngine:
         'use_game_theoretic_pace': True,      # +14% accuracy improvement
         'use_entropy_confidence': True,       # Better bet selection
         'use_mud_adjustment': True,           # +3% on off-tracks
-        'enable_multinomial_logit': True      # Bill Benter-style finish probabilities
+        'enable_multinomial_logit': True,     # Bill Benter-style finish probabilities
+        # NEW: Feb 5, 2026 Training Session Improvements
+        'use_last_race_speed_bonus': True,    # Bonus for horses with best recent speed
+        'use_class_drop_bonus': True,         # Bonus for class droppers
+        'use_layoff_cycle_bonus': True,       # 3rd/4th off layoff improvement pattern
+        'use_cform_speed_override': True,     # Override low C-Form when recent speed is hot
+        'use_lone_presser_adjustment': True,  # Lone P in hot pace = value
+        'use_track_bias_post_alignment': True # Align post bias with actual track data
     }
 
     # Form decay constant (0.01 = 69-day half-life)
@@ -481,6 +488,16 @@ class UnifiedRatingEngine:
             cform_det = self._calc_form_with_decay(horse)
         else:
             cform_det = self._calc_form(horse)
+        
+        # NEW: C-Form/Recent Speed Override (Feb 5, 2026)
+        # If horse has strong recent speed (>=80) but low form score, cap the penalty
+        if self.FEATURE_FLAGS.get('use_cform_speed_override', False):
+            last_speed = horse.last_fig if horse.last_fig and horse.last_fig > 0 else 0
+            if last_speed >= 80 and cform_det < 0.3:
+                # Strong recent speed overrides declining form trend
+                cform_det = max(cform_det, 0.5)  # Cap penalty - don't let form kill strong speed
+                logger.debug(f"  → C-Form override: last_speed={last_speed}, cform adjusted to {cform_det:.2f}")
+        
         cform_bayes = enhance_rating_with_bayesian_uncertainty(
             cform_det, 'form', horse_dict, parsing_conf
         )
@@ -489,6 +506,15 @@ class UnifiedRatingEngine:
 
         # Component 3: SPEED FIGURES [-2.0 to +2.0] with uncertainty
         cspeed_det = self._calc_speed(horse, horses_in_race)
+        
+        # NEW: Last Race Speed Bonus (Feb 5, 2026)
+        # Horses with highest/top-3 last race speed get bonus
+        if self.FEATURE_FLAGS.get('use_last_race_speed_bonus', False):
+            last_speed_bonus = self._calc_last_race_speed_bonus(horse, horses_in_race)
+            cspeed_det += last_speed_bonus
+            if last_speed_bonus > 0:
+                logger.debug(f"  → Last race speed bonus: +{last_speed_bonus:.2f}")
+        
         cspeed_bayes = enhance_rating_with_bayesian_uncertainty(
             cspeed_det, 'speed', horse_dict, parsing_conf
         )
@@ -508,6 +534,15 @@ class UnifiedRatingEngine:
 
         # Component 5: RUNNING STYLE [-0.5 to +0.8] with uncertainty
         cstyle_det = self._calc_style(horse, surface_type, style_bias)
+        
+        # NEW: Lone Presser in Hot Pace Adjustment (Feb 5, 2026)
+        # If this is the only P style horse and pace is hot, reduce P penalty
+        if self.FEATURE_FLAGS.get('use_lone_presser_adjustment', False):
+            lone_presser_adj = self._calc_lone_presser_adjustment(horse, horses_in_race)
+            cstyle_det += lone_presser_adj
+            if lone_presser_adj != 0:
+                logger.debug(f"  → Lone presser adjustment: {lone_presser_adj:+.2f}")
+        
         cstyle_bayes = enhance_rating_with_bayesian_uncertainty(
             cstyle_det, 'style', horse_dict, parsing_conf
         )
@@ -516,6 +551,15 @@ class UnifiedRatingEngine:
 
         # Component 6: POST POSITION [-0.5 to +0.5] with uncertainty
         cpost_det = self._calc_post(horse, distance_txt, post_bias)
+        
+        # NEW: Track Bias Post Alignment (Feb 5, 2026)
+        # Align post ratings with actual track bias data (posts 4-7 often favored)
+        if self.FEATURE_FLAGS.get('use_track_bias_post_alignment', False):
+            post_alignment_adj = self._calc_post_bias_alignment(horse, post_bias)
+            cpost_det += post_alignment_adj
+            if post_alignment_adj != 0:
+                logger.debug(f"  → Post bias alignment: {post_alignment_adj:+.2f}")
+        
         cpost_bayes = enhance_rating_with_bayesian_uncertainty(
             cpost_det, 'post', horse_dict, parsing_conf
         )
@@ -524,6 +568,22 @@ class UnifiedRatingEngine:
 
         # Component 7: TIER 2 BONUSES (SPI, surface stats, etc.)
         tier2 = self._calc_tier2_bonus(horse, surface_type, distance_txt)
+        
+        # NEW: Class Drop Bonus (Feb 5, 2026)
+        # Horses dropping in class with decent recent speed get bonus
+        if self.FEATURE_FLAGS.get('use_class_drop_bonus', False):
+            class_drop_bonus = self._calc_class_drop_bonus(horse, today_purse, today_race_type)
+            tier2 += class_drop_bonus
+            if class_drop_bonus > 0:
+                logger.debug(f"  → Class drop bonus: +{class_drop_bonus:.2f}")
+        
+        # NEW: Layoff Cycle Bonus (Feb 5, 2026)
+        # 3rd/4th start off layoff with improving figures gets bonus
+        if self.FEATURE_FLAGS.get('use_layoff_cycle_bonus', False):
+            layoff_cycle_bonus = self._calc_layoff_cycle_bonus(horse)
+            tier2 += layoff_cycle_bonus
+            if layoff_cycle_bonus > 0:
+                logger.debug(f"  → Layoff cycle bonus: +{layoff_cycle_bonus:.2f}")
 
         # PhD Enhancement: Mud pedigree adjustment
         mud_adjustment = 0.0
@@ -1376,6 +1436,254 @@ class UnifiedRatingEngine:
                 bonus += 0.10
 
         return round(bonus, 2)
+
+    # ========================================================================
+    # FEB 5, 2026 TRAINING SESSION IMPROVEMENTS
+    # Based on TUP R5 analysis: Enos Slaughter (P style, best speed, class drop) WON
+    # ========================================================================
+
+    def _calc_last_race_speed_bonus(self, horse: HorseData, horses_in_race: List[HorseData]) -> float:
+        """
+        LAST RACE SPEED BONUS (Feb 5, 2026 Training)
+        
+        Problem: Winner Enos Slaughter had HIGHEST last race speed (82) but was ranked 8th
+        Solution: Bonus for horses with best/top-3 recent speed in field
+        
+        Returns: +0.5 for best, +0.3 for 2nd best, +0.15 for 3rd best
+        """
+        # Get this horse's last race speed
+        my_last_speed = horse.last_fig if horse.last_fig and horse.last_fig > 0 else 0
+        
+        if my_last_speed == 0:
+            return 0.0
+        
+        # Collect all last race speeds
+        all_speeds = []
+        for h in horses_in_race:
+            last_spd = h.last_fig if h.last_fig and h.last_fig > 0 else 0
+            if last_spd > 0:
+                all_speeds.append(last_spd)
+        
+        if not all_speeds:
+            return 0.0
+        
+        # Sort descending
+        all_speeds_sorted = sorted(all_speeds, reverse=True)
+        
+        # Determine rank
+        try:
+            rank = all_speeds_sorted.index(my_last_speed) + 1
+        except ValueError:
+            return 0.0
+        
+        # Bonus based on rank
+        if rank == 1:
+            return 0.5  # Best recent speed
+        elif rank == 2:
+            return 0.3  # 2nd best
+        elif rank == 3:
+            return 0.15  # 3rd best
+        else:
+            return 0.0
+
+    def _calc_class_drop_bonus(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
+        """
+        CLASS DROP BONUS (Feb 5, 2026 Training)
+        
+        Problem: Both Enos Slaughter AND Silver Dash were dropping in class, both hit top 2
+        Solution: Explicit bonus for class droppers with decent recent speed
+        
+        Returns: +0.3 to +0.5 for class drop with speed, amplified by trainer angles
+        """
+        bonus = 0.0
+        
+        # Check purse drop
+        if horse.recent_purses and today_purse > 0:
+            avg_recent = np.mean(horse.recent_purses)
+            if avg_recent > 0:
+                purse_ratio = today_purse / avg_recent
+                
+                if purse_ratio <= 0.7:  # Dropping 30%+ in purse
+                    # Check if horse has decent recent speed
+                    has_decent_speed = horse.last_fig and horse.last_fig >= 75
+                    
+                    if has_decent_speed:
+                        bonus += 0.5  # Major class drop with speed
+                    else:
+                        bonus += 0.3  # Class drop without proven speed
+                    
+                elif purse_ratio <= 0.85:  # Moderate drop
+                    bonus += 0.2
+        
+        # Check race type drop
+        if horse.race_types:
+            today_type_lower = today_race_type.lower()
+            today_score = self.RACE_TYPE_SCORES.get(today_type_lower, 3.5)
+            
+            recent_scores = [self.RACE_TYPE_SCORES.get(rt.lower(), 3.5) for rt in horse.race_types[:3]]
+            avg_recent_score = np.mean(recent_scores)
+            
+            type_drop = avg_recent_score - today_score
+            
+            if type_drop >= 1.0:  # Dropping 1+ class level
+                bonus += 0.3
+            elif type_drop >= 0.5:
+                bonus += 0.15
+        
+        # Trainer class drop angle amplifier
+        if horse.angles:
+            class_drop_angles = [a for a in horse.angles 
+                                 if 'class' in a.get('category', '').lower() 
+                                 or 'drop' in a.get('category', '').lower()]
+            if class_drop_angles:
+                # Has trainer/jockey angle for class drops
+                best_roi = max(a.get('roi', 0) for a in class_drop_angles)
+                if best_roi > 1.0:
+                    bonus *= 1.3  # Amplify bonus by 30%
+        
+        return round(bonus, 2)
+
+    def _calc_layoff_cycle_bonus(self, horse: HorseData) -> float:
+        """
+        LAYOFF CYCLE BONUS (Feb 5, 2026 Training)
+        
+        Problem: Winner was 4th off layoff, 2nd place was 3rd off layoff - both improving
+        Solution: 3rd/4th start with improving figures gets bonus
+        
+        Returns: +0.2 for 3rd off layoff improving, +0.3 for 4th off layoff improving
+        """
+        # Need to detect layoff cycle position
+        # Check days since last and figure trend
+        
+        if not horse.speed_figures or len(horse.speed_figures) < 2:
+            return 0.0
+        
+        days = horse.days_since_last if horse.days_since_last else 30
+        
+        # Detect if this looks like 3rd or 4th start off layoff
+        # Proxy: Horse was off 60+ days but now has 2-3 races in last 60 days
+        # We'll use a simpler heuristic based on figure improvement
+        
+        figs = [f for f in horse.speed_figures[:4] if f and f > 0]
+        
+        if len(figs) < 2:
+            return 0.0
+        
+        # Check for improving trend
+        improving = False
+        if len(figs) >= 3:
+            # 3rd race - check if improving
+            if figs[0] > figs[1] and figs[1] >= figs[2] - 3:  # Allow slight regression in 2nd
+                improving = True
+        if len(figs) >= 4:
+            # 4th race - sustained improvement
+            if figs[0] > figs[2] and figs[1] > figs[3]:
+                improving = True
+        
+        if not improving:
+            return 0.0
+        
+        # Check if coming off layoff cycle (had recent gap)
+        # Proxy: Recent finishes show competitive form building
+        if horse.recent_finishes and len(horse.recent_finishes) >= 2:
+            recent_3 = horse.recent_finishes[:3]
+            # Getting better finishes = bouncing back
+            if len(recent_3) >= 2 and recent_3[0] <= recent_3[1]:
+                # Last was as good or better than previous
+                if len(figs) >= 4 and figs[0] >= 75:  # And has speed
+                    return 0.3  # 4th off layoff pattern
+                elif len(figs) >= 3 and figs[0] >= 75:
+                    return 0.2  # 3rd off layoff pattern
+        
+        return 0.0
+
+    def _calc_lone_presser_adjustment(self, horse: HorseData, horses_in_race: List[HorseData]) -> float:
+        """
+        LONE PRESSER IN HOT PACE ADJUSTMENT (Feb 5, 2026 Training)
+        
+        Problem: Winner Enos Slaughter was only P style (Presser) in field, model penalized him
+        Solution: When field has only 1 P and pace is hot, reduce P penalty
+        
+        Returns: +0.3 to +0.5 for lone presser in hot pace
+        """
+        if horse.pace_style != 'P':
+            return 0.0
+        
+        # Count pace styles
+        field_comp = self._get_field_composition(horses_in_race)
+        n_E = field_comp.get('E', 0)
+        n_EP = field_comp.get('E/P', 0)
+        n_P = field_comp.get('P', 0)
+        
+        # Is this the lone presser?
+        if n_P != 1:
+            return 0.0
+        
+        # Is pace likely hot?
+        early_speed_count = n_E + n_EP
+        
+        if early_speed_count >= 3:
+            # Hot pace + lone presser = value spot
+            return 0.5
+        elif early_speed_count >= 2:
+            return 0.3
+        else:
+            return 0.0
+
+    def _calc_post_bias_alignment(self, horse: HorseData, post_bias: Optional[List[str]]) -> float:
+        """
+        POST BIAS ALIGNMENT (Feb 5, 2026 Training)
+        
+        Problem: Track bias showed posts 4-7 favored (IV 1.17), but model was neutral
+        Solution: Align post ratings with actual track bias impact values
+        
+        Returns: Adjustment based on track bias data
+        """
+        try:
+            post_num = int(''.join(c for c in str(horse.post) if c.isdigit()))
+        except (ValueError, TypeError):
+            return 0.0
+        
+        # Check if we have track bias post IV data
+        if horse.track_bias_post_iv is not None:
+            # Already handled by track bias system
+            return 0.0
+        
+        # Default post adjustments based on typical track patterns
+        # From TUP data: 4-7 favored (IV 1.17), 8+ poor (IV 0.66)
+        if post_bias:
+            bias_str = str(post_bias).lower()
+            
+            # Rail favored
+            if 'rail' in bias_str or 'inner' in bias_str:
+                if post_num <= 3:
+                    return 0.2
+                elif post_num >= 8:
+                    return -0.3
+            
+            # Mid favored (4-7)
+            if 'mid' in bias_str:
+                if 4 <= post_num <= 7:
+                    return 0.25
+                elif post_num <= 2:
+                    return -0.1
+                elif post_num >= 9:
+                    return -0.35
+            
+            # Outside favored (rare)
+            if 'outside' in bias_str:
+                if post_num >= 8:
+                    return 0.2
+                elif post_num <= 3:
+                    return -0.2
+        else:
+            # Default: slight mid-track bonus (most common pattern)
+            if 4 <= post_num <= 7:
+                return 0.1
+            elif post_num >= 10:
+                return -0.2
+        
+        return 0.0
 
     # ========================================================================
     # PhD-LEVEL ENHANCEMENTS (v2.0) - Mathematical Refinements
