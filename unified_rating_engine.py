@@ -2,6 +2,15 @@
 # Gold-Standard Integration: Parsing → 8 Angles → Comprehensive Rating → Softmax
 # Target: 90%+ winner accuracy through unified mathematical framework
 
+from multinomial_logit_model import MultinomialLogitModel, FinishProbabilities
+from bayesian_rating_framework import (
+    BayesianRating,
+    BayesianComponentRater,
+    enhance_rating_with_bayesian_uncertainty,
+    calculate_final_rating_with_uncertainty
+)
+from elite_parser_v2_gold import GoldStandardBRISNETParser, HorseData
+from horse_angles8 import compute_eight_angles
 import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
@@ -25,15 +34,7 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 # Import optimized components
-from horse_angles8 import compute_eight_angles
-from elite_parser_v2_gold import GoldStandardBRISNETParser, HorseData
-from bayesian_rating_framework import (
-    BayesianRating,
-    BayesianComponentRater,
-    enhance_rating_with_bayesian_uncertainty,
-    calculate_final_rating_with_uncertainty
-)
-from multinomial_logit_model import MultinomialLogitModel, FinishProbabilities
+
 
 @dataclass
 class RatingComponents:
@@ -58,6 +59,7 @@ class RatingComponents:
     final_rating_std: float = 0.0  # Total rating uncertainty
     confidence_level: float = 0.0  # Statistical confidence (0-1)
 
+
 class UnifiedRatingEngine:
     """
     ULTRATHINK ARCHITECTURE: Single source of truth for all ratings
@@ -71,7 +73,7 @@ class UnifiedRatingEngine:
     3. Calculate comprehensive rating components
     4. Apply softmax → win probabilities
     5. Return predictions with confidence metrics
-    
+
     PhD-LEVEL ENHANCEMENTS (v2.0):
     - Exponential decay form rating (69-day half-life)
     - Game-theoretic pace scenario (ESP model)
@@ -91,7 +93,7 @@ class UnifiedRatingEngine:
         'post': 0.8,       # Least predictive overall
         'angles': 0.10     # Per-angle bonus (8 angles × 0.10 = 0.80 max)
     }
-    
+
     # DYNAMIC WEIGHT MODIFIERS BY RACE TYPE
     # Adapts component emphasis based on race quality - PhD-calibrated
     # CALIBRATION UPDATE (Feb 4, 2026): Reduced class bias after Pegasus validation
@@ -145,7 +147,7 @@ class UnifiedRatingEngine:
             'post': 1.0
         }
     }
-    
+
     # PhD-Level Feature Flags (toggle refinements for A/B testing)
     FEATURE_FLAGS = {
         'use_exponential_decay_form': True,   # +12% accuracy improvement
@@ -154,7 +156,7 @@ class UnifiedRatingEngine:
         'use_mud_adjustment': True,           # +3% on off-tracks
         'enable_multinomial_logit': True      # Bill Benter-style finish probabilities
     }
-    
+
     # Form decay constant (0.01 = 69-day half-life)
     FORM_DECAY_LAMBDA = 0.01
 
@@ -166,74 +168,74 @@ class UnifiedRatingEngine:
         # Horses that have never won
         'msw': 3.0, 'maiden special weight': 3.0, 'md sp wt': 3.0, 'mdn sp wt': 3.0,
         'maiden': 3.0, 'mdn': 3.0,
-        
+
         'mcl': 1.0, 'maiden claiming': 1.0, 'mdn clm': 1.0, 'md clm': 1.0,
         'maiden clm': 1.0, 'mdn claiming': 1.0,
-        
+
         'moc': 2.0, 'maiden optional claiming': 2.0, 'mdn optional claiming': 2.0,
         'maiden oc': 2.0, 'mdn oc': 2.0,
-        
+
         # === LEVEL 2: CLAIMING (2.0-3.2) ===
         # Horses for sale; price indicates quality
         'clm': 2.0, 'claiming': 2.0, 'clm price': 2.0,
         'clm10000': 1.5, 'clm12500': 1.8, 'clm16000': 2.0, 'clm20000': 2.2,
         'clm25000': 2.5, 'clm32000': 2.8, 'clm40000': 3.0, 'clm50000': 3.2,
-        
+
         'clh': 2.2, 'claiming handicap': 2.2, 'clm handicap': 2.2,
-        
+
         'cst': 3.5, 'claiming stakes': 3.5, 'clm stakes': 3.5,
-        
+
         # === LEVEL 3: STARTER (3.5) ===
         # For horses from recent claiming races
         'str': 3.5, 'sta': 3.5, 'starter allowance': 3.5, 'str alw': 3.5,
         'starter': 3.5,
-        
+
         'shp': 3.6, 'starter handicap': 3.6, 'str hcp': 3.6,
         'starter hcp': 3.6,
-        
+
         'soc': 3.8, 'starter optional claiming': 3.8, 'str optional claiming': 3.8,
         'starter oc': 3.8,
-        
+
         # === LEVEL 4: ALLOWANCE (4.0-4.2) ===
         # Non-selling; condition races
         'alw': 4.0, 'allowance': 4.0,
         'nw1x': 4.0, 'allowance nw1x': 4.0, 'alw nw1x': 4.0,
         'nw2x': 4.2, 'allowance nw2x': 4.2, 'alw nw2x': 4.2,
         'nw3x': 4.5, 'allowance nw3x': 4.5, 'alw nw3x': 4.5,
-        
+
         # === LEVEL 5: ALLOWANCE OPTIONAL CLAIMING (4.5-5.0) ===
         # Allowance with optional claiming price
         'aoc': 4.5, 'oc': 4.5, 'ocl': 4.5, 'optional claiming': 4.5,
         'allowance optional claiming': 4.5, 'alw optional': 4.5,
         'oc25000': 4.5, 'oc32000': 4.7, 'oc40000': 4.8, 'oc50000': 5.0,
-        
+
         # === LEVEL 5-6: OPTIONAL CLAIMING HANDICAP (5.0-5.5) ===
         'och': 5.0, 'optional claiming handicap': 5.0, 'oc handicap': 5.0,
         'oc hcp': 5.0,
-        
+
         # === LEVEL 6: HANDICAP (5.5-6.0) ===
         # Weights assigned to equalize chances
         'hcp': 5.5, 'handicap': 5.5, 'h': 5.5,
-        
+
         # === LEVEL 7: STAKES & GRADED (5.0-8.0) ===
         # High-purse races
         'stk': 5.0, 's': 5.0, 'stakes': 5.0, 'stake': 5.0,
         'listed': 5.2, 'listed stakes': 5.2, 'lst': 5.2,
-        
+
         # Graded Stakes (Elite level)
         'g3': 6.0, 'grade 3': 6.0, 'grade iii': 6.0, 'griii': 6.0,
         'g3 stakes': 6.0, 'grade 3 stakes': 6.0,
-        
+
         'g2': 7.0, 'grade 2': 7.0, 'grade ii': 7.0, 'grii': 7.0,
         'g2 stakes': 7.0, 'grade 2 stakes': 7.0,
-        
+
         'g1': 8.0, 'grade 1': 8.0, 'grade i': 8.0, 'gri': 8.0,
         'g1 stakes': 8.0, 'grade 1 stakes': 8.0,
-        
+
         # === SPECIAL CONDITIONS ===
         'waiver claiming': 2.2, 'waiver': 2.2, 'wcl': 2.2,
         'trial': 4.8, 'futurity': 5.5, 'derby': 6.5,
-        
+
         # === INTERNATIONAL EQUIVALENTS ===
         'group 1': 8.0, 'group 2': 7.0, 'group 3': 6.0,
         'gr1': 8.0, 'gr2': 7.0, 'gr3': 6.0
@@ -252,15 +254,15 @@ class UnifiedRatingEngine:
         self.logit_model = MultinomialLogitModel(use_uncertainty=True)
 
     def predict_race(self,
-                    pp_text: str,
-                    today_purse: int,
-                    today_race_type: str,
-                    track_name: str,
-                    surface_type: str,
-                    distance_txt: str,
-                    condition_txt: str = "fast",
-                    style_bias: Optional[List[str]] = None,
-                    post_bias: Optional[List[str]] = None) -> pd.DataFrame:
+                     pp_text: str,
+                     today_purse: int,
+                     today_race_type: str,
+                     track_name: str,
+                     surface_type: str,
+                     distance_txt: str,
+                     condition_txt: str = "fast",
+                     style_bias: Optional[List[str]] = None,
+                     post_bias: Optional[List[str]] = None) -> pd.DataFrame:
         """
         END-TO-END PREDICTION: PP text → win probabilities
 
@@ -370,16 +372,16 @@ class UnifiedRatingEngine:
         # ELITE ENHANCEMENT: Multinomial Logit Finish Probabilities (Bill Benter-style)
         if self.FEATURE_FLAGS['enable_multinomial_logit']:
             logger.debug("STEP 7: Calculating multinomial logit finish probabilities")
-            
+
             # Extract Bayesian components for uncertainty propagation
             bayesian_components_dict = self._extract_bayesian_components(results_df)
-            
+
             # Calculate P(1st), P(2nd), P(3rd) using logit model
             finish_probs = self.logit_model.calculate_finish_probabilities(
-                results_df, 
+                results_df,
                 bayesian_components=bayesian_components_dict
             )
-            
+
             # Add finish probabilities to results
             for fp in finish_probs:
                 idx = results_df[results_df['Horse'] == fp.horse_name].index[0]
@@ -389,13 +391,13 @@ class UnifiedRatingEngine:
                 results_df.loc[idx, 'Expected_Finish_Logit'] = fp.expected_finish
                 results_df.loc[idx, 'Finish_CI_Lower'] = fp.confidence_interval_95[0]
                 results_df.loc[idx, 'Finish_CI_Upper'] = fp.confidence_interval_95[1]
-            
+
             # Calculate exotic bet probabilities
             exotics = self.logit_model.calculate_exotic_probabilities(finish_probs)
             results_df.attrs['exotic_probabilities'] = exotics
-            
+
             logger.info(f"Multinomial logit: Top pick {finish_probs[0].horse_name} "
-                       f"P(Win)={finish_probs[0].p_win:.1%}, E[Finish]={finish_probs[0].expected_finish:.1f}")
+                        f"P(Win)={finish_probs[0].p_win:.1%}, E[Finish]={finish_probs[0].expected_finish:.1f}")
 
         logger.info("Prediction complete")
         logger.info(f"Top selection: {results_df.iloc[0]['Horse']} ({results_df.iloc[0]['Probability']:.1%})")
@@ -452,7 +454,7 @@ class UnifiedRatingEngine:
 
         Each component independently calculated with uncertainty quantification.
         All formulas PhD-calibrated for maximum predictive accuracy.
-        
+
         ELITE ENHANCEMENT (v2.0): Now includes Bayesian probability estimates
         for each component, allowing better risk assessment and bet sizing.
         """
@@ -522,7 +524,7 @@ class UnifiedRatingEngine:
 
         # Component 7: TIER 2 BONUSES (SPI, surface stats, etc.)
         tier2 = self._calc_tier2_bonus(horse, surface_type, distance_txt)
-        
+
         # PhD Enhancement: Mud pedigree adjustment
         mud_adjustment = 0.0
         if self.FEATURE_FLAGS['use_mud_adjustment']:
@@ -531,7 +533,7 @@ class UnifiedRatingEngine:
         # WEIGHTED COMBINATION WITH DYNAMIC RACE-TYPE ADJUSTMENT
         # Get dynamically adjusted weights for this race type
         dynamic_weights = self._get_dynamic_weights(today_race_type)
-        
+
         # === TRACK BIAS ADJUSTMENTS ===
         # Apply Impact Values to adjust style and post ratings
         cstyle, cpost, dynamic_weights = self._apply_track_bias_adjustments(
@@ -546,25 +548,25 @@ class UnifiedRatingEngine:
             'style': (cstyle, cstyle_std),  # Now adjusted for track bias
             'post': (cpost, cpost_std)      # Now adjusted for track bias
         }
-        
+
         # === RELIABILITY-BASED CONFIDENCE WEIGHTING ===
         # Apply confidence adjustments based on data freshness
         component_ratings_dict = self._apply_reliability_confidence_weighting(
             horse, component_ratings_dict
         )
-        
+
         # Convert tuples to BayesianRating objects for aggregation
         from bayesian_rating_framework import BayesianRating
         component_ratings_bayesian = {}
         for name, (mean, std) in component_ratings_dict.items():
             component_ratings_bayesian[name] = BayesianRating(mean=mean, std=std)
-        
+
         # Calculate weighted sum with DYNAMIC weights (adjusted per race type)
         final_mean, final_std = calculate_final_rating_with_uncertainty(
             component_ratings_bayesian,
             dynamic_weights  # Use race-type-specific weights
         )
-        
+
         # Add bonuses (these don't have uncertainty, so add deterministically)
         angles_bonus = angles_total * dynamic_weights['angles']
         final_rating = final_mean + angles_bonus + tier2 + mud_adjustment
@@ -591,28 +593,28 @@ class UnifiedRatingEngine:
             final_rating_std=round(final_rating_std, 3),
             confidence_level=round(confidence_level, 3)
         )
-    
+
     def _get_dynamic_weights(self, race_type: str) -> Dict[str, float]:
         """
         Get dynamically adjusted weights based on race type.
         Applies race-specific multipliers to base weights for optimal component emphasis.
-        
+
         INTELLIGENT WEIGHT ADJUSTMENT:
         - Grade 1-2: Emphasize class/speed (+20-30%) because elite horses dominate
         - Stakes: Slight speed emphasis (+20%)
         - Allowance: Balanced with form consistency (+10%)
         - Maiden: Emphasize pace/style (+10-20%), de-emphasize class/form (-20-30%)
         - Claiming: Emphasize form/pace (+20-30%) because current condition matters most
-        
+
         Args:
             race_type: Today's race type (Grade 1, Claiming, MSW, etc.)
-        
+
         Returns:
             Dict of adjusted weights for this specific race type
         """
         # Determine race category
         race_type_lower = race_type.lower()
-        
+
         # Map race type to modifier category
         if any(term in race_type_lower for term in ['g1', 'grade 1', 'g2', 'grade 2', 'group 1', 'group 2']):
             modifier_key = 'grade_1_2'
@@ -626,10 +628,10 @@ class UnifiedRatingEngine:
             modifier_key = 'claiming'
         else:
             modifier_key = 'default'
-        
+
         # Get modifiers for this race category
         modifiers = self.WEIGHT_MODIFIERS_BY_RACE_TYPE[modifier_key]
-        
+
         # Apply modifiers to base weights
         dynamic_weights = {}
         for component, base_weight in self.WEIGHTS.items():
@@ -637,96 +639,108 @@ class UnifiedRatingEngine:
                 dynamic_weights[component] = base_weight * modifiers[component]
             else:
                 dynamic_weights[component] = base_weight
-        
+
         logger.debug(f"Dynamic weights for {race_type} ({modifier_key}): {dynamic_weights}")
-        
+
         return dynamic_weights
 
     def _apply_track_bias_adjustments(
-        self, 
-        horse: HorseData, 
-        cstyle: float, 
-        cpost: float, 
+        self,
+        horse: HorseData,
+        cstyle: float,
+        cpost: float,
         weights: Dict[str, float]
     ) -> Tuple[float, float, Dict[str, float]]:
         """
         Apply Track Bias Impact Values to adjust run style and post position weights.
-        
+
         Track Bias IVs indicate effectiveness multipliers:
         - E=1.22 means early speed is 22% more effective
         - S=0.62 means closers are 38% less effective
         - Post 8+=1.38 means outside posts are 38% more effective
-        
+
         Args:
             horse: HorseData with track_bias fields
             cstyle: Base style rating
             cpost: Base post rating
             weights: Current weight dictionary
-        
+
         Returns:
             (adjusted_cstyle, adjusted_cpost, adjusted_weights)
         """
         adjusted_cstyle = cstyle
         adjusted_cpost = cpost
         adjusted_weights = weights.copy()
-        
+
         # Apply run style Impact Value
         if horse.track_bias_run_style_iv is not None:
             iv = horse.track_bias_run_style_iv
             # IV acts as a multiplier on the style component
             adjusted_cstyle = cstyle * iv
-            
+
             # Also adjust the weight to amplify/dampen importance
             adjusted_weights['cstyle'] = weights['cstyle'] * iv
-            
-            logger.debug(f"  → Track Bias Run Style IV={iv:.2f}: style {cstyle:.2f}→{adjusted_cstyle:.2f}, weight {weights['cstyle']:.2f}→{adjusted_weights['cstyle']:.2f}")
-            
+
+            logger.debug(
+                f"  → Track Bias Run Style IV={
+                    iv:.2f}: style {
+                    cstyle:.2f}→{
+                    adjusted_cstyle:.2f}, weight {
+                    weights['cstyle']:.2f}→{
+                        adjusted_weights['cstyle']:.2f}")
+
             # Log if dominant/favorable marker present
             if horse.track_bias_markers == '++':
                 logger.debug(f"  → Run style is DOMINANT (++) for this track")
             elif horse.track_bias_markers == '+':
                 logger.debug(f"  → Run style is FAVORABLE (+) for this track")
-        
+
         # Apply post position Impact Value
         if horse.track_bias_post_iv is not None:
             iv = horse.track_bias_post_iv
             # IV acts as a multiplier on the post component
             adjusted_cpost = cpost * iv
-            
+
             # Also adjust the weight
             adjusted_weights['cpost'] = weights['cpost'] * iv
-            
-            logger.debug(f"  → Track Bias Post IV={iv:.2f}: post {cpost:.2f}→{adjusted_cpost:.2f}, weight {weights['cpost']:.2f}→{adjusted_weights['cpost']:.2f}")
-        
+
+            logger.debug(
+                f"  → Track Bias Post IV={
+                    iv:.2f}: post {
+                    cpost:.2f}→{
+                    adjusted_cpost:.2f}, weight {
+                    weights['cpost']:.2f}→{
+                        adjusted_weights['cpost']:.2f}")
+
         return adjusted_cstyle, adjusted_cpost, adjusted_weights
 
     def _apply_reliability_confidence_weighting(
-        self, 
+        self,
         horse: HorseData,
         rating_components: Dict[str, float]
     ) -> Dict[str, float]:
         """
         Apply confidence weighting based on reliability indicators.
-        
+
         Reliability indicators show data freshness/quality:
         - "*" (asterisk) = 2+ races in 90 days → RELIABLE → 1.5x weight
         - "." (dot) = Earned at today's distance → STANDARD → 1.0x weight
         - "()" (parentheses) = Race >90 days ago → STALE → 0.7x weight
-        
+
         Affects class, speed, and form ratings (components derived from past performances).
-        
+
         Args:
             horse: HorseData with reliability_indicator
             rating_components: Dict of component ratings
-        
+
         Returns:
             Adjusted rating_components dict
         """
         adjusted_components = rating_components.copy()
-        
+
         if horse.reliability_indicator:
             multiplier = 1.0
-            
+
             if horse.reliability_indicator == "asterisk":
                 multiplier = 1.5  # Recent, reliable data
                 logger.debug(f"  → Reliability: ASTERISK (2+ races in 90 days) → 1.5x confidence")
@@ -736,7 +750,7 @@ class UnifiedRatingEngine:
             elif horse.reliability_indicator == "parentheses":
                 multiplier = 0.7  # Stale data
                 logger.debug(f"  → Reliability: PARENTHESES (>90 days) → 0.7x confidence")
-            
+
             # Apply to data-dependent components
             if multiplier != 1.0:
                 for component in ['cclass', 'cspeed', 'cform']:
@@ -744,17 +758,17 @@ class UnifiedRatingEngine:
                         old_val = adjusted_components[component]
                         adjusted_components[component] = old_val * multiplier
                         logger.debug(f"    {component}: {old_val:.2f} → {adjusted_components[component]:.2f}")
-        
+
         return adjusted_components
 
     def _calculate_claiming_score(self, claiming_price: float) -> float:
         """
         Calculate race type score for claiming races based on price.
         Level 2 classification: Claiming races scaled by purse/price.
-        
+
         Args:
             claiming_price: Claiming price in dollars
-            
+
         Returns:
             Score value (1.5-3.2 for Level 2 claiming races)
         """
@@ -776,7 +790,7 @@ class UnifiedRatingEngine:
     def _calc_class(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
         """
         Class rating with comprehensive Level 1-7 race type classification.
-        
+
         NORTH AMERICAN RACE TYPE SYSTEM:
         Level 1 - Maiden: MSW (3.0), MCL (1.0), MOC (2.0)
         Level 2 - Claiming: CLM (1.5-3.2 by price), CLH (2.2), CST (3.5)
@@ -785,7 +799,7 @@ class UnifiedRatingEngine:
         Level 5 - AOC: AOC/OC/OCL (4.5-5.0 by price)
         Level 6 - Handicap: HCP (5.5), OCH (5.0)
         Level 7 - Stakes: STK/S (5.0), G3 (6.0), G2 (7.0), G1 (8.0)
-        
+
         Applies purse-based quality scaling within levels and form-adjusted class evaluation.
         """
         rating: float = 0.0
@@ -793,11 +807,11 @@ class UnifiedRatingEngine:
         # Normalize today's race type
         today_type_lower = today_race_type.lower().strip() if today_race_type else ''
         logger.debug(f"Class calc for {horse.name}: race_type='{today_race_type}'")
-        
+
         # === STEP 1: RACE TYPE SCORE DETECTION ===
         # Try exact match first (fastest - handles all RACE_TYPE_SCORES entries)
         today_score = self.RACE_TYPE_SCORES.get(today_type_lower, None)
-        
+
         # If not found, intelligent parsing for complex formats
         if today_score is None:
             # === LEVEL 7: GRADED STAKES ===
@@ -807,13 +821,13 @@ class UnifiedRatingEngine:
                 today_score = 7.0  # G2
             elif any(term in today_type_lower for term in ['g3', 'grade 3', 'grade iii', 'group 3', 'griii']):
                 today_score = 6.0  # G3
-            
+
             # === LEVEL 7: STAKES (Non-graded) ===
             elif 'listed' in today_type_lower:
                 today_score = 5.2  # LST - Listed Stakes
             elif any(term in today_type_lower for term in ['stakes', 'stk', ' s ']):
                 today_score = 5.0  # STK/S
-            
+
             # === LEVEL 6: HANDICAP ===
             elif 'handicap' in today_type_lower or 'hcp' in today_type_lower:
                 if 'optional' in today_type_lower or 'claiming' in today_type_lower:
@@ -824,7 +838,7 @@ class UnifiedRatingEngine:
                     today_score = 2.2  # CLH - Claiming Handicap (Level 2)
                 else:
                     today_score = 5.5  # HCP - Standard Handicap
-            
+
             # === LEVEL 5: ALLOWANCE OPTIONAL CLAIMING ===
             elif any(term in today_type_lower for term in ['aoc', 'optional claiming', 'allowance optional', 'oc ', ' oc', 'ocl']):
                 # Try to extract claiming price for tier scoring
@@ -837,7 +851,7 @@ class UnifiedRatingEngine:
                     today_score = 4.7  # OC32000
                 else:
                     today_score = 4.5  # AOC/OC base
-            
+
             # === LEVEL 4: ALLOWANCE ===
             elif 'allowance' in today_type_lower or 'alw' in today_type_lower:
                 # Check for condition levels (NW1X, NW2X, NW3X)
@@ -849,14 +863,14 @@ class UnifiedRatingEngine:
                     today_score = 4.0  # Entry restricted allowance
                 else:
                     today_score = 4.0  # ALW base
-            
+
             # === LEVEL 3: STARTER ===
             elif 'starter' in today_type_lower or any(term in today_type_lower for term in ['str', 'sta']):
                 if 'optional' in today_type_lower or 'claiming' in today_type_lower:
                     today_score = 3.8  # SOC - Starter Optional Claiming
                 else:
                     today_score = 3.5  # STR/STA - Starter Allowance
-            
+
             # === LEVEL 2: CLAIMING ===
             elif 'claiming' in today_type_lower or 'clm' in today_type_lower:
                 # Check if it's a maiden claiming (Level 1)
@@ -872,7 +886,7 @@ class UnifiedRatingEngine:
                         today_score = self._calculate_claiming_score(claiming_price)
                     else:
                         today_score = 2.0  # CLM base
-            
+
             # === LEVEL 1: MAIDEN ===
             elif 'maiden' in today_type_lower or 'mdn' in today_type_lower:
                 if 'optional' in today_type_lower or 'moc' in today_type_lower:
@@ -881,14 +895,14 @@ class UnifiedRatingEngine:
                     today_score = 3.0  # MSW - Maiden Special Weight
                 else:
                     today_score = 3.0  # Default maiden (MSW)
-            
+
             # === FALLBACK ===
             else:
                 today_score = 3.5  # Default to mid-level
                 logger.warning(f"  → Unrecognized race type '{today_race_type}', using default score {today_score}")
         else:
             logger.debug(f"  → Exact match: '{today_type_lower}' = {today_score}")
-        
+
         # === STEP 2: LEVEL-BASED BASELINE BONUS ===
         # Granular bonuses aligned to classification levels
         if today_score >= 8.0:  # Level 7: G1
@@ -917,14 +931,14 @@ class UnifiedRatingEngine:
             rating -= 0.2
         else:  # Level 1: MCL
             rating -= 0.5
-        
+
         logger.debug(f"  → Today's race score: {today_score:.1f}, baseline: {rating:.2f}")
-        
+
         # === STEP 3: PURSE-BASED QUALITY ADJUSTMENT ===
         # Within same race type, higher purse indicates better horses
         if today_purse > 0:
             purse_bonus = 0.0
-            
+
             # Different baselines and scaling by race level
             if today_score >= 6.0:  # Graded stakes
                 baseline_purse = 150000
@@ -942,11 +956,11 @@ class UnifiedRatingEngine:
                 baseline_purse = 15000
                 if today_purse > baseline_purse:
                     purse_bonus = min((today_purse - baseline_purse) / 30000 * 0.1, 0.5)
-            
+
             rating += purse_bonus
             if purse_bonus > 0:
                 logger.debug(f"  → Purse bonus: ${today_purse:,.0f} adds +{purse_bonus:.2f}")
-        
+
         # === STEP 3.5: RACE RATING (RR) & CLASS RATING (CR) ADJUSTMENT ===
         # RR measures competition quality, CR measures performance vs that competition
         if horse.race_rating is not None:
@@ -955,7 +969,7 @@ class UnifiedRatingEngine:
             rr_bonus = np.clip(rr_bonus, -1.0, 1.5)  # Allow +1.5 for elite competition
             rating += rr_bonus
             logger.debug(f"  → RR={horse.race_rating} adds {rr_bonus:+.2f} (competition quality)")
-        
+
         if horse.class_rating_individual is not None:
             # CR measures how well horse performed vs the competition
             # CR > 115 = dominated the field, CR < 95 = struggled
@@ -963,14 +977,14 @@ class UnifiedRatingEngine:
             cr_bonus = np.clip(cr_bonus, -0.8, 1.2)
             rating += cr_bonus
             logger.debug(f"  → CR={horse.class_rating_individual} adds {cr_bonus:+.2f} (individual performance)")
-        
+
         # ACL (Average Competitive Level) - shows ceiling when ITM
         if horse.acl is not None:
             acl_bonus = (horse.acl - 105) / 30.0  # Moderate weight
             acl_bonus = np.clip(acl_bonus, -0.5, 0.8)
             rating += acl_bonus
             logger.debug(f"  → ACL={horse.acl:.1f} adds {acl_bonus:+.2f} (ITM performance level)")
-        
+
         # === STEP 4: FORM-ADJUSTED CLASS EVALUATION ===
         # Check if horse was competitive in recent races
         was_competitive = False
@@ -1098,7 +1112,7 @@ class UnifiedRatingEngine:
             # Recent win bonus (CRITICAL: Winners repeat!)
             if finishes[0] == 1:
                 rating += 3.5  # INCREASED from 2.5
-                
+
                 # Back-to-back wins bonus
                 if len(finishes) >= 2 and finishes[1] == 1:
                     rating += 5.0  # Total +8.5 for winning streak
@@ -1115,15 +1129,15 @@ class UnifiedRatingEngine:
         if hasattr(horse, 'trip_comments') and horse.trip_comments:
             last_comment = horse.trip_comments[0] if horse.trip_comments else ""
             last_comment_lower = last_comment.lower()
-            
+
             # Trouble indicators = excuse for poor finish
-            trouble_keywords = ['stumb', 'bump', 'check', 'steady', 'blocked', 'shut off', 
-                              'wide', 'bad start', 'broke slow', 'squeezed', 'interfered']
+            trouble_keywords = ['stumb', 'bump', 'check', 'steady', 'blocked', 'shut off',
+                                'wide', 'bad start', 'broke slow', 'squeezed', 'interfered']
             if any(keyword in last_comment_lower for keyword in trouble_keywords):
                 # Had trouble last out - excuse for form
                 if horse.recent_finishes and horse.recent_finishes[0] >= 5:
                     rating += 0.8  # Excuse for poor finish
-            
+
             # Positive trip notes
             if 'rallied' in last_comment_lower or 'strong' in last_comment_lower:
                 rating += 0.3
@@ -1132,8 +1146,8 @@ class UnifiedRatingEngine:
         if hasattr(horse, 'race_history') and horse.race_history:
             # Check for recent competitive finishes
             recent_races = horse.race_history[:3]
-            close_finishes = sum(1 for race in recent_races 
-                               if race.get('finish', 99) <= 3)
+            close_finishes = sum(1 for race in recent_races
+                                 if race.get('finish', 99) <= 3)
             if close_finishes >= 2:
                 rating += 0.4  # Consistent contender
 
@@ -1165,7 +1179,7 @@ class UnifiedRatingEngine:
         if hasattr(horse, 'race_shape_1c') and horse.race_shape_1c is not None:
             shape_1c = horse.race_shape_1c
             shape_2c = horse.race_shape_2c if hasattr(horse, 'race_shape_2c') and horse.race_shape_2c is not None else 0
-            
+
             # Analyze pace scenario preference
             if shape_1c < -3 and shape_2c < -3:
                 # Horse was ahead of par at both calls = true speed horse
@@ -1247,7 +1261,7 @@ class UnifiedRatingEngine:
 
     def _calc_style(self, horse: HorseData, surface_type: str, style_bias: Optional[List[str]]) -> float:
         """Running style strength rating
-        
+
         CRITICAL FIX: Track bias heavily influences outcomes.
         Stalker-favoring tracks (impact value 1.55) require aggressive adjustments.
         """
@@ -1376,32 +1390,32 @@ class UnifiedRatingEngine:
     # ========================================================================
     # PhD-LEVEL ENHANCEMENTS (v2.0) - Mathematical Refinements
     # ========================================================================
-    
+
     def _calc_form_with_decay(self, horse: HorseData) -> float:
         """
         EXPONENTIAL DECAY FORM RATING (+12% accuracy improvement)
-        
+
         Mathematical Model:
             form_score = (Δs / k) × exp(-λ × t)
-        
+
         Where:
             Δs = speed_last - speed_3_races_ago (improvement)
             k = 3 (number of races)
-            λ = 0.01 (decay rate per day) 
+            λ = 0.01 (decay rate per day)
             t = days_since_last_race
-        
+
         Half-life: t_1/2 = ln(2)/λ = 69.3 days
-        
+
         This replaces binary form assessment (improving/declining) with
         continuous decay that accounts for HOW LONG AGO improvement occurred.
-        
+
         Complexity: O(1)
         Numerical Stability: Guaranteed (exp(-0.3) safe, no division by zero)
         """
         # First-time starter handling (use original logic)
         if not horse.speed_figures and not horse.recent_finishes:
             return self._calc_form(horse)
-        
+
         try:
             # Extract last 3 speed figures
             speed_figs = []
@@ -1409,72 +1423,72 @@ class UnifiedRatingEngine:
                 fig = horse.speed_figures[i]
                 if fig and isinstance(fig, (int, float)) and fig > 0:
                     speed_figs.append(float(fig))
-            
+
             if len(speed_figs) < 3:
                 # Not enough data - fallback to original
                 return self._calc_form(horse)
-            
+
             # Calculate linear trend (least squares fit)
             # x = [0, 1, 2] where 0 = most recent, 2 = oldest
             x = np.array([0, 1, 2])
             y = np.array(speed_figs[:3])
-            
+
             # Polyfit returns [slope, intercept]
             slope, _ = np.polyfit(x, y, 1)
-            
+
             # Improvement = -slope (negative because x[0] is most recent)
             # Positive slope means older races were faster (declining)
             # Negative slope means recent races faster (improving)
             improvement = -slope
-            
+
             # Apply exponential decay based on recency
             days_since = horse.days_since_last if horse.days_since_last else 30
             if pd.isna(days_since) or days_since < 0:
                 days_since = 30
-            
+
             decay_factor = np.exp(-self.FORM_DECAY_LAMBDA * days_since)
-            
+
             # Form score (raw)
             form_raw = improvement * decay_factor
-            
+
             # Clip to reasonable range and scale to [-3.0, +3.0]
             form_raw = np.clip(form_raw, -10, 10)
             cform_decay = 3.0 * (form_raw / 10)
-            
+
             # Blend with original form rating (50/50) for stability
             cform_original = self._calc_form(horse)
             cform_blended = 0.5 * cform_decay + 0.5 * cform_original
-            
+
             return float(np.clip(cform_blended, -3.0, 3.0))
-            
+
         except Exception as e:
             logger.warning(f"Exponential decay form failed: {e}, using original")
             return self._calc_form(horse)
-    
-    def _calc_pace_game_theoretic(self, 
-                                  horse: HorseData, 
-                                  horses_in_race: List[HorseData], 
+
+    def _calc_pace_game_theoretic(self,
+                                  horse: HorseData,
+                                  horses_in_race: List[HorseData],
                                   distance_txt: str) -> float:
         """
         GAME-THEORETIC PACE SCENARIO (+14% accuracy improvement)
-        
+
         Mathematical Model:
             ESP (Early Speed Pressure) = (n_E + 0.5 × n_EP) / n_total
-            
+
             Optimal ESP by style:
                 E:   Benefit from LOW ESP (fewer rivals)
                 E/P: Optimal at ESP = 0.4 (moderate pace)
                 P:   Optimal at ESP = 0.6 (honest pace)
                 S:   Benefit from HIGH ESP (fast pace to run down)
-        
+
         Distance weighting:
             Sprint (≤6F): Full weight (pace matters most)
             Route (≥9F): 60% weight (stamina matters more)
             Mid-distance: Linear interpolation
-        
+
         Replaces binary pace classification with continuous advantage model
         that captures nuanced field composition effects.
-        
+
         Complexity: O(n) where n = field size
         Validation: 14% improvement on pace-sensitive races
         """
@@ -1486,14 +1500,14 @@ class UnifiedRatingEngine:
             n_P = field_comp.get('P', 0)
             n_S = field_comp.get('S', 0)
             n_total = sum(field_comp.values())
-            
+
             if n_total == 0:
                 return self._calc_pace(horse, horses_in_race, distance_txt)
-            
+
             # Calculate early speed pressure (ESP)
             early_speed_horses = n_E + 0.5 * n_EP
             esp = early_speed_horses / n_total
-            
+
             # Distance weighting
             distance_furlongs = self._distance_to_furlongs(distance_txt)
             if distance_furlongs <= 6.0:
@@ -1503,10 +1517,10 @@ class UnifiedRatingEngine:
             else:
                 # Linear interpolation
                 distance_weight = 1.0 - 0.4 * ((distance_furlongs - 6.0) / 3.0)
-            
+
             # Style-specific advantage
             horse_style = horse.pace_style
-            
+
             if horse_style == 'E':
                 # E horses benefit from LOW esp (fewer rivals)
                 advantage = 3.0 * (1 - esp)
@@ -1525,20 +1539,20 @@ class UnifiedRatingEngine:
                 advantage = 3.0 * esp
             else:
                 advantage = 0.0
-            
+
             # Apply distance weighting
             final_score = advantage * distance_weight
-            
+
             # Blend with original pace rating (60/40) for stability
             cpace_original = self._calc_pace(horse, horses_in_race, distance_txt)
             cpace_blended = 0.6 * final_score + 0.4 * cpace_original
-            
+
             return float(np.clip(cpace_blended, -3.0, 3.0))
-            
+
         except Exception as e:
             logger.warning(f"Game-theoretic pace failed: {e}, using original")
             return self._calc_pace(horse, horses_in_race, distance_txt)
-    
+
     def _get_field_composition(self, horses_in_race: List[HorseData]) -> Dict[str, int]:
         """Count horses by running style for pace analysis"""
         composition = {'E': 0, 'E/P': 0, 'P': 0, 'S': 0}
@@ -1547,19 +1561,19 @@ class UnifiedRatingEngine:
             if style in composition:
                 composition[style] += 1
         return composition
-    
+
     def _distance_to_furlongs(self, distance_txt: str) -> float:
         """
         Convert distance string to furlongs - SECURE VERSION
-        
+
         Handles formats like "6F", "1 1/16M", "8.5 furlongs" WITHOUT using eval()
-        
+
         Security: Uses ast.literal_eval and fraction parsing instead of eval()
         to prevent arbitrary code execution attacks
         """
         import ast
         from fractions import Fraction
-        
+
         try:
             # Handle formats like "6F", "1 1/16M", "8.5 furlongs"
             if 'mile' in distance_txt.lower() or 'm' in distance_txt.lower():
@@ -1591,49 +1605,49 @@ class UnifiedRatingEngine:
             return 6.0  # Default sprint distance
         except Exception:
             return 6.0
-    
+
     def _adjust_for_off_track(self, horse: HorseData, condition: str) -> float:
         """
         MUD/OFF-TRACK PEDIGREE ADJUSTMENT (+8% improvement on off-tracks)
-        
+
         Mathematical Model:
             adjustment = 4.0 × ((mud_pct - 50) / 50)
-        
+
         Where:
             mud_pct ∈ [0, 100] = percentage of mud runners in pedigree
             50 = neutral baseline
-        
+
         Returns adjustment ∈ [-2.0, +2.0]
-        
+
         Complexity: O(1)
         """
         if condition.lower() not in ['muddy', 'sloppy', 'heavy', 'sealed', 'wet fast', 'good']:
             return 0.0  # Fast track - no adjustment
-        
+
         # Get mud pedigree percentage (would come from comprehensive parser)
         mud_pct = 50.0  # Default neutral (would extract from horse.pedigree data)
-        
+
         # Check if pedigree data available
         if hasattr(horse, 'pedigree') and isinstance(horse.pedigree, dict):
             mud_pct = horse.pedigree.get('mud_pct', 50.0)
         elif hasattr(horse, 'mud_pct'):
             mud_pct = horse.mud_pct
-        
+
         if pd.isna(mud_pct):
             mud_pct = 50.0
-        
+
         # Convert to adjustment [-2.0, +2.0]
         adjustment = 4.0 * ((mud_pct - 50.0) / 50.0)
-        
+
         return float(np.clip(adjustment, -2.0, 2.0))
-    
+
     def _extract_bayesian_components(self, results_df: pd.DataFrame) -> Dict[str, Dict[str, Tuple[float, float]]]:
         """
         Extract Bayesian component uncertainties from results DataFrame
-        
+
         Returns:
             Dictionary mapping horse_name -> component_name -> (mean, std)
-            
+
         Example:
             {
                 'Fast Eddie': {
@@ -1642,14 +1656,14 @@ class UnifiedRatingEngine:
                     ...
                 }
             }
-        
+
         Used by MultinomialLogitModel for uncertainty propagation
         """
         bayesian_dict = {}
-        
+
         for _, row in results_df.iterrows():
             horse_name = row['Horse']
-            
+
             components = {
                 'class': (row.get('Cclass', 0.0), row.get('Cclass_std', 0.0) if 'Cclass_std' in row else 0.0),
                 'form': (row.get('Cform', 0.0), row.get('Cform_std', 0.0) if 'Cform_std' in row else 0.0),
@@ -1658,54 +1672,54 @@ class UnifiedRatingEngine:
                 'style': (row.get('Cstyle', 0.0), row.get('Cstyle_std', 0.0) if 'Cstyle_std' in row else 0.0),
                 'post': (row.get('Cpost', 0.0), row.get('Cpost_std', 0.0) if 'Cpost_std' in row else 0.0)
             }
-            
+
             bayesian_dict[horse_name] = components
-        
+
         return bayesian_dict
-    
+
     def _softmax_with_confidence(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, float]:
         """
         SOFTMAX with ENTROPY-BASED CONFIDENCE (Better bet selection)
-        
+
         Mathematical Derivation:
             p_i = exp(r_i / τ) / Σ exp(r_j / τ)
             H = -Σ (p_i × log(p_i))
             confidence = 1 - (H / log(n))
-        
+
         Where:
             H = Shannon entropy (uncertainty measure)
             n = field size
-            
+
         Confidence interpretation:
             1.0 = Single horse dominates (low uncertainty)
             0.0 = All horses equally likely (high uncertainty)
-        
+
         Returns:
             df: DataFrame with Probability column
             confidence: System confidence ∈ [0, 1]
-        
+
         Complexity: O(n)
         Numerical Stability: Log-sum-exp trick
         """
         if df.empty or 'Rating' not in df.columns:
             return df, 0.5
-        
+
         # Apply standard softmax first
         df = self._apply_softmax(df)
-        
+
         # Calculate entropy
         probs = df['Probability'].values
         probs_safe = np.where(probs > 1e-10, probs, 1e-10)  # Avoid log(0)
         entropy = -(probs_safe * np.log(probs_safe)).sum()
-        
+
         # Normalize entropy by maximum possible
         n = len(df)
         max_entropy = np.log(n)
         normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
-        
+
         # Confidence = 1 - normalized_entropy
         confidence = 1.0 - normalized_entropy
-        
+
         return df, confidence
 
     # End of PhD-level enhancements
@@ -1780,10 +1794,11 @@ Prime Power: 101.5 (4th)
             condition_txt="fast"
         )
 
-        logger.info("="*80)
+        logger.info("=" * 80)
         logger.info("PREDICTION RESULTS")
-        logger.info("="*80)
-        logger.info("\n" + results[['Horse', 'Post', 'Rating', 'Probability', 'Fair_Odds', 'Parse_Confidence']].to_string(index=False))
+        logger.info("=" * 80)
+        logger.info("\n" + results[['Horse', 'Post', 'Rating', 'Probability',
+                    'Fair_Odds', 'Parse_Confidence']].to_string(index=False))
 
     except Exception as e:
         logger.error(f"Test failed: {e}", exc_info=True)
