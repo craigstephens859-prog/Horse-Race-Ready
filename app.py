@@ -6722,13 +6722,39 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 """
                 report = call_openai_messages(messages=[{"role": "user", "content": prompt}])
 
+                # ===== PHASE 3: ADVANCED PROBABILITY ANALYSIS =====
+                try:
+                    from phase3_probability_engine import Phase3ProbabilityEngine, format_phase3_report
+                    
+                    # Get win probabilities from primary_df
+                    if 'Win%' in primary_df.columns:
+                        win_probs = primary_df['Win%'].values / 100.0  # Convert percentage to decimal
+                        horse_names = primary_df['Horse'].values if 'Horse' in primary_df.columns else None
+                        
+                        # Run Phase 3 analysis
+                        phase3_engine = Phase3ProbabilityEngine(bankroll=50.0)
+                        phase3_results = phase3_engine.analyze_race_comprehensive(
+                            win_probs=win_probs,
+                            horse_names=horse_names,
+                            confidence_level=0.95
+                        )
+                        
+                        # Format Phase 3 report
+                        phase3_report = format_phase3_report(phase3_results)
+                        
+                    else:
+                        phase3_report = "Phase 3 analysis unavailable (missing win probabilities)"
+                except Exception as e:
+                    phase3_report = f"Phase 3 analysis error: {str(e)}"
+                
                 # Store Classic Report in session state so it persists across reruns
                 st.session_state['classic_report'] = report
+                st.session_state['phase3_report'] = phase3_report
                 st.session_state['classic_report_generated'] = True
 
                 st.success("✅ Analysis Complete! Thank you for contributing to our community database.")
 
-                # Wrap ENTIRE report in consistent font styling (includes strategy_report_md AND LLM output)
+                # Wrap ENTIRE report in consistent font styling (includes strategy_report_md, LLM output, AND Phase 3)
                 styled_report = f"""<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #1f2937;">
 
 {strategy_report_md}
@@ -6736,6 +6762,12 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 ---
 
 {report}
+
+---
+
+<pre style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.4; overflow-x: auto;">
+{phase3_report}
+</pre>
 
 </div>"""
                 st.markdown(styled_report, unsafe_allow_html=True)
