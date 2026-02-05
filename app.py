@@ -5645,11 +5645,7 @@ if scenarios:
         st.session_state['primary_d'] = primary_df
         st.session_state['primary_probs'] = primary_probs
 
-        st.info(
-            f"**Primary Scenario:** S: `{
-                primary_key[0]}` • P: `{
-                primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {
-                ppi_val:+.2f}")
+        st.info(f"**Primary Scenario:** S: `{primary_key[0]}` • P: `{primary_key[1]}` • Profile: `{strategy_profile}`  • PPI: {ppi_val:+.2f}")
     else:
         st.error("Primary scenario ratings not found. Check calculations.")
         primary_df, primary_probs = pd.DataFrame(), {}  # Assign defaults
