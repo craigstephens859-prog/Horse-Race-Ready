@@ -1060,18 +1060,23 @@ class UnifiedRatingEngine:
             recent_top3_count = sum(1 for finish in horse.recent_finishes[:3] if finish <= 3)
             was_competitive = recent_top3_count >= 1
 
-        # Purse comparison (PEGASUS CALIBRATION: Stepping up kills)
+        # Purse comparison (CALIBRATED: Scale penalties by race level)
+        # G1/Stakes races: stepping up is lethal (Pegasus-validated)
+        # Lower levels: stepping up matters less - horses shuffle between claiming/starter/alw
         if horse.recent_purses and today_purse > 0:
             avg_recent = np.mean(horse.recent_purses)
             if avg_recent > 0:
                 purse_ratio = today_purse / avg_recent
 
+                # Scale factor: 1.0 for G1 (score 8), 0.4 for low claiming (score 1.5)
+                level_scale = min(1.0, max(0.4, (today_score - 1.0) / 7.0))
+
                 if purse_ratio >= 2.0:  # Massive step up (e.g., $50k → $100k+)
-                    rating -= 3.5  # INCREASED from -1.2
+                    rating -= 3.5 * level_scale
                 elif purse_ratio >= 1.5:  # Major step up
-                    rating -= 2.0  # INCREASED from -1.2
+                    rating -= 2.0 * level_scale
                 elif purse_ratio >= 1.2:  # Moderate step up
-                    rating -= 1.0  # INCREASED from -0.6
+                    rating -= 1.0 * level_scale
                 elif 0.8 <= purse_ratio <= 1.2:  # Same class
                     rating += 0.8
                 elif purse_ratio >= 0.6:  # Class drop
@@ -1079,29 +1084,32 @@ class UnifiedRatingEngine:
                 else:  # Major drop
                     rating += 1.0 if was_competitive else -0.3
 
-        # Race type progression (PEGASUS CALIBRATION: Big jumps are lethal)
+        # Race type progression (CALIBRATED: Scale by race level)
         if horse.race_types:
             recent_scores = [self.RACE_TYPE_SCORES.get(rt.lower(), 3.5) for rt in horse.race_types]
             avg_recent_type = np.mean(recent_scores)
             type_diff = today_score - avg_recent_type
 
+            # Scale factor for type progression penalties
+            level_scale = min(1.0, max(0.4, (today_score - 1.0) / 7.0))
+
             # Stepping UP in class (type_diff > 0)
             if type_diff >= 3.0:  # e.g., Allowance → G1 (3+ level jump)
-                rating -= 4.5  # MASSIVE penalty - rarely works
+                rating -= 4.5 * level_scale
             elif type_diff >= 2.0:  # e.g., G3 → G1 (2 level jump)
-                rating -= 3.0  # INCREASED from -1.5 (validated by Mika)
-            elif type_diff >= 1.5:  # NEW: 1.5 level jump
-                rating -= 2.0
+                rating -= 3.0 * level_scale
+            elif type_diff >= 1.5:  # 1.5 level jump
+                rating -= 2.0 * level_scale
             elif type_diff >= 1.0:  # e.g., Allowance → Stakes
-                rating -= 1.5  # INCREASED from -0.8
+                rating -= 1.5 * level_scale
             elif type_diff >= 0.5:  # Minor step up
-                rating -= 0.5  # NEW penalty
+                rating -= 0.5 * level_scale
             # Same level (within 0.5)
             elif abs(type_diff) < 0.5:
                 rating += 0.5
             # Dropping DOWN in class (type_diff < 0)
             elif type_diff <= -1.0:
-                rating += 1.5  # INCREASED from 1.2 - dropping class helps
+                rating += 1.5  # Dropping class helps
 
         # Pedigree quality
         if horse.sire_spi and horse.sire_spi >= 110:

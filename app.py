@@ -316,7 +316,9 @@ def call_openai_messages(messages: List[Dict]) -> str:
 
 MODEL_CONFIG = {
     # --- Rating Model ---
-    "softmax_tau": 0.85,  # Controls win prob "sharpness". Lower = more spread out.
+    "softmax_tau": 3.0,  # Controls win prob "sharpness". Must match unified engine rating scale.
+    # CALIBRATED Feb 5, 2026: Was 0.85 which created 96%+ concentration on single horse.
+    # Unified engine raw Rating sums have 5-10pt spreads; tau=3.0 gives realistic odds.
     "speed_fig_weight": 0.05,  # (Fig - Avg) * Weight. 0.05 = 10 fig points = 0.5 bonus.
     "first_timer_fig_default": 50,  # Assumed speed fig for a 1st-time starter.
 
@@ -1673,6 +1675,16 @@ def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.
     _tau = tau if tau is not None else MODEL_CONFIG['softmax_tau']
     _tau = max(_tau, 1e-6)  # Prevent division by zero
     _tau = min(_tau, 1e6)   # Prevent numerical instability
+
+    # ADAPTIVE TAU: Scale temperature to rating spread so probabilities stay realistic
+    # Target: max-min spread of 2.5-4.0 in softmax space → sensible 10:1 to 50:1 ratios
+    rating_spread = np.max(ratings_clean) - np.min(ratings_clean)
+    if rating_spread > 0:
+        # Ensure the softmax-space spread stays in [2.0, 5.0] range
+        # This maps to probability ratios of ~7:1 to ~150:1 (realistic for racing)
+        target_spread = 3.5  # Sweet spot for 8-12 horse fields
+        adaptive_tau = max(_tau, rating_spread / target_spread)
+        _tau = adaptive_tau
 
     # NUMERICAL STABILITY: Subtract max before exp (prevents overflow)
     x = ratings_clean / _tau
@@ -5834,18 +5846,14 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame,
         # Normalize to exactly 1.0
         result = {h: p / total_prob for h, p in result.items()}
 
-    # ML ODDS REALITY CHECK: Prevent longshots from getting unrealistic probabilities
-    # This adds common sense - the market odds reflect real race experience
+    # ML ODDS REALITY CHECK: Blend model probabilities with market wisdom
+    # The market odds reflect real money and decades of handicapping experience
     if ml_odds_dict:
         adjusted = False
         for horse, prob in result.items():
             ml_odds = ml_odds_dict.get(horse, 5.0)
 
-            # Progressive caps based on ML odds:
-            # 10/1 or more: cap at 25%
-            # 15/1 or more: cap at 20%
-            # 20/1 or more: cap at 15%
-            # 30/1 or more: cap at 10%
+            # --- LONGSHOT CAPS: Prevent longshots from getting unrealistic probabilities ---
             if ml_odds >= 30.0 and prob > 0.10:
                 result[horse] = 0.10
                 adjusted = True
@@ -5857,6 +5865,19 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame,
                 adjusted = True
             elif ml_odds >= 10.0 and prob > 0.25:
                 result[horse] = 0.25
+                adjusted = True
+
+            # --- FAVORITE FLOORS: Prevent strong favorites from being crushed ---
+            # A 9/5 favorite should never be below ~15% (market says ~35%)
+            # A 2/1 favorite should never be below ~12%
+            elif ml_odds <= 2.0 and prob < 0.15:
+                result[horse] = max(prob, 0.15)
+                adjusted = True
+            elif ml_odds <= 3.0 and prob < 0.10:
+                result[horse] = max(prob, 0.10)
+                adjusted = True
+            elif ml_odds <= 5.0 and prob < 0.06:
+                result[horse] = max(prob, 0.06)
                 adjusted = True
 
         # If we adjusted any probabilities, renormalize
