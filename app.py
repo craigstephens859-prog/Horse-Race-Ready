@@ -5055,7 +5055,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                                 # Lower odds = better horse = higher rating
                                 horse_name = row.get('Horse', '')
                                 ml_val = None
-                                for _, ff_row in df_final_field.iterrows():
+                                for _, ff_row in df_styles.iterrows():
                                     if ff_row.get('Horse') == horse_name:
                                         ml_val = ff_row.get('ML', '')
                                         break
@@ -5072,6 +5072,61 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                                     if pd.isna(unified_ratings.at[idx, col]) or unified_ratings.at[idx, col] is None:
                                         unified_ratings.at[idx, col] = 0.0
                                 logger.info(f"  → Fallback rating for {horse_name}: {fallback_rating} (ML={ml_val})")
+
+                        # ═══════════════════════════════════════════════════════
+                        # CRITICAL FIX: Add MISSING horses from df_final_field
+                        # Parser may not match all Section A horses (name format
+                        # differences, partial PP text, etc). Without this fix,
+                        # missing horses vanish from primary_df → missing from
+                        # Section E display → can't enter results for them.
+                        # ═══════════════════════════════════════════════════════
+                        unified_horse_names = set(unified_ratings['Horse'].tolist())
+                        original_horses = df_styles['Horse'].tolist() if 'Horse' in df_styles.columns else []
+                        missing_horses = [h for h in original_horses if h not in unified_horse_names]
+
+                        if missing_horses:
+                            logger.info(f"  → Adding {len(missing_horses)} horses not matched by parser: {missing_horses}")
+                            missing_rows = []
+                            for mh in missing_horses:
+                                # Get ML odds for fallback rating
+                                # Use df_styles (original parameter = df_final_field copy)
+                                ml_val = None
+                                post_val = ''
+                                style_val = 'NA'
+                                quirin_val = 0.0
+                                for _, ff_row in df_styles.iterrows():
+                                    if ff_row.get('Horse') == mh:
+                                        ml_val = ff_row.get('ML', '')
+                                        post_val = str(ff_row.get('Post', ''))
+                                        style_val = str(ff_row.get('Style', ff_row.get('BRIS Style', 'NA')))
+                                        quirin_val = ff_row.get('Quirin', 0.0)
+                                        break
+                                try:
+                                    ml_dec = odds_to_decimal(str(ml_val)) if ml_val else 20.0
+                                except Exception:
+                                    ml_dec = 20.0
+                                fallback_rating = round(3.0 - np.log(max(ml_dec, 1.1)), 2)
+                                a_track = _get_track_bias_delta(track_name, surface_type, distance_txt, _style_norm(style_val), post_val)
+
+                                missing_rows.append({
+                                    "#": len(unified_ratings) + len(missing_rows) + 1,
+                                    "Post": post_val,
+                                    "Horse": mh,
+                                    "Style": style_val,
+                                    "Quirin": quirin_val,
+                                    "Cstyle": 0.0, "Cpost": 0.0, "Cpace": 0.0,
+                                    "Cspeed": 0.0, "Cclass": 0.0, "Cform": 0.0,
+                                    "Atrack": a_track,
+                                    "Arace": fallback_rating,
+                                    "R": fallback_rating,
+                                    "Parsing_Confidence": 0.0
+                                })
+                                logger.info(f"    + {mh}: fallback R={fallback_rating}, post={post_val}, style={style_val}")
+
+                            if missing_rows:
+                                missing_df = pd.DataFrame(missing_rows)
+                                unified_ratings = pd.concat([unified_ratings, missing_df], ignore_index=True)
+                            st.caption(f"ℹ️ {len(missing_horses)} horse(s) added via ML-odds fallback (not in PP text)")
 
                         # Continue to apply enhancements instead of returning early
                         df_styles = unified_ratings.copy()
@@ -7492,7 +7547,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             'distance': distance_txt,
                             'condition': condition_txt,
                             'purse': purse_val,
-                            'field_size': len(primary_df),
+                            'field_size': len(df_final_field) if df_final_field is not None else len(primary_df),
                             # ADDITIONAL INTELLIGENT FEATURES
                             'ppi_race_wide': ppi_val,  # Pace Pressure Index
                             'track_bias_config': TRACK_BIAS_PROFILES.get(track_name, {}).get(surface_type, {}).get(race_bucket, {}),
@@ -7613,7 +7668,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 'quirin_points': int(safe_float(row.get('Quirin', 0))),
                                 'style_strength': safe_float(row.get('StyleStrength', 0.0)),
                                 'ppi_individual': safe_float(ppi_map_by_horse.get(horse_name, 0.0)),
-                                'field_size_context': len(primary_df),
+                                'field_size_context': len(df_final_field) if df_final_field is not None else len(primary_df),
                                 'post_position_bias': safe_float(row.get('Post', 0)) / max(len(primary_df), 1),
                                 # LIFETIME STATS (if available from PP text)
                                 'starts_lifetime': int(safe_float(row.get('Starts', 0))),
