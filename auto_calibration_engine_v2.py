@@ -245,11 +245,19 @@ class AutoCalibrationEngine:
             logger.warning(f"Could not record odds drift: {e}")
 
     def get_recent_results(self, limit: int = 50) -> List[Dict]:
-        """Fetch recent races with both predictions and actual results."""
+        """Fetch recent races with both predictions and actual results.
+        
+        Supports BOTH database schemas:
+        - New schema: horses_analyzed + gold_high_iq with features_json
+        - Old schema: gold_high_iq with individual columns (predicted_finish_position, etc.)
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Try new schema first, fall back to original
+        rows = []
+        schema_used = None
+
+        # --- Strategy 1: New schema (horses_analyzed joined) ---
         try:
             cursor.execute("""
                 SELECT
@@ -266,29 +274,50 @@ class AutoCalibrationEngine:
                 FROM gold_high_iq g
                 LEFT JOIN races_analyzed r ON g.race_id = r.race_id
                 WHERE g.actual_finish_position IS NOT NULL
+                  AND g.predicted_rank IS NOT NULL
                 ORDER BY g.result_entered_timestamp DESC
                 LIMIT ?
             """, (limit * 12,))
-        except:
-            cursor.execute("""
-                SELECT
-                    g.race_id,
-                    NULL as race_type,
-                    NULL as track_code,
-                    0 as purse,
-                    0 as field_size,
-                    g.horse_name,
-                    g.predicted_probability,
-                    g.predicted_rank,
-                    g.actual_finish_position,
-                    g.features_json
-                FROM gold_high_iq g
-                WHERE g.actual_finish_position IS NOT NULL
-                ORDER BY g.result_entered_timestamp DESC
-                LIMIT ?
-            """, (limit * 12,))
+            rows = cursor.fetchall()
+            if rows:
+                schema_used = 'new_with_features'
+        except Exception:
+            pass
 
-        rows = cursor.fetchall()
+        # --- Strategy 2: Old schema (individual columns) ---
+        if not rows:
+            try:
+                cursor.execute("PRAGMA table_info(gold_high_iq)")
+                col_names = {row[1] for row in cursor.fetchall()}
+
+                if 'predicted_finish_position' in col_names:
+                    cursor.execute("""
+                        SELECT
+                            race_id,
+                            race_type,
+                            track,
+                            0 as purse,
+                            field_size,
+                            horse_name,
+                            odds,
+                            predicted_finish_position,
+                            actual_finish_position,
+                            class_rating,
+                            last_speed_rating,
+                            prime_power,
+                            running_style,
+                            post_position
+                        FROM gold_high_iq
+                        WHERE actual_finish_position IS NOT NULL
+                        ORDER BY timestamp DESC
+                        LIMIT ?
+                    """, (limit * 12,))
+                    rows = cursor.fetchall()
+                    if rows:
+                        schema_used = 'old_individual_columns'
+            except Exception as e:
+                logger.warning(f"Old schema query failed: {e}")
+
         conn.close()
 
         # Group by race_id
@@ -305,28 +334,69 @@ class AutoCalibrationEngine:
                     'horses': []
                 }
             
-            # Parse features from JSON
-            features = {}
-            if row[9]:
-                try:
-                    features = json.loads(row[9])
-                except:
-                    pass
+            if schema_used == 'old_individual_columns':
+                # Old schema: build features from individual columns
+                # row[6]=odds, row[7]=predicted_finish_position, row[8]=actual_finish
+                # row[9]=class_rating, row[10]=last_speed_rating, row[11]=prime_power
+                # row[12]=running_style, row[13]=post_position
+                odds_val = row[6] or 10.0
+                # Convert odds to approximate probability (1/odds normalized)
+                predicted_prob = 1.0 / max(odds_val + 1, 1.0)
+                predicted_rank = row[7] or 99
+                actual_finish = row[8]
+                
+                # Build component ratings from available data
+                class_rating = row[9] or 0
+                speed_rating = row[10] or 0
+                prime = row[11] or 0
+                
+                # Estimate component scores from available data
+                # Normalize to typical 0-1 ranges used by the engine
+                c_class = class_rating / 120.0 if class_rating else 0
+                c_speed = speed_rating / 100.0 if speed_rating else 0
+                c_form = 0.5  # No form data in old schema, use neutral
+                c_pace = 0.5  # No pace data in old schema, use neutral
+                c_style = 0.5  # No style data in old schema, use neutral
+                c_post = 0.5  # No post rating in old schema, use neutral
+                
+                races[race_id]['horses'].append({
+                    'name': row[5],
+                    'predicted_prob': predicted_prob,
+                    'predicted_rank': predicted_rank,
+                    'actual_finish': actual_finish,
+                    'c_class': c_class,
+                    'c_speed': c_speed,
+                    'c_form': c_form,
+                    'c_pace': c_pace,
+                    'c_style': c_style,
+                    'c_post': c_post
+                })
+            else:
+                # New schema: parse features from JSON
+                features = {}
+                if row[9]:
+                    try:
+                        features = json.loads(row[9])
+                    except Exception:
+                        pass
 
-            races[race_id]['horses'].append({
-                'name': row[5],
-                'predicted_prob': row[6] or 0.1,
-                'predicted_rank': row[7] or 99,
-                'actual_finish': row[8],
-                'c_class': features.get('rating_class', 0),
-                'c_speed': features.get('rating_speed', 0),
-                'c_form': features.get('rating_form', 0),
-                'c_pace': features.get('rating_pace', 0),
-                'c_style': features.get('rating_style', 0),
-                'c_post': features.get('rating_post', 0)
-            })
+                races[race_id]['horses'].append({
+                    'name': row[5],
+                    'predicted_prob': row[6] or 0.1,
+                    'predicted_rank': row[7] or 99,
+                    'actual_finish': row[8],
+                    'c_class': features.get('rating_class', 0),
+                    'c_speed': features.get('rating_speed', 0),
+                    'c_form': features.get('rating_form', 0),
+                    'c_pace': features.get('rating_pace', 0),
+                    'c_style': features.get('rating_style', 0),
+                    'c_post': features.get('rating_post', 0)
+                })
 
-        return list(races.values())[:limit]
+        result = list(races.values())[:limit]
+        if result:
+            logger.info(f"📊 Loaded {len(result)} races via {schema_used} schema")
+        return result
 
     def calculate_prediction_error(self, race: Dict) -> Dict[str, float]:
         """Calculate error gradient for each component weight."""

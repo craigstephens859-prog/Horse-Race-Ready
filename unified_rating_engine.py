@@ -248,17 +248,30 @@ class UnifiedRatingEngine:
         'gr1': 8.0, 'gr2': 7.0, 'gr3': 6.0
     }
 
-    def __init__(self, softmax_tau: float = 3.0):
+    def __init__(self, softmax_tau: float = 3.0, learned_weights: Optional[Dict[str, float]] = None):
         """
         Args:
             softmax_tau: Temperature parameter for probability distribution
                         Lower = more concentrated, Higher = more uniform
                         3.0 = balanced (recommended)
+            learned_weights: Optional dict of learned weights from auto-calibration
+                           engine. If provided, overrides default WEIGHTS for
+                           the core components (class, speed, form, pace, style, post).
         """
         self.parser = GoldStandardBRISNETParser()
         self.softmax_tau = softmax_tau
         self.last_validation = None
         self.logit_model = MultinomialLogitModel(use_uncertainty=True)
+        
+        # Apply learned weights from auto-calibration if provided
+        if learned_weights:
+            # Override base WEIGHTS with learned values (instance-level override)
+            self.WEIGHTS = dict(self.WEIGHTS)  # Copy class dict to instance
+            core_weight_keys = ['class', 'speed', 'form', 'pace', 'style', 'post', 'angles']
+            for key in core_weight_keys:
+                if key in learned_weights and learned_weights[key] > 0:
+                    self.WEIGHTS[key] = learned_weights[key]
+            logger.info(f"🧠 Applied {sum(1 for k in core_weight_keys if k in learned_weights)} learned weights to engine")
 
     def predict_race(self,
                      pp_text: str,

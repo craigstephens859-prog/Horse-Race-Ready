@@ -4902,7 +4902,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
             if avg_confidence >= 0.15 and validation.get('horses_parsed', 0) > 0:
                 # High quality parse - use unified engine
-                engine = UnifiedRatingEngine(softmax_tau=3.0)
+                engine = UnifiedRatingEngine(softmax_tau=3.0, learned_weights=LEARNED_WEIGHTS)
 
                 # Extract race metadata using elite parser's race header (most accurate)
                 today_purse = 0
@@ -7939,6 +7939,9 @@ else:
                                                             accuracy = calibration_result.get('winner_accuracy', 0) * 100
                                                             top3_acc = calibration_result.get('top3_accuracy', 0) * 100
                                                             st.info(f"🧠 Model learned! Winner: {accuracy:.0f}% | Top-3: {top3_acc:.0f}%")
+                                                            # Refresh learned weights so next prediction uses updated values
+                                                            globals()['LEARNED_WEIGHTS'] = get_live_learned_weights(gold_db.db_path)
+                                                            logger.info(f"🔄 Refreshed LEARNED_WEIGHTS after calibration")
                                                 except Exception as cal_err:
                                                     logger.warning(f"Auto-calibration failed: {cal_err}")
 
