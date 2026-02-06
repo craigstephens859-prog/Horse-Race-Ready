@@ -4,6 +4,19 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    # Persistent disk — keeps database across redeploys ($0.25/GB/month)
+    # Remove this block if on free tier and using GitHub backup instead
+    disk:
+      name: race-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      # GitHub backup (FREE safety net — set in Render Dashboard → Environment)
+      # Create token: GitHub → Settings → Developer Settings → Personal Access Tokens
+      # Needs 'repo' scope. Set value in Render Dashboard, NOT here.
+      - key: GITHUB_TOKEN
+        sync: false  # Must be set manually in Render Dashboard
+      - key: GITHUB_REPO
+        value: craigstephens859-prog/Horse-Race-Ready

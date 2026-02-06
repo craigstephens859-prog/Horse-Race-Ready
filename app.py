@@ -29,6 +29,23 @@ import streamlit as st
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# DATABASE PERSISTENCE: Ensures data survives Render redeployments
+try:
+    from db_persistence import (
+        initialize_persistent_db,
+        backup_to_github_async,
+        get_persistence_status,
+        is_render,
+    )
+    PERSISTENT_DB_PATH = initialize_persistent_db("gold_high_iq.db")
+    print(f"✅ Persistent DB path: {PERSISTENT_DB_PATH}")
+except ImportError:
+    PERSISTENT_DB_PATH = "gold_high_iq.db"
+    backup_to_github_async = None
+    get_persistence_status = None
+    is_render = lambda: False
+    print("⚠️ db_persistence not available, using local DB path")
+
 # Try importing ML Engine for Phase 2 functionality
 try:
     from ml_engine import MLCalibrator, RaceDatabase
@@ -96,10 +113,12 @@ except ImportError:
     UnifiedRatingEngine = None
 
 # ULTRATHINK V3: Gold High-IQ Database (optimized for ML retraining)
+# Uses persistent path so data survives Render redeployments
 try:
     from gold_database_manager import GoldHighIQDatabase
-    gold_db = GoldHighIQDatabase("gold_high_iq.db")
+    gold_db = GoldHighIQDatabase(PERSISTENT_DB_PATH)
     GOLD_DB_AVAILABLE = True
+    print(f"✅ Gold DB initialized at: {PERSISTENT_DB_PATH}")
 except Exception as e:
     GOLD_DB_AVAILABLE = False
     gold_db = None
@@ -116,8 +135,8 @@ try:
     ADAPTIVE_LEARNING_AVAILABLE = True
     
     # Load learned weights at startup (persisted from past calibrations)
-    LEARNED_WEIGHTS = get_live_learned_weights("gold_high_iq.db")
-    print(f"✅ Loaded {len(LEARNED_WEIGHTS)} learned weights from database")
+    LEARNED_WEIGHTS = get_live_learned_weights(PERSISTENT_DB_PATH)
+    print(f"✅ Loaded {len(LEARNED_WEIGHTS)} learned weights from {PERSISTENT_DB_PATH}")
 except ImportError as e:
     ADAPTIVE_LEARNING_AVAILABLE = False
     LEARNED_WEIGHTS = {}
@@ -7590,6 +7609,11 @@ else:
             st.success(f"✅ **Database Verified:** {db_path} ({db_size_mb:.2f} MB) - Data persists across sessions!")
         else:
             st.info(f"📁 New database will be created: {db_path}")
+
+        # Show persistence layer status
+        if get_persistence_status:
+            p_status = get_persistence_status(db_path)
+            st.caption(f"🔐 Storage: {p_status['persistence_level']}")
     except Exception as verify_error:
         st.warning(f"Could not verify database: {verify_error}")
 
@@ -7605,7 +7629,7 @@ else:
 
         # Tab 1: Dashboard
         with tab_overview:
-            st.markdown("""
+            st.markdown(f"""
             ### Real Data Learning System
 
             Every time you click "Analyze This Race", the system **auto-saves**:
@@ -7619,7 +7643,7 @@ else:
             🔒 **Data Persistence:** All analyzed races are permanently saved to the database.
             You can safely close your browser and return anytime - your data persists!
 
-            📁 **Database Location:** `gold_high_iq.db` (stored in your project folder)
+            📁 **Database Location:** `{PERSISTENT_DB_PATH}` (persists across Render redeployments!)
             """)
 
             # Calculate total analyzed races (completed + pending)
@@ -7982,6 +8006,14 @@ else:
                                                 except Exception as learn_err:
                                                     logger.warning(f"Intelligent learning failed: {learn_err}")
 
+                                                # CLOUD BACKUP: Push to GitHub so data survives Render redeploys
+                                                try:
+                                                    if backup_to_github_async:
+                                                        backup_to_github_async(gold_db.db_path)
+                                                        logger.info("☁️ GitHub backup triggered (async)")
+                                                except Exception as bk_err:
+                                                    logger.debug(f"GitHub backup note: {bk_err}")
+
                                                 # Trigger rerun to refresh the page
                                                 time.sleep(1)
                                                 _safe_rerun()
@@ -8159,7 +8191,7 @@ else:
             try:
                 if ADAPTIVE_LEARNING_AVAILABLE:
                     # Load directly from database - these are the ACTUAL weights being used
-                    db_learned_weights = get_live_learned_weights("gold_high_iq.db")
+                    db_learned_weights = get_live_learned_weights(PERSISTENT_DB_PATH)
                     
                     st.markdown("#### 🧠 Learned Component Weights (From Database)")
                     st.caption("These weights have been automatically tuned from historical race results")
@@ -8206,7 +8238,7 @@ else:
                     
                     try:
                         import sqlite3
-                        conn = sqlite3.connect("gold_high_iq.db", timeout=5.0)
+                        conn = sqlite3.connect(PERSISTENT_DB_PATH, timeout=5.0)
                         cursor = conn.cursor()
                         
                         cursor.execute("""
