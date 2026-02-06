@@ -438,6 +438,30 @@ def _distance_bucket_from_text(distance_txt: str) -> str:
     return "8f+"
 
 
+def distance_to_furlongs(dist_str: str) -> float:
+    """Convert distance string to furlongs (module-level utility)."""
+    dist_str = (dist_str or '').lower().strip()
+    if 'f' in dist_str:
+        try:
+            return float(dist_str.replace('f', '').replace('furlongs', '').replace('furlong', '').strip())
+        except ValueError:
+            return 6.0
+    elif 'm' in dist_str or 'mile' in dist_str:
+        if '1/16' in dist_str:
+            return 8.5
+        elif '1/8' in dist_str:
+            return 9.0
+        elif '3/16' in dist_str:
+            return 9.5
+        elif '1/4' in dist_str:
+            return 10.0
+        elif '1/2' in dist_str:
+            return 12.0
+        else:
+            return 8.0
+    return 6.0
+
+
 def distance_bucket(distance_txt: str) -> str:
     try:
         return _distance_bucket_from_text(distance_txt)
@@ -3738,7 +3762,7 @@ for _, r in df_final_field.iterrows():
     horse_style = r.get('Style', 'NA')
 
     dist_bucket = distance_bucket(distance_txt)
-    track_cfg = TRACK_BIAS_PROFILES.get(canon_track, {}).get(race_surface, {}).get(dist_bucket, {})
+    track_cfg = TRACK_BIAS_PROFILES.get(_canonical_track(track_name), {}).get(race_surface, {}).get(dist_bucket, {})
     runstyle_biases = track_cfg.get('runstyle', {})
 
     # Strong stalker track detected if S style has > 0.3 advantage
