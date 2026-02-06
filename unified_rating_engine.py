@@ -752,10 +752,10 @@ class UnifiedRatingEngine:
             adjusted_cstyle = cstyle * iv
 
             # Also adjust the weight to amplify/dampen importance
-            adjusted_weights['cstyle'] = weights['cstyle'] * iv
+            adjusted_weights['style'] = weights['style'] * iv
 
             logger.debug(
-                f"  → Track Bias Run Style IV={iv:.2f}: style {cstyle:.2f}→{adjusted_cstyle:.2f}, weight {weights['cstyle']:.2f}→{adjusted_weights['cstyle']:.2f}")
+                f"  → Track Bias Run Style IV={iv:.2f}: style {cstyle:.2f}→{adjusted_cstyle:.2f}, weight {weights['style']:.2f}→{adjusted_weights['style']:.2f}")
 
             # Log if dominant/favorable marker present
             if horse.track_bias_markers == '++':
@@ -770,10 +770,10 @@ class UnifiedRatingEngine:
             adjusted_cpost = cpost * iv
 
             # Also adjust the weight
-            adjusted_weights['cpost'] = weights['cpost'] * iv
+            adjusted_weights['post'] = weights['post'] * iv
 
             logger.debug(
-                f"  → Track Bias Post IV={iv:.2f}: post {cpost:.2f}→{adjusted_cpost:.2f}, weight {weights['cpost']:.2f}→{adjusted_weights['cpost']:.2f}")
+                f"  → Track Bias Post IV={iv:.2f}: post {cpost:.2f}→{adjusted_cpost:.2f}, weight {weights['post']:.2f}→{adjusted_weights['post']:.2f}")
 
         return adjusted_cstyle, adjusted_cpost, adjusted_weights
 
@@ -816,7 +816,7 @@ class UnifiedRatingEngine:
 
             # Apply to data-dependent components
             if multiplier != 1.0:
-                for component in ['cclass', 'cspeed', 'cform']:
+                for component in ['class', 'speed', 'form']:
                     if component in adjusted_components:
                         old_val = adjusted_components[component]
                         adjusted_components[component] = old_val * multiplier
@@ -1311,14 +1311,6 @@ class UnifiedRatingEngine:
                     rating += 0.3
         except Exception:
             pass
-
-        return float(np.clip(rating, -3.0, 3.0))
-
-        # Route vs sprint adjustment
-        is_route = '1 ' in distance_txt.lower() or '1-1' in distance_txt or '8.5' in distance_txt
-
-        if is_route and horse.pace_style in ['P', 'S']:
-            rating += 0.5  # Routes favor closers
 
         return float(np.clip(rating, -3.0, 3.0))
 

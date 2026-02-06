@@ -3172,24 +3172,6 @@ def calculate_comprehensive_class_rating(
 
     return np.clip(class_rating, -3.0, 6.0)
 
-    # 6. ABSOLUTE PURSE LEVEL BASELINE
-    # High purse races = better horses overall
-    if today_purse >= 100000:
-        purse_baseline = 1.0
-    elif today_purse >= 50000:
-        purse_baseline = 0.5
-    elif today_purse >= 25000:
-        purse_baseline = 0.0
-    else:
-        purse_baseline = -0.5
-
-    class_rating += claiming_bonus
-
-    class_rating += purse_baseline
-
-    # Clip to reasonable range
-    return float(np.clip(class_rating, -3.0, 6.0))
-
 # ===================== 1. Paste PPs & Parse (durable) =====================
 
 
@@ -3645,6 +3627,7 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
 
     # 1) Pedigree AWD vs today's distance bucket
     awds = [x for x in [ped.get("sire_awd"), ped.get("damsire_awd")] if pd.notna(x)]
+    awd_mean = float('nan')  # Initialize before conditional block
     # Validate AWD data exists and is valid BEFORE using
     if awds:
         awd_mean = float(np.nanmean(awds))
@@ -3706,82 +3689,83 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
             tweak += MODEL_CONFIG['angle_off_track_route_bonus']
 
     return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
-    # Build Cclass and Cform using comprehensive analysis
-    race_surface = surface_type
-    race_cond = condition_txt
-    race_bucket = distance_bucket(distance_txt)
 
-    Cclass_vals = []
-    Cform_vals = []
-    for _, r in df_final_field.iterrows():
-        name = r["Horse"]
-        ped = pedigree_per_horse.get(name, {}) or {}
-        ang = angles_per_horse.get(name)
+# Build Cclass and Cform using comprehensive analysis
+race_surface = surface_type
+race_cond = condition_txt
+race_bucket = distance_bucket(distance_txt)
 
-        # Get horse's PP block for analysis
-        horse_block = ""
-        for _, h_name, block in split_into_horse_chunks(pp_text):
-            if h_name == name:
-                horse_block = block
-                break
+Cclass_vals = []
+Cform_vals = []
+for _, r in df_final_field.iterrows():
+    name = r["Horse"]
+    ped = pedigree_per_horse.get(name, {}) or {}
+    ang = angles_per_horse.get(name)
 
-        # Calculate comprehensive class rating
-        # NOW includes PP text for race class parser to properly understand race acronyms
-        comprehensive_class = calculate_comprehensive_class_rating(
-            today_purse=purse_val,
-            today_race_type=race_type_detected,
-            horse_block=horse_block,
-            pedigree=ped,
-            angles_df=ang if ang is not None else pd.DataFrame(),
-            pp_text=pp_text,  # NEW: Full PP for race analysis
-            distance_furlongs=distance_to_furlongs(distance_txt),  # NEW: Distance
-            surface_type=race_surface  # NEW: Surface type
-        )
+    # Get horse's PP block for analysis
+    horse_block = ""
+    for _, h_name, block in split_into_horse_chunks(pp_text):
+        if h_name == name:
+            horse_block = block
+            break
 
-        # Add pedigree/angle tweaks on top of class
-        tweak = _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
-        cclass_total = comprehensive_class + tweak
+    # Calculate comprehensive class rating
+    # NOW includes PP text for race class parser to properly understand race acronyms
+    comprehensive_class = calculate_comprehensive_class_rating(
+        today_purse=purse_val,
+        today_race_type=race_type_detected,
+        horse_block=horse_block,
+        pedigree=ped,
+        angles_df=ang if ang is not None else pd.DataFrame(),
+        pp_text=pp_text,  # NEW: Full PP for race analysis
+        distance_furlongs=distance_to_furlongs(distance_txt),  # NEW: Distance
+        surface_type=race_surface  # NEW: Surface type
+    )
 
-        # Calculate form cycle rating
-        form_rating = calculate_form_cycle_rating(
-            horse_block=horse_block,
-            pedigree=ped,
-            angles_df=ang if ang is not None else pd.DataFrame()
-        )
+    # Add pedigree/angle tweaks on top of class
+    tweak = _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
+    cclass_total = comprehensive_class + tweak
 
-        # Track bias style adjustments
-        style_adjustment = 0.0
-        horse_style = r.get('Style', 'NA')
+    # Calculate form cycle rating
+    form_rating = calculate_form_cycle_rating(
+        horse_block=horse_block,
+        pedigree=ped,
+        angles_df=ang if ang is not None else pd.DataFrame()
+    )
 
-        dist_bucket = distance_bucket(distance_txt)
-        track_cfg = TRACK_BIAS_PROFILES.get(canon_track, {}).get(race_surface, {}).get(dist_bucket, {})
-        runstyle_biases = track_cfg.get('runstyle', {})
+    # Track bias style adjustments
+    style_adjustment = 0.0
+    horse_style = r.get('Style', 'NA')
 
-        # Strong stalker track detected if S style has > 0.3 advantage
-        stalker_impact = runstyle_biases.get('S', 0.0)
-        early_speed_impact = runstyle_biases.get('E', 0.0)
+    dist_bucket = distance_bucket(distance_txt)
+    track_cfg = TRACK_BIAS_PROFILES.get(canon_track, {}).get(race_surface, {}).get(dist_bucket, {})
+    runstyle_biases = track_cfg.get('runstyle', {})
 
-        if stalker_impact > 0.3:  # Strong stalker-favoring track
-            # Apply penalties/bonuses based on horse's style vs track bias
-            if horse_style == 'E':
-                style_adjustment -= 1.5  # Heavy penalty for early speed
-            elif horse_style == 'E/P':
-                style_adjustment -= 0.8  # Moderate penalty
-            elif horse_style == 'S':
-                style_adjustment += 1.2  # Strong bonus for stalkers
-        elif early_speed_impact > 0.3:  # Speed-favoring track
-            if horse_style == 'E':
-                style_adjustment += 1.2  # Bonus for early speed
-            elif horse_style == 'S':
-                style_adjustment -= 0.8  # Penalty for closers
+    # Strong stalker track detected if S style has > 0.3 advantage
+    stalker_impact = runstyle_biases.get('S', 0.0)
+    early_speed_impact = runstyle_biases.get('E', 0.0)
 
-        form_rating += style_adjustment
+    if stalker_impact > 0.3:  # Strong stalker-favoring track
+        # Apply penalties/bonuses based on horse's style vs track bias
+        if horse_style == 'E':
+            style_adjustment -= 1.5  # Heavy penalty for early speed
+        elif horse_style == 'E/P':
+            style_adjustment -= 0.8  # Moderate penalty
+        elif horse_style == 'S':
+            style_adjustment += 1.2  # Strong bonus for stalkers
+    elif early_speed_impact > 0.3:  # Speed-favoring track
+        if horse_style == 'E':
+            style_adjustment += 1.2  # Bonus for early speed
+        elif horse_style == 'S':
+            style_adjustment -= 0.8  # Penalty for closers
 
-        Cclass_vals.append(round(cclass_total, 3))
-        Cform_vals.append(round(form_rating, 3))
+    form_rating += style_adjustment
 
-    df_final_field["Cclass"] = Cclass_vals
-    df_final_field["Cform"] = Cform_vals
+    Cclass_vals.append(round(cclass_total, 3))
+    Cform_vals.append(round(form_rating, 3))
+
+df_final_field["Cclass"] = Cclass_vals
+df_final_field["Cform"] = Cform_vals
 
 # ===================== B. Bias-Adjusted Ratings =====================
 
@@ -5552,12 +5536,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             # ENHANCED RACE QUALITY DETECTION (When Prime Power IS available)
             # ═══════════════════════════════════════════════════════════════════════
             # When PP is present, we can refine the race quality detection with purse details
-
-            # STEP 1: Extract detailed race metadata from PP text
-            race_metadata = extract_race_metadata_from_pp_text(pp_text)
-            purse_amount = race_metadata['purse_amount']
-            race_type_clean = race_metadata['race_type_clean']
-            detection_confidence = race_metadata['confidence']
+            # (Uses race_metadata already extracted above — no re-extraction needed)
 
             # STEP 2: Override/refine race_quality if we have better purse/type info
             if purse_amount >= 500000:
@@ -6375,8 +6354,36 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     if name_to_ml is None:
         name_to_ml = {}
     
-    # Initialize primary_probs_dict early to prevent UnboundLocalError
+    # --- GOLD STANDARD: Build probability dictionary with validation ---
+    # (Populated early so underlay/overlay detection works correctly)
     primary_probs_dict = {}
+    for horse in primary_df['Horse'].tolist():
+        horse_df = primary_df[primary_df['Horse'] == horse]
+        if horse_df.empty:
+            primary_probs_dict[horse] = 1.0 / max(len(primary_df), 1)
+            continue
+
+        prob_str = horse_df['Fair %'].iloc[0]
+        try:
+            # Handle multiple formats: "25.5%", "0.255", 25.5
+            if isinstance(prob_str, str):
+                prob = float(prob_str.strip('%').strip()) / (100.0 if '%' in str(prob_str) else 1.0)
+            else:
+                prob = float(prob_str)
+                if prob > 1.0:  # Assume percentage format
+                    prob = prob / 100.0
+
+            # VALIDATION: Probability bounds [0, 1]
+            prob = max(0.0, min(1.0, prob))
+        except BaseException:
+            prob = 1.0 / max(len(primary_df), 1)
+
+        primary_probs_dict[horse] = prob
+
+    # NORMALIZATION: Ensure probabilities sum to exactly 1.0
+    total_prob = sum(primary_probs_dict.values())
+    if total_prob > 0:
+        primary_probs_dict = {h: p / total_prob for h, p in primary_probs_dict.items()}
 
     # --- ELITE: Calculate Most Likely Finishing Order (Sequential Selection Algorithm) ---
     def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> List[Tuple[str, float]]:
@@ -6708,36 +6715,6 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B,C / B,C,D / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll)}\n"
         if field_size >= 7:  # Only suggest SH5 if 7+ runners
             blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll, nAll)}\n"
-
-    # --- GOLD STANDARD: Build probability dictionary with validation ---
-    primary_probs_dict = {}
-    for horse in primary_df['Horse'].tolist():
-        horse_df = primary_df[primary_df['Horse'] == horse]
-        if horse_df.empty:
-            primary_probs_dict[horse] = 1.0 / max(len(primary_df), 1)
-            continue
-
-        prob_str = horse_df['Fair %'].iloc[0]
-        try:
-            # Handle multiple formats: "25.5%", "0.255", 25.5
-            if isinstance(prob_str, str):
-                prob = float(prob_str.strip('%').strip()) / (100.0 if '%' in str(prob_str) else 1.0)
-            else:
-                prob = float(prob_str)
-                if prob > 1.0:  # Assume percentage format
-                    prob = prob / 100.0
-
-            # VALIDATION: Probability bounds [0, 1]
-            prob = max(0.0, min(1.0, prob))
-        except BaseException:
-            prob = 1.0 / max(len(primary_df), 1)
-
-        primary_probs_dict[horse] = prob
-
-    # NORMALIZATION: Ensure probabilities sum to exactly 1.0
-    total_prob = sum(primary_probs_dict.values())
-    if total_prob > 0:
-        primary_probs_dict = {h: p / total_prob for h, p in primary_probs_dict.items()}
 
     detailed_breakdown = build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=pp_text)
 
