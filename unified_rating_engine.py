@@ -819,8 +819,13 @@ class UnifiedRatingEngine:
                 for component in ['class', 'speed', 'form']:
                     if component in adjusted_components:
                         old_val = adjusted_components[component]
-                        adjusted_components[component] = old_val * multiplier
-                        logger.debug(f"    {component}: {old_val:.2f} → {adjusted_components[component]:.2f}")
+                        # Values are (mean, std) tuples from Bayesian pipeline
+                        if isinstance(old_val, tuple):
+                            adjusted_components[component] = (old_val[0] * multiplier, old_val[1])
+                            logger.debug(f"    {component}: {old_val[0]:.2f} → {adjusted_components[component][0]:.2f}")
+                        else:
+                            adjusted_components[component] = old_val * multiplier
+                            logger.debug(f"    {component}: {old_val:.2f} → {adjusted_components[component]:.2f}")
 
         return adjusted_components
 
