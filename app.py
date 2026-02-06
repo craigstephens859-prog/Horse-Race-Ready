@@ -2987,33 +2987,14 @@ def calculate_comprehensive_class_rating(
     today_class_weight = 0.0
     today_hierarchy_level = 0
 
-    # DEBUG: Show parser status
-    if not RACE_CLASS_PARSER_AVAILABLE:
-        st.error("❌ Race Class Parser NOT AVAILABLE - using legacy weights")
-    elif not pp_text:
-        st.warning("⚠️ No PP text provided - parser cannot run")
-
     if RACE_CLASS_PARSER_AVAILABLE and pp_text:
         try:
-            st.info("🔄 Attempting to parse race class...")
             race_class_data = parse_and_calculate_class(pp_text)
             today_class_weight = race_class_data['weight']['class_weight']
             today_hierarchy_level = race_class_data['hierarchy']['final_level']
 
-            # Log parsed race info for debugging
-            st.success(f"✅ Race Class Analysis: {race_class_data['summary']['class_type']} "
-                       f"(Level {today_hierarchy_level}, Weight {today_class_weight:.2f})")
-
-            # Show breakdown
-            st.caption(f"📊 Breakdown: Hierarchy={race_class_data['weight']['breakdown']['hierarchy_score']:.2f}, "
-                       f"Purse={race_class_data['weight']['breakdown']['purse_score']:.3f}, "
-                       f"Stakes={race_class_data['weight']['breakdown']['stakes_bonus']:.2f}")
-
         except Exception as e:
-            st.error(f"❌ Race class parser FAILED: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-            # Fall back to legacy method
+            # Fall back to legacy method silently
             pass
 
     # Race type hierarchy scoring (ENHANCED with race_class_parser data)
