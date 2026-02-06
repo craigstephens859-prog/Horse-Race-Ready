@@ -7511,9 +7511,14 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                         }
 
                         # Prepare horses data with ALL AVAILABLE FEATURES for maximum ML intelligence
+                        # CRITICAL: Sort by rating to compute correct predicted_rank
+                        _primary_sorted_for_save = primary_df.copy()
+                        _primary_sorted_for_save['_R_sort'] = pd.to_numeric(_primary_sorted_for_save['R'], errors='coerce')
+                        _primary_sorted_for_save = _primary_sorted_for_save.sort_values('_R_sort', ascending=False, na_position='last')
+
                         horses_data = []
-                        for idx, row in primary_df.iterrows():
-                            horse_name = str(row.get('Horse', f'Horse_{idx + 1}'))
+                        for rank_idx, (_, row) in enumerate(_primary_sorted_for_save.iterrows()):
+                            horse_name = str(row.get('Horse', f'Horse_{rank_idx + 1}'))
 
                             # Extract Fair % with percentage handling
                             fair_pct_raw = row.get('Fair %', 0.0)
@@ -7554,14 +7559,14 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                     angle_debut = 1.0
 
                             horse_dict = {
-                                'program_number': int(safe_float(name_to_post.get(horse_name, idx + 1), idx + 1)),
+                                'program_number': int(safe_float(name_to_post.get(horse_name, rank_idx + 1), rank_idx + 1)),
                                 'horse_name': horse_name,
-                                'post_position': int(safe_float(name_to_post.get(horse_name, idx + 1), idx + 1)),
+                                'post_position': int(safe_float(name_to_post.get(horse_name, rank_idx + 1), rank_idx + 1)),
                                 'morning_line_odds': safe_float(name_to_odds.get(horse_name, '99'), 99.0),
                                 'jockey': str(row.get('Jockey', '')),
                                 'trainer': str(row.get('Trainer', '')),
                                 'owner': str(row.get('Owner', '')),
-                                'running_style': str(row.get('E1_Style', 'P')),
+                                'running_style': str(row.get('Style', row.get('E1_Style', 'P'))),
                                 'prime_power': safe_float(row.get('Prime Power', 0.0)),
                                 'best_beyer': int(safe_float(row.get('Best Beyer', 0))),
                                 'last_beyer': int(safe_float(row.get('Last Beyer', 0))),
@@ -7570,16 +7575,19 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 'e2_pace': safe_float(row.get('E2', 0.0)),
                                 'late_pace': safe_float(row.get('Late', 0.0)),
                                 'days_since_last': int(safe_float(row.get('Days Since', 0))),
-                                'class_rating': safe_float(row.get('Class Rating', 0.0)),
-                                'form_rating': safe_float(row.get('Form Rating', 0.0)),
-                                'speed_rating': safe_float(row.get('Speed Rating', 0.0)),
-                                'pace_rating': safe_float(row.get('Pace Rating', 0.0)),
-                                'style_rating': safe_float(row.get('Style Rating', 0.0)),
-                                'post_rating': safe_float(row.get('Post Rating', 0.0)),
-                                'angles_total': safe_float(row.get('Angles Total', 0.0)),
+                                # CRITICAL FIX: Keys must match gold_database_manager.py expectations
+                                # AND column names must match primary_df columns (Cclass, Cform, etc.)
+                                # Previously: 'class_rating' + 'Class Rating' → double mismatch → all 0.0 → no learning
+                                'rating_class': safe_float(row.get('Cclass', 0.0)),
+                                'rating_form': safe_float(row.get('Cform', 0.0)),
+                                'rating_speed': safe_float(row.get('Cspeed', 0.0)),
+                                'rating_pace': safe_float(row.get('Cpace', 0.0)),
+                                'rating_style': safe_float(row.get('Cstyle', 0.0)),
+                                'rating_post': safe_float(row.get('Cpost', 0.0)),
+                                'rating_angles_total': safe_float(row.get('Arace', 0.0)),
                                 'rating_final': safe_float(row.get('R', 0.0)),
                                 'predicted_probability': fair_pct_value,
-                                'predicted_rank': int(idx + 1),
+                                'predicted_rank': int(rank_idx + 1),
                                 'fair_odds': safe_float(row.get('Fair Odds', 99.0), 99.0),
                                 # PhD enhancements if available
                                 'rating_confidence': safe_float(row.get('Confidence', 0.5), 0.5),
@@ -7593,8 +7601,8 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 'angle_work_pattern': angle_workout,
                                 'angle_connections': angle_connections,
                                 'angle_pedigree': safe_float(pedigree_data.get('sire_1st', 0.0)) / 100.0 if pedigree_data else 0.0,
-                                'angle_runstyle_bias': 1.0 if row.get('E1_Style') in ['E', 'EP'] else 0.0,
-                                'angle_post': safe_float(row.get('Post Rating', 0.0)),
+                                'angle_runstyle_bias': 1.0 if row.get('Style', row.get('E1_Style')) in ['E', 'EP', 'E/P'] else 0.0,
+                                'angle_post': safe_float(row.get('Cpost', 0.0)),
                                 # PEDIGREE FEATURES (critical for surface/distance/mud breeding)
                                 'pedigree_sire_awd': safe_float(pedigree_data.get('sire_awd', 7.0)) if pedigree_data else 7.0,
                                 'pedigree_sire_1st_pct': safe_float(pedigree_data.get('sire_1st', 0.0)) if pedigree_data else 0.0,
@@ -8374,95 +8382,80 @@ else:
                 
                 st.markdown("---")
                 
-                # Load calibration history
-                import os
-                import json
-                history_file = "calibration_history.json"
-                
-                if os.path.exists(history_file):
-                    with open(history_file, 'r') as f:
-                        calibration_history = json.load(f)
-                    
-                    if calibration_history:
+                # Load calibration history from DATABASE (not JSON file)
+                import json as _json_cal
+                try:
+                    _cal_conn = sqlite3.connect(gold_db.db_path)
+                    _cal_cursor = _cal_conn.cursor()
+                    _cal_cursor.execute("""
+                        SELECT calibration_timestamp, races_analyzed, winner_accuracy, 
+                               top3_accuracy, weights_json, improvements_json
+                        FROM calibration_history
+                        ORDER BY calibration_timestamp DESC
+                        LIMIT 20
+                    """)
+                    _cal_rows = _cal_cursor.fetchall()
+                    _cal_conn.close()
+
+                    if _cal_rows:
                         st.markdown("#### 📈 Recent Calibration Events")
-                        st.caption(f"Showing last {min(len(calibration_history), 20)} auto-calibration updates")
-                        
-                        # Create DataFrame from history
+                        st.caption(f"Showing last {len(_cal_rows)} auto-calibration updates from database")
+
                         history_records = []
-                        for event in calibration_history[-20:]:  # Last 20 events
+                        for cal_row in _cal_rows:
                             record = {
-                                'Timestamp': event.get('timestamp', 'N/A'),
-                                'Races Used': event.get('num_races', 0),
-                                'Winner Acc': f"{event.get('winner_accuracy', 0) * 100:.1f}%",
-                                'Avg Loss': f"{event.get('avg_loss', 0):.4f}",
+                                'Timestamp': cal_row[0] or 'N/A',
+                                'Races Used': cal_row[1] or 0,
+                                'Winner Acc': f"{(cal_row[2] or 0) * 100:.1f}%",
+                                'Top-3 Acc': f"{(cal_row[3] or 0) * 100:.1f}%",
                             }
-                            
-                            # Add weight changes
-                            weight_updates = event.get('weight_updates', {})
-                            for w_name in weight_names:
-                                if w_name in weight_updates:
-                                    delta = weight_updates[w_name]
-                                    record[f'{w_name.capitalize()} Δ'] = f"{delta:+.4f}"
-                            
+                            # Parse weight changes
+                            try:
+                                improvements = _json_cal.loads(cal_row[5]) if cal_row[5] else {}
+                                for w_name in weight_names:
+                                    if w_name in improvements and improvements[w_name] != 0:
+                                        record[f'{w_name.capitalize()} Δ'] = f"{improvements[w_name]:+.3f}"
+                            except Exception:
+                                pass
                             history_records.append(record)
-                        
+
                         if history_records:
                             history_df = pd.DataFrame(history_records)
                             st.dataframe(history_df, use_container_width=True, hide_index=True)
-                            
-                            # Show learning progress
+
+                            # Show learning progress metrics
                             st.markdown("#### 📊 Learning Progress")
-                            
-                            # Calculate total calibrations
-                            total_calibrations = len(calibration_history)
-                            recent_accuracy = calibration_history[-1].get('winner_accuracy', 0) * 100 if calibration_history else 0
-                            
+                            total_calibrations = len(_cal_rows)
+                            latest_winner_acc = (_cal_rows[0][2] or 0) * 100
+                            latest_top3_acc = (_cal_rows[0][3] or 0) * 100
+
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.metric(
-                                    "Total Calibrations",
-                                    total_calibrations,
-                                    help="Number of times the model has auto-adjusted"
-                                )
+                                st.metric("Total Calibrations", total_calibrations,
+                                          help="Number of times the model has auto-adjusted")
                             with col2:
-                                st.metric(
-                                    "Latest Winner Accuracy",
-                                    f"{recent_accuracy:.1f}%",
-                                    help="Most recent winner prediction accuracy"
-                                )
+                                st.metric("Latest Winner Accuracy", f"{latest_winner_acc:.1f}%",
+                                          help="Most recent winner prediction accuracy")
                             with col3:
-                                # Calculate average loss trend
-                                if len(calibration_history) >= 2:
-                                    recent_loss = calibration_history[-1].get('avg_loss', 0)
-                                    previous_loss = calibration_history[-2].get('avg_loss', 0)
-                                    loss_delta = recent_loss - previous_loss
-                                    st.metric(
-                                        "Loss Change",
-                                        f"{recent_loss:.4f}",
-                                        delta=f"{loss_delta:.4f}",
-                                        delta_color="inverse",
-                                        help="Lower is better - model is learning to minimize prediction error"
-                                    )
-                                else:
-                                    st.metric("Loss Change", "N/A", help="Need 2+ calibrations to show trend")
-                            
+                                st.metric("Latest Top-3 Accuracy", f"{latest_top3_acc:.1f}%",
+                                          help="Most recent top-3 prediction accuracy")
+
                             st.success("✅ **Auto-Calibration Active:** Model updates after every race result submission")
-                            
+
                             # Show weight evolution chart (if enough data)
-                            if len(calibration_history) >= 5:
+                            if len(_cal_rows) >= 5:
                                 st.markdown("#### 📉 Weight Evolution Over Time")
-                                
-                                # Extract weight history
                                 weight_history = {w: [] for w in weight_names}
                                 timestamps = []
-                                
-                                for event in calibration_history[-20:]:
-                                    timestamps.append(event.get('timestamp', ''))
-                                    weights = event.get('current_weights', {})
-                                    for w_name in weight_names:
-                                        weight_history[w_name].append(weights.get(w_name, 0))
-                                
-                                # Create line chart data
+                                for cal_row in reversed(_cal_rows):  # Oldest first for chart
+                                    timestamps.append(cal_row[0] or '')
+                                    try:
+                                        weights = _json_cal.loads(cal_row[4]) if cal_row[4] else {}
+                                        for w_name in weight_names:
+                                            weight_history[w_name].append(weights.get(w_name, 0))
+                                    except Exception:
+                                        for w_name in weight_names:
+                                            weight_history[w_name].append(0)
                                 chart_data = pd.DataFrame(weight_history, index=timestamps)
                                 st.line_chart(chart_data)
                                 st.caption("📌 Watch how weights adjust based on race outcomes - evidence of real-time learning!")
@@ -8470,9 +8463,9 @@ else:
                             st.info("📋 No calibration events recorded yet. Submit race results to trigger auto-learning!")
                     else:
                         st.info("📋 No calibration history yet. The model will auto-calibrate after you submit race results.")
-                else:
-                    st.info(f"📋 Calibration history file not found: `{history_file}`")
-                    st.caption("The system will create this file automatically after the first auto-calibration event.")
+                except Exception as _cal_err:
+                    st.warning(f"Could not load calibration history from database: {_cal_err}")
+                    st.info("📋 Calibration history will appear after your first race result submission.")
                 
             except Exception as e:
                 st.error(f"❌ Error loading calibration data: {str(e)}")
