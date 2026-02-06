@@ -1201,6 +1201,28 @@ class UnifiedRatingEngine:
             if all(f <= 3 for f in finishes):
                 rating += 0.5
 
+        # ═══════════════════════════════════════════════════════
+        # CRITICAL FIX: Handle horses with 1-2 races (not just 3+)
+        # Previously, horses with <3 finishes got ZERO form trend
+        # credit even if they won their last race
+        # ═══════════════════════════════════════════════════════
+        elif horse.recent_finishes and len(horse.recent_finishes) >= 1:
+            finishes = horse.recent_finishes[:5]
+
+            # 2-race trend
+            if len(finishes) >= 2 and finishes[0] < finishes[1]:
+                rating += 1.0  # Improving (slightly less than 3-race)
+
+            # Recent win bonus still applies!
+            if finishes[0] == 1:
+                rating += 3.0  # Slightly less than 3-race winner bonus
+                if len(finishes) >= 2 and finishes[1] == 1:
+                    rating += 4.0  # Back-to-back wins
+            elif finishes[0] in [2, 3]:
+                rating += 1.2  # Recent place/show
+            elif finishes[0] >= 6:
+                rating -= 0.5  # Poor last out
+
         # TRIP HANDICAPPING (using comprehensive data)
         if hasattr(horse, 'trip_comments') and horse.trip_comments:
             last_comment = horse.trip_comments[0] if horse.trip_comments else ""

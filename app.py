@@ -5011,11 +5011,25 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             "Cspeed": results_df_filtered.get('Cspeed', 0.0),
                             "Cclass": results_df_filtered.get('Cclass', 0.0),
                             "Cform": results_df_filtered.get('Cform', 0.0),
-                            "Atrack": results_df_filtered.get('A_Track', 0.0),  # Use actual track advantage
+                            "Atrack": 0.0,  # Placeholder - computed below
                             "Arace": results_df_filtered['Rating'],
                             "R": results_df_filtered['Rating'],
                             "Parsing_Confidence": results_df_filtered.get('Parsing_Confidence', avg_confidence)
                         })
+
+                        # ═══════════════════════════════════════════════════════
+                        # CRITICAL FIX: Populate Atrack from track bias profiles
+                        # Previously always 0.0 because unified engine doesn't
+                        # produce an A_Track column (bias is baked into cstyle/cpost)
+                        # but we still need the display column for the UI
+                        # ═══════════════════════════════════════════════════════
+                        for idx, row in unified_ratings.iterrows():
+                            style_val = _style_norm(str(row.get('Style', 'NA')))
+                            post_val = str(row.get('Post', ''))
+                            a_track = _get_track_bias_delta(
+                                track_name, surface_type, distance_txt, style_val, post_val
+                            )
+                            unified_ratings.at[idx, 'Atrack'] = a_track
 
                         # Add success message
                         scratched_count = len(results_df) - len(results_df_filtered)
@@ -5023,6 +5037,41 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%}) - {scratched_count} scratched horse(s) excluded")
                         else:
                             st.info(f"🎯 Using Unified Rating Engine (Elite Parser confidence: {avg_confidence:.1%})")
+
+                        # ═══════════════════════════════════════════════════════
+                        # CRITICAL FIX: Replace NaN/None ratings with ML-odds fallback
+                        # Without this, unparsed horses get NaN and corrupt A/B/C/D groups
+                        # ═══════════════════════════════════════════════════════
+                        for idx, row in unified_ratings.iterrows():
+                            rating_val = row.get('R')
+                            # Check if rating is NaN, None, or not a real number
+                            is_bad_rating = (
+                                rating_val is None 
+                                or (isinstance(rating_val, float) and (np.isnan(rating_val) or not np.isfinite(rating_val)))
+                                or (isinstance(rating_val, str) and rating_val.lower() == 'none')
+                            )
+                            if is_bad_rating:
+                                # Fallback: Use ML odds to generate a baseline rating
+                                # Lower odds = better horse = higher rating
+                                horse_name = row.get('Horse', '')
+                                ml_val = None
+                                for _, ff_row in df_final_field.iterrows():
+                                    if ff_row.get('Horse') == horse_name:
+                                        ml_val = ff_row.get('ML', '')
+                                        break
+                                try:
+                                    ml_dec = odds_to_decimal(str(ml_val)) if ml_val else 20.0
+                                except Exception:
+                                    ml_dec = 20.0
+                                # Convert: 5/2 (3.5 decimal) → rating ~2.5, 30/1 (31.0) → rating ~-1.0
+                                fallback_rating = round(3.0 - np.log(max(ml_dec, 1.1)), 2)
+                                unified_ratings.at[idx, 'R'] = fallback_rating
+                                unified_ratings.at[idx, 'Arace'] = fallback_rating
+                                # Zero out component columns so they display as 0.00 not None
+                                for col in ['Cstyle', 'Cpost', 'Cpace', 'Cspeed', 'Cclass', 'Cform', 'Atrack']:
+                                    if pd.isna(unified_ratings.at[idx, col]) or unified_ratings.at[idx, col] is None:
+                                        unified_ratings.at[idx, col] = 0.0
+                                logger.info(f"  → Fallback rating for {horse_name}: {fallback_rating} (ML={ml_val})")
 
                         # Continue to apply enhancements instead of returning early
                         df_styles = unified_ratings.copy()
@@ -6638,7 +6687,15 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     # --- 2. A/B/C/D Grouping Logic (with Odds Drift Gate) ---
     A_group, B_group, C_group, D_group = [], [], [], []
 
-    all_horses = primary_df['Horse'].tolist()
+    # ═══════════════════════════════════════════════════════
+    # CRITICAL FIX: Sort horses by RATING before grouping
+    # Previously used unsorted DataFrame order (= post order)
+    # which made post #1 the A-Group key regardless of rating
+    # ═══════════════════════════════════════════════════════
+    _sorted_for_groups = primary_df.copy()
+    _sorted_for_groups['_R_numeric'] = pd.to_numeric(_sorted_for_groups['R'], errors='coerce')
+    _sorted_for_groups = _sorted_for_groups.sort_values('_R_numeric', ascending=False, na_position='last')
+    all_horses = _sorted_for_groups['Horse'].tolist()
     pos_ev_horses = set(df_ol[df_ol["EV per $1"] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
 
     # ═══════════════════════════════════════════════════════════════
@@ -6652,8 +6709,22 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             if h.get('ratio', 1.0) > 2.0:  # 2x+ drift = blocked from A-Group
                 blocked_from_A.add(h['name'])
     
-    # Filter out blocked horses from A-group consideration
-    eligible_for_A = [h for h in all_horses if h not in blocked_from_A]
+    # Filter out blocked horses AND NaN-rated horses from A-group consideration
+    # CRITICAL FIX: Never promote a NaN-rated horse to A-Group
+    def _has_valid_rating(horse_name: str) -> bool:
+        """Check if a horse has a valid (non-NaN, non-None) rating."""
+        rows = primary_df[primary_df['Horse'] == horse_name]
+        if rows.empty:
+            return False
+        r_val = rows['R'].iloc[0]
+        if r_val is None:
+            return False
+        try:
+            return np.isfinite(float(r_val))
+        except (ValueError, TypeError):
+            return False
+
+    eligible_for_A = [h for h in all_horses if h not in blocked_from_A and _has_valid_rating(h)]
 
     if strategy_profile == "Confident":
         A_group = [eligible_for_A[0]] if eligible_for_A else [all_horses[0]] if all_horses else []
@@ -6661,8 +6732,13 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             second_horse = eligible_for_A[1]
             first_rating = primary_df[primary_df['Horse'] == eligible_for_A[0]]['R'].iloc[0] if eligible_for_A else 0
             second_rating = primary_df[primary_df['Horse'] == second_horse]['R'].iloc[0]
-            if second_rating > (first_rating * 0.90):  # Only add #2 if very close
-                A_group.append(second_horse)
+            try:
+                first_r = float(first_rating) if first_rating is not None else 0
+                second_r = float(second_rating) if second_rating is not None else 0
+                if second_r > (first_r * 0.90):  # Only add #2 if very close
+                    A_group.append(second_horse)
+            except (ValueError, TypeError):
+                pass  # Skip adding second horse if ratings are invalid
     else:  # Value Hunter - Prioritize top pick + overlays (excluding blocked horses)
         eligible_overlays = pos_ev_horses - blocked_from_A
         A_group = list(set([eligible_for_A[0]] if eligible_for_A else []) | eligible_overlays)
