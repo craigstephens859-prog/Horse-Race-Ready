@@ -39,19 +39,123 @@ class GoldHighIQDatabase:
         self._init_schema()
     
     def _init_schema(self):
-        """Initialize database schema from SQL file."""
-        with open("gold_database_schema.sql", "r", encoding="utf-8") as f:
-            schema_sql = f.read()
-        
+        """Initialize database schema – robust to pre-existing tables with
+        different column layouts (e.g. gold_high_iq created by an older
+        helper script).  Each DDL statement is executed independently so
+        one failure does not block creation of later tables / views."""
+        import os
+
+        schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "gold_database_schema.sql")
+        try:
+            with open(schema_path, "r", encoding="utf-8") as f:
+                schema_sql = f.read()
+        except FileNotFoundError:
+            logger.warning("gold_database_schema.sql not found – using inline fallback")
+            schema_sql = ""
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        # Execute schema (multiple statements)
-        cursor.executescript(schema_sql)
-        
+
+        # ---------- execute the SQL file, statement-by-statement ----------
+        if schema_sql:
+            # Split on ';' and run each independently
+            for stmt in schema_sql.split(';'):
+                stmt = stmt.strip()
+                if not stmt:
+                    continue
+                try:
+                    cursor.execute(stmt)
+                except Exception as stmt_err:
+                    # Log but continue – e.g. index on a column that doesn't
+                    # exist in an older table layout is non-fatal.
+                    logger.debug(f"Schema stmt skipped: {stmt_err}")
+
+        # ---------- guarantee critical tables exist (inline fallback) -----
+        critical_tables = {
+            "races_analyzed": """
+                CREATE TABLE IF NOT EXISTS races_analyzed (
+                    race_id TEXT PRIMARY KEY,
+                    track_code TEXT NOT NULL,
+                    race_date TEXT NOT NULL,
+                    race_number INTEGER NOT NULL,
+                    race_type TEXT, surface TEXT, distance TEXT,
+                    track_condition TEXT, purse REAL, field_size INTEGER,
+                    pp_text_raw TEXT,
+                    analyzed_timestamp TEXT NOT NULL,
+                    UNIQUE(track_code, race_date, race_number)
+                )""",
+            "horses_analyzed": """
+                CREATE TABLE IF NOT EXISTS horses_analyzed (
+                    horse_id TEXT PRIMARY KEY,
+                    race_id TEXT NOT NULL,
+                    program_number INTEGER NOT NULL,
+                    horse_name TEXT NOT NULL,
+                    post_position INTEGER,
+                    morning_line_odds REAL,
+                    jockey TEXT, trainer TEXT, owner TEXT,
+                    weight REAL, medication TEXT, equipment TEXT,
+                    running_style TEXT, prime_power REAL,
+                    best_beyer INTEGER, last_beyer INTEGER, avg_beyer_3 REAL,
+                    e1_pace REAL, e2_pace REAL, late_pace REAL,
+                    days_since_last INTEGER, starts_lifetime INTEGER,
+                    wins_lifetime INTEGER, win_pct REAL,
+                    earnings_lifetime REAL, class_rating REAL,
+                    angle_early_speed REAL, angle_class REAL,
+                    angle_recency REAL, angle_work_pattern REAL,
+                    angle_connections REAL, angle_pedigree REAL,
+                    angle_runstyle_bias REAL, angle_post REAL,
+                    rating_class REAL, rating_form REAL,
+                    rating_speed REAL, rating_pace REAL,
+                    rating_style REAL, rating_post REAL,
+                    rating_angles_total REAL, rating_tier2_bonus REAL,
+                    rating_final REAL, rating_confidence REAL,
+                    form_decay_score REAL, pace_esp_score REAL,
+                    mud_adjustment REAL,
+                    predicted_probability REAL NOT NULL DEFAULT 0,
+                    predicted_rank INTEGER, fair_odds REAL,
+                    FOREIGN KEY (race_id) REFERENCES races_analyzed(race_id)
+                )""",
+            "race_results_summary": """
+                CREATE TABLE IF NOT EXISTS race_results_summary (
+                    race_id TEXT PRIMARY KEY,
+                    winner_name TEXT, second_name TEXT,
+                    third_name TEXT, fourth_name TEXT, fifth_name TEXT,
+                    top1_predicted_correctly BOOLEAN,
+                    top3_predicted_correctly INTEGER,
+                    top5_predicted_correctly INTEGER,
+                    winner_predicted_odds REAL,
+                    winner_actual_payout REAL,
+                    roi_if_bet_on_predicted_winner REAL,
+                    results_complete_timestamp TEXT NOT NULL,
+                    FOREIGN KEY (race_id) REFERENCES races_analyzed(race_id)
+                )""",
+        }
+        for tbl_name, ddl in critical_tables.items():
+            try:
+                cursor.execute(ddl)
+            except Exception as tbl_err:
+                logger.warning(f"Could not ensure table {tbl_name}: {tbl_err}")
+
+        # ---------- guarantee the v_pending_races view -------------------
+        try:
+            cursor.execute("""
+                CREATE VIEW IF NOT EXISTS v_pending_races AS
+                SELECT ra.race_id, ra.track_code, ra.race_date,
+                       ra.race_number, ra.field_size
+                FROM races_analyzed ra
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM race_results_summary rs
+                    WHERE rs.race_id = ra.race_id
+                )
+                ORDER BY ra.race_date DESC, ra.race_number
+            """)
+        except Exception:
+            # View may already exist with different definition; that's OK
+            pass
+
         conn.commit()
         conn.close()
-        
         logger.info(f"✅ Database initialized: {self.db_path}")
     
     def save_analyzed_race(
@@ -199,22 +303,45 @@ class GoldHighIQDatabase:
     def get_pending_races(self, limit: int = 20) -> List[Tuple]:
         """
         Get races that have been analyzed but results not entered yet.
-        
+
         Returns:
             List of tuples: (race_id, track, date, race_num, field_size)
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5)
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT race_id, track_code, race_date, race_number, field_size
-            FROM v_pending_races
-            LIMIT ?
-        """, (limit,))
-        
-        pending = cursor.fetchall()
+
+        pending: list = []
+
+        # Strategy 1: use the v_pending_races view (preferred)
+        try:
+            cursor.execute("""
+                SELECT race_id, track_code, race_date, race_number, field_size
+                FROM v_pending_races
+                LIMIT ?
+            """, (limit,))
+            pending = cursor.fetchall()
+        except Exception:
+            pass
+
+        # Strategy 2: direct query against races_analyzed (skip view)
+        if not pending:
+            try:
+                cursor.execute("""
+                    SELECT ra.race_id, ra.track_code, ra.race_date,
+                           ra.race_number, ra.field_size
+                    FROM races_analyzed ra
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM race_results_summary rs
+                        WHERE rs.race_id = ra.race_id
+                    )
+                    ORDER BY ra.race_date DESC, ra.race_number
+                    LIMIT ?
+                """, (limit,))
+                pending = cursor.fetchall()
+            except Exception:
+                pass
+
         conn.close()
-        
         return pending
     
     def get_horses_for_race(self, race_id: str) -> List[Dict]:
@@ -251,25 +378,44 @@ class GoldHighIQDatabase:
     def submit_race_results(
         self,
         race_id: str,
-        finish_order_programs: List[int]
+        finish_order_programs: List[int],
+        horses_ui: Optional[List[Dict]] = None
     ) -> bool:
         """
         Submit actual race results (top 4 finish positions).
-        
+
         Args:
             race_id: Race identifier
             finish_order_programs: List of program numbers [1st, 2nd, 3rd, 4th]
-        
+            horses_ui: Optional list of horse dicts from the UI (fallback when
+                       horses_analyzed table is empty for this race)
+
         Returns:
             True if successful
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=10)
             cursor = conn.cursor()
-            
-            # Get all horses for this race
+
+            # ------ ensure race_results_summary table exists ------
             cursor.execute("""
-                SELECT 
+                CREATE TABLE IF NOT EXISTS race_results_summary (
+                    race_id TEXT PRIMARY KEY,
+                    winner_name TEXT, second_name TEXT,
+                    third_name TEXT, fourth_name TEXT, fifth_name TEXT,
+                    top1_predicted_correctly BOOLEAN,
+                    top3_predicted_correctly INTEGER,
+                    top5_predicted_correctly INTEGER,
+                    winner_predicted_odds REAL,
+                    winner_actual_payout REAL,
+                    roi_if_bet_on_predicted_winner REAL,
+                    results_complete_timestamp TEXT NOT NULL
+                )
+            """)
+
+            # ------ load horse data from horses_analyzed ----------
+            cursor.execute("""
+                SELECT
                     horse_id, program_number, horse_name, post_position,
                     rating_final, predicted_probability, predicted_rank,
                     rating_class, rating_form, rating_speed, rating_pace,
@@ -280,112 +426,175 @@ class GoldHighIQDatabase:
                 FROM horses_analyzed
                 WHERE race_id = ?
             """, (race_id,))
-            
-            all_horses = cursor.fetchall()
-            horse_dict = {row[1]: row for row in all_horses}  # program_number -> row
-            
-            # Insert results into gold_high_iq table (handles top 4 or top 5)
+
+            all_horses_rows = cursor.fetchall()
+            horse_dict = {row[1]: row for row in all_horses_rows}
+
+            # ------ fallback: build horse_dict from UI data -------
+            ui_dict: Dict[int, Dict] = {}
+            if horses_ui:
+                for h in horses_ui:
+                    pn = int(h.get('program_number', h.get('post_position', 0)))
+                    ui_dict[pn] = h
+
+            # Choose a name-lookup helper that works with either source
+            def _horse_name(prog: int) -> str:
+                if prog in horse_dict:
+                    return horse_dict[prog][2]
+                if prog in ui_dict:
+                    return ui_dict[prog].get('horse_name', f'Horse #{prog}')
+                return f'Horse #{prog}'
+
+            # ------ detect which gold_high_iq schema we have ------
+            cursor.execute("PRAGMA table_info(gold_high_iq)")
+            gold_cols = {row[1] for row in cursor.fetchall()}
+            uses_new_schema = 'result_id' in gold_cols  # schema from gold_database_schema.sql
+            uses_old_schema = 'track' in gold_cols and 'id' in gold_cols
+
+            # ------ insert per-horse results ----------------------
             for actual_position, program_num in enumerate(finish_order_programs[:4], 1):
-                if program_num not in horse_dict:
-                    logger.warning(f"Program #{program_num} not found in race {race_id}")
-                    continue
-                
-                horse_row = horse_dict[program_num]
-                horse_id = horse_row[0]
-                predicted_rank = horse_row[6]
-                
-                # Calculate metrics
-                prediction_error = abs(predicted_rank - actual_position)
-                was_top4_correct = (predicted_rank <= 4 and actual_position <= 4)
-                
-                # Build features JSON
-                features = {
-                    'rating_class': horse_row[7],
-                    'rating_form': horse_row[8],
-                    'rating_speed': horse_row[9],
-                    'rating_pace': horse_row[10],
-                    'rating_style': horse_row[11],
-                    'rating_post': horse_row[12],
-                    'rating_angles_total': horse_row[13],
-                    'rating_confidence': horse_row[14],
-                    'form_decay_score': horse_row[15],
-                    'pace_esp_score': horse_row[16],
-                    'angle_early_speed': horse_row[17],
-                    'angle_class': horse_row[18],
-                    'angle_recency': horse_row[19],
-                    'prime_power': horse_row[20],
-                    'best_beyer': horse_row[21],
-                    'running_style': horse_row[22]
-                }
-                
-                result_id = f"{race_id}_{program_num}"
-                
-                cursor.execute("""
-                    INSERT OR REPLACE INTO gold_high_iq
-                    (result_id, race_id, horse_id, actual_finish_position,
-                     program_number, horse_name, post_position, rating_final,
-                     predicted_probability, predicted_rank, features_json,
-                     prediction_error, was_top5_correct, result_entered_timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    result_id, race_id, horse_id, actual_position,
-                    program_num, horse_row[2], horse_row[3], horse_row[4],
-                    horse_row[5], predicted_rank, json.dumps(features),
-                    prediction_error, was_top4_correct,
-                    datetime.now().isoformat()
-                ))
-            
-            # Update race_results_summary
-            winner_name = horse_dict[finish_order_programs[0]][2] if finish_order_programs[0] in horse_dict else 'Unknown'
-            
-            # Calculate accuracy metrics
-            predicted_top4 = sorted(all_horses, key=lambda x: x[6])[:4]  # Sort by predicted_rank
-            predicted_top4_programs = [h[1] for h in predicted_top4]
-            
-            top1_correct = (predicted_top4_programs[0] == finish_order_programs[0])
-            top3_correct_count = len(set(predicted_top4_programs[:3]) & set(finish_order_programs[:3]))
-            top4_correct_count = len(set(predicted_top4_programs[:4]) & set(finish_order_programs[:4]))
-            
-            # Get horse names safely (handle case where program might not be in dict)
-            def safe_horse_name(programs, idx):
-                if idx < len(programs) and programs[idx] in horse_dict:
-                    return horse_dict[programs[idx]][2]
-                return 'Unknown'
-            
+                if uses_new_schema and program_num in horse_dict:
+                    # New schema path (result_id TEXT PRIMARY KEY)
+                    horse_row = horse_dict[program_num]
+                    horse_id = horse_row[0]
+                    predicted_rank = horse_row[6] or 99
+                    prediction_error = abs(predicted_rank - actual_position)
+                    was_top4_correct = (predicted_rank <= 4 and actual_position <= 4)
+
+                    features = {
+                        'rating_class': horse_row[7],
+                        'rating_form': horse_row[8],
+                        'rating_speed': horse_row[9],
+                        'rating_pace': horse_row[10],
+                        'rating_style': horse_row[11],
+                        'rating_post': horse_row[12],
+                        'rating_angles_total': horse_row[13],
+                        'rating_confidence': horse_row[14],
+                        'form_decay_score': horse_row[15],
+                        'pace_esp_score': horse_row[16],
+                        'angle_early_speed': horse_row[17],
+                        'angle_class': horse_row[18],
+                        'angle_recency': horse_row[19],
+                        'prime_power': horse_row[20],
+                        'best_beyer': horse_row[21],
+                        'running_style': horse_row[22],
+                    }
+                    result_id = f"{race_id}_{program_num}"
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO gold_high_iq
+                        (result_id, race_id, horse_id, actual_finish_position,
+                         program_number, horse_name, post_position, rating_final,
+                         predicted_probability, predicted_rank, features_json,
+                         prediction_error, was_top5_correct,
+                         result_entered_timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        result_id, race_id, horse_id, actual_position,
+                        program_num, horse_row[2], horse_row[3], horse_row[4],
+                        horse_row[5], predicted_rank, json.dumps(features),
+                        prediction_error, was_top4_correct,
+                        datetime.now().isoformat(),
+                    ))
+
+                elif uses_old_schema:
+                    # Old schema path (id INTEGER PRIMARY KEY AUTOINCREMENT)
+                    h = ui_dict.get(program_num, {}) if ui_dict else {}
+                    db_h = horse_dict.get(program_num)
+                    name = _horse_name(program_num)
+                    predicted_rank = (db_h[6] if db_h else
+                                      int(h.get('predicted_rank', 99)))
+                    prediction_error = abs(predicted_rank - actual_position)
+
+                    # Parse race_id components (TRACK_YYYYMMDD_R#)
+                    parts = race_id.rsplit('_', 2)
+                    track_code = parts[0] if len(parts) >= 3 else 'UNK'
+                    r_date = parts[1] if len(parts) >= 3 else ''
+                    r_num = parts[2].replace('R', '') if len(parts) >= 3 else '0'
+
+                    cursor.execute("""
+                        INSERT INTO gold_high_iq
+                        (race_id, track, race_num, race_date,
+                         horse_name, program_number,
+                         actual_finish_position, predicted_finish_position,
+                         prediction_error, post_position, field_size,
+                         prime_power, running_style, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        race_id, track_code, int(r_num) if r_num.isdigit() else 0,
+                        r_date, name, program_num,
+                        actual_position, predicted_rank,
+                        prediction_error,
+                        int(h.get('post_position', 0)),
+                        int(h.get('field_size', len(ui_dict))),
+                        float(h.get('prime_power', 0)),
+                        h.get('running_style', ''),
+                        datetime.now().isoformat(),
+                    ))
+
+                else:
+                    logger.warning(
+                        f"Program #{program_num} not found – "
+                        f"no matching schema or horse data")
+
+            # ------ race_results_summary row ----------------------
+            # Compute basic accuracy
+            predicted_top4_programs: List[int] = []
+            if horse_dict:
+                predicted_top4 = sorted(
+                    all_horses_rows, key=lambda x: (x[6] or 99))[:4]
+                predicted_top4_programs = [h[1] for h in predicted_top4]
+            elif ui_dict:
+                # Sort UI horses by predicted_rank
+                sorted_ui = sorted(
+                    ui_dict.values(),
+                    key=lambda h: int(h.get('predicted_rank', 99)))[:4]
+                predicted_top4_programs = [
+                    int(h.get('program_number', 0)) for h in sorted_ui]
+
+            top1_correct = (predicted_top4_programs[0] == finish_order_programs[0]
+                            if predicted_top4_programs else False)
+            top3_hit = (len(set(predicted_top4_programs[:3])
+                            & set(finish_order_programs[:3]))
+                        if predicted_top4_programs else 0)
+            top4_hit = (len(set(predicted_top4_programs[:4])
+                            & set(finish_order_programs[:4]))
+                        if predicted_top4_programs else 0)
+
             cursor.execute("""
                 INSERT OR REPLACE INTO race_results_summary
-                (race_id, winner_name, second_name, third_name, fourth_name, fifth_name,
-                 top1_predicted_correctly, top3_predicted_correctly, top5_predicted_correctly,
-                 results_complete_timestamp)
+                (race_id, winner_name, second_name, third_name,
+                 fourth_name, fifth_name,
+                 top1_predicted_correctly, top3_predicted_correctly,
+                 top5_predicted_correctly, results_complete_timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 race_id,
-                safe_horse_name(finish_order_programs, 0),
-                safe_horse_name(finish_order_programs, 1),
-                safe_horse_name(finish_order_programs, 2),
-                safe_horse_name(finish_order_programs, 3),
-                'N/A',  # 5th place not required anymore
+                _horse_name(finish_order_programs[0]),
+                _horse_name(finish_order_programs[1]) if len(finish_order_programs) > 1 else 'N/A',
+                _horse_name(finish_order_programs[2]) if len(finish_order_programs) > 2 else 'N/A',
+                _horse_name(finish_order_programs[3]) if len(finish_order_programs) > 3 else 'N/A',
+                'N/A',
                 top1_correct,
-                top3_correct_count,
-                top4_correct_count,  # Using top4 instead of top5
-                datetime.now().isoformat()
+                top3_hit,
+                top4_hit,
+                datetime.now().isoformat(),
             ))
-            
+
             conn.commit()
             conn.close()
-            
-            logger.info(f"✅ Results submitted for {race_id} | Winner: {winner_name}")
+
+            logger.info(f"✅ Results submitted for {race_id} | "
+                        f"Winner: {_horse_name(finish_order_programs[0])}")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Error submitting results for {race_id}: {e}")
             import traceback
             traceback.print_exc()
-            # ROLLBACK ON ERROR - ensures database integrity
             try:
                 conn.rollback()
                 conn.close()
-            except:
+            except Exception:
                 pass
             return False
     
@@ -449,30 +658,34 @@ class GoldHighIQDatabase:
     def get_accuracy_stats(self) -> Dict:
         """
         Get overall prediction accuracy statistics.
-        
+
         Returns:
             Dict with accuracy metrics
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5)
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT 
-                COUNT(DISTINCT race_id) as total_races,
-                AVG(CASE WHEN top1_predicted_correctly THEN 1 ELSE 0 END) as winner_accuracy,
-                AVG(top3_predicted_correctly) / 3.0 as top3_accuracy,
-                AVG(top5_predicted_correctly) / 5.0 as top5_accuracy
-            FROM race_results_summary
-        """)
-        
-        stats = cursor.fetchone()
+
+        try:
+            cursor.execute("""
+                SELECT
+                    COUNT(DISTINCT race_id) as total_races,
+                    AVG(CASE WHEN top1_predicted_correctly THEN 1 ELSE 0 END) as winner_accuracy,
+                    AVG(top3_predicted_correctly) / 3.0 as top3_accuracy,
+                    AVG(COALESCE(top5_predicted_correctly, 0)) / 5.0 as top5_accuracy
+                FROM race_results_summary
+            """)
+            stats = cursor.fetchone()
+        except Exception:
+            # Table may not exist yet
+            stats = (0, 0.0, 0.0, 0.0)
+
         conn.close()
-        
+
         return {
             'total_races': stats[0] or 0,
             'winner_accuracy': stats[1] or 0.0,
             'top3_accuracy': stats[2] or 0.0,
-            'top5_accuracy': stats[3] or 0.0
+            'top5_accuracy': stats[3] or 0.0,
         }
     
     def log_retraining(

@@ -7812,8 +7812,6 @@ else:
 
                         # Enter top 4
                         st.markdown("---")
-                        st.markdown("### 🏆 Enter Actual Top 4 Finishers")
-                        st.caption("Enter program numbers separated by commas and press ENTER to auto-save")
 
                         # Get horse data for validation and display
                         # First try to use Section A data from session state (most accurate)
@@ -7840,20 +7838,21 @@ else:
 
                         # ========== SIMPLIFIED TOP 4 ENTRY FLOW ==========
                         st.markdown("#### 🏆 Enter Actual Top 4 Finishers")
-                        st.caption("Enter program numbers separated by commas and press ENTER to auto-save")
-                        
-                        # Use a unique key for this race's input state
-                        input_key = f"finish_input_{race_id}"
-                        
-                        # Text input for finish order (TOP 4 only)
-                        finish_input = st.text_input(
-                            "Finishing order (1st through 4th) - Press ENTER to save",
-                            placeholder="Example: 8,5,6,9",
-                            key=input_key,
-                            help="Type the program numbers in order from 1st to 4th, separated by commas")
+                        st.caption("Enter program numbers separated by commas and press ENTER to save")
 
-                        # Process the input if provided
-                        if finish_input and finish_input.strip():
+                        # Use st.form so pressing ENTER submits (saves) in one
+                        # step without Streamlit re-running and losing tab focus.
+                        form_key = f"results_form_{race_id}"
+                        with st.form(key=form_key):
+                            finish_input = st.text_input(
+                                "Finishing order (1st through 4th) - Press ENTER to save",
+                                placeholder="Example: 8,5,6,9",
+                                help="Type the program numbers in order from 1st to 4th, separated by commas")
+
+                            submitted = st.form_submit_button("💾 Save Results", type="primary")
+
+                        # Process the input AFTER form submission
+                        if submitted and finish_input and finish_input.strip():
                             finish_order = []
 
                             try:
@@ -7866,7 +7865,7 @@ else:
                                     st.error(f"❌ Need 4 horses, only got {len(finish_order)}")
                                     finish_order = []
                                 elif len(finish_order) > 4:
-                                    st.warning(f"⚠️ Using first 4 horses")
+                                    st.warning("⚠️ Using first 4 horses")
                                     finish_order = finish_order[:4]
 
                                 # Check for duplicates
@@ -7879,8 +7878,8 @@ else:
                                     invalid = [x for x in finish_order if x not in all_known_programs and x > max_program + 2]
                                     if invalid:
                                         st.warning(f"⚠️ Program numbers {invalid} not in parsed data - will allow anyway")
-                                
-                                # If we have valid input, show preview and save button
+
+                                # If we have valid input, save immediately
                                 if finish_order and len(finish_order) >= 4:
                                     # Show preview
                                     preview_parts = []
@@ -7890,93 +7889,108 @@ else:
                                         preview_parts.append(f"{medals[i]} #{pos} {horse_name}")
                                     st.success(" → ".join(preview_parts))
 
-                                    # Save button
-                                    if st.button("💾 Save Results", key=f"save_btn_{race_id}", type="primary"):
-                                        with st.spinner("Saving to database..."):
-                                            try:
-                                                # Save results (using top 4)
-                                                success = gold_db.submit_race_results(
-                                                    race_id=race_id,
-                                                    finish_order_programs=finish_order[:4]
-                                                )
+                                    # Save immediately on form submit
+                                    with st.spinner("Saving to database..."):
+                                        try:
+                                            # Build UI horse data as fallback for submit
+                                            horses_ui_data = []
+                                            for h in horses:
+                                                horses_ui_data.append({
+                                                    'program_number': h.get('program_number', 0),
+                                                    'horse_name': h.get('horse_name', 'Unknown'),
+                                                    'post_position': h.get('post_position', 0),
+                                                    'predicted_rank': h.get('predicted_rank', 99),
+                                                    'predicted_probability': h.get('predicted_probability', 0),
+                                                    'rating_final': h.get('rating_final', 0),
+                                                    'prime_power': h.get('prime_power', 0),
+                                                    'running_style': h.get('running_style', ''),
+                                                    'field_size': field_size,
+                                                })
 
-                                                if success:
-                                                    # Store success info in session state
-                                                    st.session_state['last_save_success'] = True
-                                                    st.session_state['last_save_race_id'] = race_id
-                                                    st.session_state['last_save_winner'] = horse_names_dict.get(finish_order[0], f'Horse #{finish_order[0]}')
-                                                    
-                                                    # Mark this race as completed to remove from pending list
-                                                    st.session_state[f'race_completed_{race_id}'] = True
+                                            # Save results (using top 4) with UI fallback data
+                                            success = gold_db.submit_race_results(
+                                                race_id=race_id,
+                                                finish_order_programs=finish_order[:4],
+                                                horses_ui=horses_ui_data
+                                            )
 
-                                                    # Check if we predicted correctly
-                                                    predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
-                                                    predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
-                                                    st.session_state['last_save_predicted'] = predicted_winner
+                                            if success:
+                                                # Store success info in session state
+                                                st.session_state['last_save_success'] = True
+                                                st.session_state['last_save_race_id'] = race_id
+                                                st.session_state['last_save_winner'] = horse_names_dict.get(finish_order[0], f'Horse #{finish_order[0]}')
 
-                                                    st.success(f"✅ Results saved! Winner: #{finish_order[0]} {horse_names_dict.get(finish_order[0], '')}")
-                                                    st.balloons()
+                                                # Mark this race as completed to remove from pending list
+                                                st.session_state[f'race_completed_{race_id}'] = True
 
-                                                    # AUTO-CALIBRATION v2: Learn from result with persistence
-                                                    try:
-                                                        if ADAPTIVE_LEARNING_AVAILABLE:
-                                                            calibration_result = auto_calibrate_on_result_submission(gold_db.db_path)
-                                                            if calibration_result.get('status') != 'skipped':
-                                                                accuracy = calibration_result.get('winner_accuracy', 0) * 100
-                                                                top3_acc = calibration_result.get('top3_accuracy', 0) * 100
-                                                                st.info(f"🧠 Model learned! Winner: {accuracy:.0f}% | Top-3: {top3_acc:.0f}%")
-                                                    except Exception as cal_err:
-                                                        logger.warning(f"Auto-calibration failed: {cal_err}")
+                                                # Check if we predicted correctly
+                                                predicted_winner_row = horses_df[horses_df['predicted_rank'] == 1]
+                                                predicted_winner = predicted_winner_row['horse_name'].values[0] if not predicted_winner_row.empty else 'Unknown'
+                                                st.session_state['last_save_predicted'] = predicted_winner
 
-                                                    # INTELLIGENT LEARNING: High-IQ pattern analysis
-                                                    try:
-                                                        if INTELLIGENT_LEARNING_AVAILABLE and analyze_and_learn_from_result:
-                                                            predictions_list = []
-                                                            for _, row in horses_df.iterrows():
-                                                                pred = {
-                                                                    'program_number': int(row.get('program_number', row.get('post', 0))),
-                                                                    'horse_name': row.get('horse_name', 'Unknown'),
-                                                                    'predicted_rank': int(row.get('predicted_rank', 99)),
-                                                                    'rating': float(row.get('rating', 0)),
-                                                                    'c_form': float(row.get('Cform', row.get('c_form', 0.5))),
-                                                                    'c_class': float(row.get('Cclass', row.get('c_class', 0.5))),
-                                                                    'pace_style': row.get('Pace_Style', row.get('pace_style', '')),
-                                                                    'last_fig': row.get('speed_last', row.get('last_fig', 0)),
-                                                                    'speed_figures': row.get('speed_figures', []),
-                                                                    'angles': row.get('angles', [])
-                                                                }
-                                                                predictions_list.append(pred)
-                                                            
-                                                            learning_result = analyze_and_learn_from_result(
-                                                                db_path=gold_db.db_path,
-                                                                race_id=race_id,
-                                                                predictions=predictions_list,
-                                                                actual_results=finish_order[:4]
-                                                            )
-                                                            
-                                                            if learning_result.get('insights_found', 0) > 0:
-                                                                insights = learning_result.get('insights', [])
-                                                                if insights:
-                                                                    st.info(f"🎓 Found {len(insights)} learning patterns")
-                                                                    st.session_state['last_learning_insights'] = insights
-                                                    except Exception as learn_err:
-                                                        logger.warning(f"Intelligent learning failed: {learn_err}")
+                                                st.success(f"✅ Results saved! Winner: #{finish_order[0]} {horse_names_dict.get(finish_order[0], '')}")
+                                                st.balloons()
 
-                                                    # Trigger rerun to refresh the page
-                                                    time.sleep(1)
-                                                    _safe_rerun()
-                                                else:
-                                                    st.error("❌ Failed to save to database")
+                                                # AUTO-CALIBRATION v2: Learn from result with persistence
+                                                try:
+                                                    if ADAPTIVE_LEARNING_AVAILABLE:
+                                                        calibration_result = auto_calibrate_on_result_submission(gold_db.db_path)
+                                                        if calibration_result.get('status') != 'skipped':
+                                                            accuracy = calibration_result.get('winner_accuracy', 0) * 100
+                                                            top3_acc = calibration_result.get('top3_accuracy', 0) * 100
+                                                            st.info(f"🧠 Model learned! Winner: {accuracy:.0f}% | Top-3: {top3_acc:.0f}%")
+                                                except Exception as cal_err:
+                                                    logger.warning(f"Auto-calibration failed: {cal_err}")
 
-                                            except Exception as e:
-                                                st.error(f"❌ Error: {str(e)}")
-                                                import traceback
-                                                st.code(traceback.format_exc(), language='python')
+                                                # INTELLIGENT LEARNING: High-IQ pattern analysis
+                                                try:
+                                                    if INTELLIGENT_LEARNING_AVAILABLE and analyze_and_learn_from_result:
+                                                        predictions_list = []
+                                                        for _, row in horses_df.iterrows():
+                                                            pred = {
+                                                                'program_number': int(row.get('program_number', row.get('post', 0))),
+                                                                'horse_name': row.get('horse_name', 'Unknown'),
+                                                                'predicted_rank': int(row.get('predicted_rank', 99)),
+                                                                'rating': float(row.get('rating', 0)),
+                                                                'c_form': float(row.get('Cform', row.get('c_form', 0.5))),
+                                                                'c_class': float(row.get('Cclass', row.get('c_class', 0.5))),
+                                                                'pace_style': row.get('Pace_Style', row.get('pace_style', '')),
+                                                                'last_fig': row.get('speed_last', row.get('last_fig', 0)),
+                                                                'speed_figures': row.get('speed_figures', []),
+                                                                'angles': row.get('angles', [])
+                                                            }
+                                                            predictions_list.append(pred)
+
+                                                        learning_result = analyze_and_learn_from_result(
+                                                            db_path=gold_db.db_path,
+                                                            race_id=race_id,
+                                                            predictions=predictions_list,
+                                                            actual_results=finish_order[:4]
+                                                        )
+
+                                                        if learning_result.get('insights_found', 0) > 0:
+                                                            insights = learning_result.get('insights', [])
+                                                            if insights:
+                                                                st.info(f"🎓 Found {len(insights)} learning patterns")
+                                                                st.session_state['last_learning_insights'] = insights
+                                                except Exception as learn_err:
+                                                    logger.warning(f"Intelligent learning failed: {learn_err}")
+
+                                                # Trigger rerun to refresh the page
+                                                time.sleep(1)
+                                                _safe_rerun()
+                                            else:
+                                                st.error("❌ Failed to save to database")
+
+                                        except Exception as e:
+                                            st.error(f"❌ Error: {str(e)}")
+                                            import traceback
+                                            st.code(traceback.format_exc(), language='python')
 
                             except ValueError:
                                 st.error("❌ Invalid format - use numbers separated by commas (e.g., 8,5,6,9)")
-                        else:
-                            st.info("💡 Example: Type **8,5,6,9** then press ENTER, then click Save Results")
+                        elif submitted:
+                            st.warning("⚠️ Please enter 4 program numbers separated by commas (e.g., 5,8,11,12)")
 
                         st.markdown("---")
 
