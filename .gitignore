@@ -269,7 +269,8 @@ secrets.toml
 *.db
 *.sqlite
 *.sqlite3
-gold_high_iq.db
+# EXCEPTION: gold_high_iq.db is needed for Render persistent disk seeding
+!gold_high_iq.db
 historical_racing_gold.db
 race_database.db
 
