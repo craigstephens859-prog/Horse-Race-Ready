@@ -569,6 +569,43 @@ for canon, toks in TRACK_ALIASES.items():
         _CANON_BY_TOKEN[t] = canon
 
 
+def _find_header_line(pp_text: str) -> str:
+    """
+    Find the actual BRISNET header line by skipping copyright/preamble lines.
+    
+    BRISNET PPs often start with lines like:
+      (c) Copyright 2026 BRIS...
+      (blank lines)
+    before the real header:
+      Ultimate PP's w/ QuickPlay Comments | Oaklawn Park | ...
+    or:
+      Ultimate PP's w/ QuickPlay Comments Oaklawn Park Alw 12500s ...
+    """
+    if not pp_text:
+        return ""
+    lines = pp_text.strip().split('\n')
+    for line in lines[:15]:  # Check first 15 lines for the header
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Skip copyright lines: "(c) Copyright", "©", "Copyright"
+        if stripped.startswith('(c)') or stripped.lower().startswith('copyright'):
+            continue
+        # Skip lines that are only special chars / very short garbage
+        if len(stripped) < 5:
+            continue
+        # Skip lines that look like disclaimers or legal boilerplate
+        if any(kw in stripped.lower() for kw in ['all rights reserved', 'unauthorized', 'license', 'brisnet.com/terms']):
+            continue
+        # This is the first real content line — use it as the header
+        return stripped
+    # Fallback: just use the first non-empty line
+    for line in lines:
+        if line.strip():
+            return line.strip()
+    return ""
+
+
 def parse_track_name_from_pp(pp_text: str) -> str:
     """
     Parse track name from BRISNET PP text.
@@ -643,8 +680,8 @@ def parse_brisnet_race_header(pp_text: str) -> Dict[str, Any]:
         'day_of_week': ''
     }
 
-    # Get first line (header)
-    header_line = pp_text.strip().split('\n')[0].strip()
+    # Get the actual header line (skip copyright/preamble lines)
+    header_line = _find_header_line(pp_text)
 
     # Split by pipe delimiter
     parts = [p.strip() for p in header_line.split('|')]
@@ -3318,7 +3355,7 @@ pp_text = st.session_state["pp_text_cache"]
 # ===================== 2. Race Info (Confirm) =====================
 
 st.header("2. Race Info (Confirm)")
-first_line = (pp_text.split("\n", 1)[0] or "").strip()
+first_line = _find_header_line(pp_text)
 
 # Parse comprehensive header information
 header_info = parse_brisnet_race_header(pp_text)
