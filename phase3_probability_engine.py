@@ -295,75 +295,115 @@ class Phase3ProbabilityEngine:
 
 def format_phase3_report(results: Dict[str, Any]) -> str:
     """
-    Format Phase 3 results for Classic Report display.
+    Format Phase 3 results as styled HTML for Classic Report display.
+    Matches the font, size, and style of the rest of the report.
     
     Args:
         results: Results from Phase3ProbabilityEngine.analyze_race_comprehensive()
         
     Returns:
-        Formatted string for display
+        HTML string for display
     """
-    report = []
-    report.append("=" * 70)
-    report.append("PHASE 3: ADVANCED PROBABILITY ANALYSIS")
-    report.append("=" * 70)
-    report.append(f"Bankroll: ${results['bankroll']:.2f} per race")
-    report.append("")
+    html = []
+    html.append('<div style="margin-top: 20px;">')
+    
+    # Bold title with explanation
+    html.append('<h3 style="font-weight: 700; margin-bottom: 4px;">📊 Advanced Probability Analysis</h3>')
+    html.append('<p style="color: #6b7280; font-size: 13px; margin-top: 0; margin-bottom: 16px;">'
+                'Monte Carlo simulation (10,000 iterations) generating win/place/show probabilities '
+                'with 95% confidence intervals, exotic combination rankings, and bankroll-optimized bet sizing.</p>')
+    html.append(f'<p style="font-size: 14px; margin-bottom: 12px;"><strong>Bankroll:</strong> ${results["bankroll"]:.2f} per race</p>')
     
     # Win probabilities with confidence intervals
-    report.append("WIN PROBABILITIES WITH 95% CONFIDENCE INTERVALS:")
-    report.append("-" * 70)
+    html.append('<h4 style="font-weight: 600; margin-bottom: 8px;">Win Probabilities with 95% Confidence Intervals</h4>')
+    html.append('<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 16px;">')
+    html.append('<tr style="border-bottom: 2px solid #d1d5db;">'
+                '<th style="text-align: left; padding: 6px 8px;">Horse</th>'
+                '<th style="text-align: right; padding: 6px 8px;">Win %</th>'
+                '<th style="text-align: right; padding: 6px 8px;">± Std</th>'
+                '<th style="text-align: right; padding: 6px 8px;">95% Range</th>'
+                '</tr>')
     wp = results['win_probabilities']
     for i, horse in enumerate(wp['horse']):
         mean = wp['mean'][i]
         std = wp['std'][i]
         lower = wp['lower_95'][i]
         upper = wp['upper_95'][i]
-        report.append(
-            f"{horse:20s} {mean:6.1%} ± {std:5.1%}  "
-            f"[{lower:5.1%} - {upper:5.1%}]"
+        bg = '#f9fafb' if i % 2 == 0 else '#ffffff'
+        html.append(
+            f'<tr style="background: {bg}; border-bottom: 1px solid #e5e7eb;">'
+            f'<td style="padding: 5px 8px; font-weight: 500;">{horse}</td>'
+            f'<td style="text-align: right; padding: 5px 8px;">{mean:.1%}</td>'
+            f'<td style="text-align: right; padding: 5px 8px; color: #6b7280;">± {std:.1%}</td>'
+            f'<td style="text-align: right; padding: 5px 8px; color: #6b7280;">[{lower:.1%} – {upper:.1%}]</td>'
+            f'</tr>'
         )
-    report.append("")
+    html.append('</table>')
     
-    # Place/Show probabilities
-    report.append("PLACE & SHOW PROBABILITIES:")
-    report.append("-" * 70)
-    report.append(f"{'Horse':<20} {'Win':>8} {'Place':>8} {'Show':>8}")
-    report.append("-" * 70)
+    # Place & Show probabilities
+    html.append('<h4 style="font-weight: 600; margin-bottom: 8px;">Place &amp; Show Probabilities</h4>')
+    html.append('<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 16px;">')
+    html.append('<tr style="border-bottom: 2px solid #d1d5db;">'
+                '<th style="text-align: left; padding: 6px 8px;">Horse</th>'
+                '<th style="text-align: right; padding: 6px 8px;">Win</th>'
+                '<th style="text-align: right; padding: 6px 8px;">Place</th>'
+                '<th style="text-align: right; padding: 6px 8px;">Show</th>'
+                '</tr>')
     ps = results['place_show']
     for i, horse in enumerate(ps['horse']):
-        report.append(
-            f"{horse:<20} {ps['win_prob'][i]:7.1%} {ps['place_prob'][i]:7.1%} "
-            f"{ps['show_prob'][i]:7.1%}"
+        bg = '#f9fafb' if i % 2 == 0 else '#ffffff'
+        html.append(
+            f'<tr style="background: {bg}; border-bottom: 1px solid #e5e7eb;">'
+            f'<td style="padding: 5px 8px; font-weight: 500;">{horse}</td>'
+            f'<td style="text-align: right; padding: 5px 8px;">{ps["win_prob"][i]:.1%}</td>'
+            f'<td style="text-align: right; padding: 5px 8px;">{ps["place_prob"][i]:.1%}</td>'
+            f'<td style="text-align: right; padding: 5px 8px;">{ps["show_prob"][i]:.1%}</td>'
+            f'</tr>'
         )
-    report.append("")
+    html.append('</table>')
     
     # Top Exacta combinations
     if len(results['exacta_top10']) > 0:
-        report.append("TOP 10 EXACTA COMBINATIONS:")
-        report.append("-" * 70)
-        report.append(f"{'Combination':<20} {'Probability':>12} {'Confidence':>12}")
-        report.append("-" * 70)
-        for _, row in results['exacta_top10'].iterrows():
+        html.append('<h4 style="font-weight: 600; margin-bottom: 8px;">Top 10 Exacta Combinations</h4>')
+        html.append('<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 16px;">')
+        html.append('<tr style="border-bottom: 2px solid #d1d5db;">'
+                    '<th style="text-align: left; padding: 6px 8px;">Combination</th>'
+                    '<th style="text-align: right; padding: 6px 8px;">Probability</th>'
+                    '<th style="text-align: right; padding: 6px 8px;">Confidence</th>'
+                    '</tr>')
+        for idx, (_, row) in enumerate(results['exacta_top10'].iterrows()):
             combo = f"#{row['first']} → #{row['second']}"
-            report.append(
-                f"{combo:<20} {row['probability']:11.1%} {row['confidence']:>12}"
+            bg = '#f9fafb' if idx % 2 == 0 else '#ffffff'
+            html.append(
+                f'<tr style="background: {bg}; border-bottom: 1px solid #e5e7eb;">'
+                f'<td style="padding: 5px 8px;">{combo}</td>'
+                f'<td style="text-align: right; padding: 5px 8px;">{row["probability"]:.1%}</td>'
+                f'<td style="text-align: right; padding: 5px 8px;">{row["confidence"]}</td>'
+                f'</tr>'
             )
-        report.append("")
+        html.append('</table>')
     
     # Top Trifecta combinations
     if len(results['trifecta_top10']) > 0:
-        report.append("TOP 10 TRIFECTA COMBINATIONS:")
-        report.append("-" * 70)
-        report.append(f"{'Combination':<25} {'Probability':>12} {'Confidence':>12}")
-        report.append("-" * 70)
-        for _, row in results['trifecta_top10'].iterrows():
+        html.append('<h4 style="font-weight: 600; margin-bottom: 8px;">Top 10 Trifecta Combinations</h4>')
+        html.append('<table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 16px;">')
+        html.append('<tr style="border-bottom: 2px solid #d1d5db;">'
+                    '<th style="text-align: left; padding: 6px 8px;">Combination</th>'
+                    '<th style="text-align: right; padding: 6px 8px;">Probability</th>'
+                    '<th style="text-align: right; padding: 6px 8px;">Confidence</th>'
+                    '</tr>')
+        for idx, (_, row) in enumerate(results['trifecta_top10'].iterrows()):
             combo = f"#{row['first']} → #{row['second']} → #{row['third']}"
-            report.append(
-                f"{combo:<25} {row['probability']:11.1%} {row['confidence']:>12}"
+            bg = '#f9fafb' if idx % 2 == 0 else '#ffffff'
+            html.append(
+                f'<tr style="background: {bg}; border-bottom: 1px solid #e5e7eb;">'
+                f'<td style="padding: 5px 8px;">{combo}</td>'
+                f'<td style="text-align: right; padding: 5px 8px;">{row["probability"]:.1%}</td>'
+                f'<td style="text-align: right; padding: 5px 8px;">{row["confidence"]}</td>'
+                f'</tr>'
             )
-        report.append("")
+        html.append('</table>')
     
-    report.append("=" * 70)
+    html.append('</div>')
     
-    return "\n".join(report)
+    return "\n".join(html)

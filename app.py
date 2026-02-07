@@ -7093,7 +7093,16 @@ else:
     # Display existing Classic Report if it exists (before the button)
     if st.session_state.get('classic_report_generated', False):
         st.success("✅ Classic Report Generated")
-        st.markdown(st.session_state.get('classic_report', ''))
+        classic_report = st.session_state.get('classic_report', '')
+        phase3_html = st.session_state.get('phase3_report', '')
+        persistent_report = f"""<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #1f2937;">
+{classic_report}
+
+---
+
+{phase3_html}
+</div>"""
+        st.markdown(persistent_report, unsafe_allow_html=True)
 
         # Show download buttons for existing report
         if 'classic_report' in st.session_state:
@@ -7506,9 +7515,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 
 ---
 
-<pre style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.4; overflow-x: auto;">
 {phase3_report}
-</pre>
 
 </div>"""
                 st.markdown(styled_report, unsafe_allow_html=True)
@@ -7963,9 +7970,9 @@ else:
 
         # Tab 2: Submit Actual Top 5
         with tab_results:
-            # Show success message if just saved
+            # Show success message if just saved (persists across reruns until user starts new analysis)
             if st.session_state.get('last_save_success'):
-                race_id = st.session_state.get('last_save_race_id', 'Unknown')
+                race_id_saved = st.session_state.get('last_save_race_id', 'Unknown')
                 actual_winner = st.session_state.get('last_save_winner', 'Unknown')
                 predicted_winner = st.session_state.get('last_save_predicted', 'Unknown')
 
@@ -7974,11 +7981,14 @@ else:
                 else:
                     st.info(f"📊 Predicted: {predicted_winner} | Actual Winner: {actual_winner}")
 
-                st.success(f"✅ Results successfully saved for {race_id}")
+                st.success(f"✅ Results successfully saved for {race_id_saved}")
                 st.info("🚀 Go to 'Retrain Model' tab when you have 50+ completed races!")
 
-                # Clear the flag
-                st.session_state['last_save_success'] = False
+                # Provide a button to clear the success message and show the form for the next race
+                if st.button("📝 Enter results for another race", key="clear_save_success"):
+                    st.session_state['last_save_success'] = False
+                    _safe_rerun()
+
                 st.markdown("---")
 
             st.markdown("""
@@ -7992,7 +8002,16 @@ else:
                 st.success("✅ No pending races! All analyzed races have results entered.")
                 st.info("💡 Analyze more races in Sections 1-4 to build training data.")
             else:
-                st.info(f"📋 {len(pending_races)} races awaiting results")
+                # Filter out races marked as completed in this session
+                pending_races = [
+                    r for r in pending_races
+                    if not st.session_state.get(f'race_completed_{r[0]}', False)
+                ]
+                if not pending_races:
+                    st.success("✅ All pending races have results entered!")
+                    st.info("💡 Analyze more races in Sections 1-4 to build training data.")
+                else:
+                  st.info(f"📋 {len(pending_races)} races awaiting results")
 
                 # Select race
                 race_options = [
@@ -8211,9 +8230,6 @@ else:
                                                 except Exception as bk_err:
                                                     logger.debug(f"GitHub backup note: {bk_err}")
 
-                                                # Trigger rerun to refresh the page
-                                                time.sleep(1)
-                                                _safe_rerun()
                                             else:
                                                 st.error("❌ Failed to save to database")
 
