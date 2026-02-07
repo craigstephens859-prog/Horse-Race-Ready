@@ -119,6 +119,39 @@ def initialize_persistent_db(db_name: str = "gold_high_iq.db") -> str:
 
     if db_has_data:
         logger.info(f"✅ Persistent DB has data: {db_path}")
+        # Still check if repo seed has MORE data (user pushed updated DB)
+        seed_path = db_name  # In the repo working directory
+        if (db_path != seed_path and
+                os.path.exists(seed_path) and
+                os.path.getsize(seed_path) > 0):
+            try:
+                seed_conn = sqlite3.connect(seed_path, timeout=5)
+                seed_cursor = seed_conn.cursor()
+                seed_cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+                seed_tables = [r[0] for r in seed_cursor.fetchall()]
+                seed_count = 0
+                if 'races_analyzed' in seed_tables:
+                    seed_cursor.execute("SELECT COUNT(*) FROM races_analyzed")
+                    seed_count = seed_cursor.fetchone()[0]
+                seed_conn.close()
+
+                # Get current persistent DB count
+                p_conn = sqlite3.connect(db_path, timeout=5)
+                p_cursor = p_conn.cursor()
+                p_cursor.execute("SELECT COUNT(*) FROM races_analyzed")
+                p_count = p_cursor.fetchone()[0]
+                p_conn.close()
+
+                if seed_count > p_count:
+                    logger.info(
+                        f"📦 Repo seed has more data ({seed_count} vs {p_count} races) "
+                        f"— updating persistent DB"
+                    )
+                    shutil.copy2(seed_path, db_path)
+            except Exception as e:
+                logger.debug(f"Seed comparison skipped: {e}")
         return db_path
 
     # DB is empty or missing — try to restore from GitHub backup
