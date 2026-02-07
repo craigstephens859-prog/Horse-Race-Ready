@@ -1005,7 +1005,7 @@ TRACK_BIAS_PROFILES = {
                     "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
         }
     },
-    "Gulfstream": {
+    "Gulfstream Park": {
         "Dirt": {
             "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
@@ -1877,12 +1877,14 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     # NEW: Lasix, Trip Handicapping, Workout Patterns, Pace Figures, Bounce Detection
     df["SavantBonus"] = 0.0
 
-    # Extract horse blocks for savant analysis
+    # Extract horse blocks for savant analysis (name-based mapping, block text only)
     horse_blocks = split_into_horse_chunks(pp_text)
     block_map = {}
-    for i, name in enumerate(df["Horse"]):
-        if i < len(horse_blocks):
-            block_map[name] = horse_blocks[i]
+    # Build name→block_text lookup from parsed chunks (NOT index-based — df may be sorted by rating)
+    pp_block_by_name = {chunk_name: block_text for _post, chunk_name, block_text in horse_blocks}
+    for horse_name_iter in df["Horse"]:
+        if horse_name_iter in pp_block_by_name:
+            block_map[horse_name_iter] = pp_block_by_name[horse_name_iter]
 
     for horse_name, block in block_map.items():
         savant_bonus = 0.0
@@ -1942,17 +1944,23 @@ def str_to_decimal_odds(s: str) -> Optional[float]:
     if not s:
         return None
     try:
-        if re.fullmatch(r'[+-]?\d+(\.\d+)?', s):
-            v = float(s)
-            return max(v, 1.01)
-        if re.fullmatch(r'\+\d+', s) or re.fullmatch(r'-\d+', s):
-            return 1 + (float(s) / 100.0 if float(s) > 0 else 100.0 / abs(float(s)))
-        if "-" in s:
-            a, b = s.split("-", 1)
-            return float(a) / float(b) + 1.0
+        # CHECK AMERICAN ODDS FIRST (must precede generic numeric check)
+        # American: "+250" → (250/100)+1 = 3.5, "-150" → (100/150)+1 = 1.667
+        if re.fullmatch(r'\+\d+', s):
+            return 1.0 + float(s) / 100.0
+        if re.fullmatch(r'-\d+', s):
+            return 1.0 + 100.0 / abs(float(s))
+        # Fractional: "5/2" → 5/2+1 = 3.5, "3-1" → 3/1+1 = 4.0
         if "/" in s:
             a, b = s.split("/", 1)
             return float(a) / float(b) + 1.0
+        if "-" in s:
+            a, b = s.split("-", 1)
+            return float(a) / float(b) + 1.0
+        # Decimal odds or plain number (e.g. "3.5", "2.10")
+        if re.fullmatch(r'\d+(\.\d+)?', s):
+            v = float(s)
+            return max(v, 1.01)
     except Exception as e:
         st.warning(f"Could not parse odds string: '{s}'. Error: {e}")
         return None
@@ -4150,7 +4158,8 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
 
         jockey_match = re.search(jockey_pattern, section)
         if jockey_match:
-            starts, wins, places, shows = map(int, jockey_match.groups())
+            # groups() returns (name, starts, wins, places, shows) — skip name group
+            starts, wins, places, shows = map(int, jockey_match.groups()[1:])
 
             if starts >= 10:  # Minimum sample size
                 win_pct = wins / starts
@@ -4184,7 +4193,8 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
         trainer_match = re.search(trainer_pattern, section)
         trainer_win_rate = 0.0
         if trainer_match:
-            t_starts, t_wins, t_places, t_shows = map(int, trainer_match.groups())
+            # groups() returns (name, starts, wins, places, shows) — skip name group
+            t_starts, t_wins, t_places, t_shows = map(int, trainer_match.groups()[1:])
 
             if t_starts >= 20:
                 t_win_pct = t_wins / t_starts
@@ -5159,6 +5169,9 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
     surface_stats = parse_pedigree_surface_stats(pp_text) if pp_text else {}
     awd_analysis = parse_awd_analysis(pp_text) if pp_text else {}
 
+    # Build per-horse PP block lookup for tier-2 (searches must use horse block, NOT full pp_text)
+    _horse_pp_blocks = {chunk_name: block_text for _post, chunk_name, block_text in split_into_horse_chunks(pp_text)} if pp_text else {}
+
     # Calculate speed component from figs_df
     speed_map = {}
     if figs_df is not None and not figs_df.empty and "AvgTop2" in figs_df.columns:
@@ -5170,6 +5183,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             speed_map[horse_name] = (horse_fig - race_avg_fig) * MODEL_CONFIG['speed_fig_weight']
 
     rows = []
+    _race_class_shown = False  # BUG 7 FIX: show Race Classification expander only once
     
     # Convert single values to lists for uniform processing
     style_biases = running_style_bias if isinstance(running_style_bias, list) else [running_style_bias]
@@ -5198,6 +5212,9 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
         # ======================== Tier 2 Bonuses ========================
         tier2_bonus = 0.0
+
+        # Per-horse PP block for tier-2 searches (falls back to full pp_text only if block not found)
+        _horse_block = _horse_pp_blocks.get(name, pp_text)
 
         # ELITE: Weather Impact
         weather_data = st.session_state.get('weather_data', None)
@@ -5285,7 +5302,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
             # Lightly-raced improver bonus (fresh legs at marathons)
             life_pattern = r'Life:\s+(\d+)\s+'
-            life_match = re.search(life_pattern, pp_text)
+            life_match = re.search(life_pattern, _horse_block)
             if life_match:
                 career_starts = int(life_match.group(1))
                 tier2_bonus += calculate_experience_bonus(career_starts, is_marathon)
@@ -5332,7 +5349,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         career_win_pct = 0.0
         try:
             # Parse career record: "Life: 50 3 - 1 - 7 $53,234 79"
-            career_match = re.search(r'Life:\s+(\d+)\s+(\d+)\s+-\s+\d+\s+-\s+\d+', pp_text)
+            career_match = re.search(r'Life:\s+(\d+)\s+(\d+)\s+-\s+\d+\s+-\s+\d+', _horse_block)
             if career_match:
                 career_starts = int(career_match.group(1))
                 career_wins = int(career_match.group(2))
@@ -5354,7 +5371,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         is_second_off_layoff = False
         try:
             # Check for "2nd off layoff" stat with high win%
-            layoff_match = re.search(r'2nd off layoff\s+(\d+)\s+(\d+)%\s+(\d+)%', pp_text)
+            layoff_match = re.search(r'2nd off layoff\s+(\d+)\s+(\d+)%\s+(\d+)%', _horse_block)
             if layoff_match:
                 layoff_starts = int(layoff_match.group(1))
                 layoff_win_pct = int(layoff_match.group(2)) / 100.0
@@ -5383,7 +5400,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             # Format: "# Best Speed at Dist\n4 If You Want It 80"
             best_speed_pattern = rf'{re.escape(name)}\s+(\d+)'
             # Look in "Best Speed at Dist" section
-            best_speed_section = re.search(r'# Best Speed at Dist(.{0,500})', pp_text, re.DOTALL)
+            best_speed_section = re.search(r'# Best Speed at Dist(.{0,500})', pp_text, re.DOTALL)  # NOTE: section header is race-level, search per-horse by name below
             if best_speed_section:
                 section_text = best_speed_section.group(1)
                 horse_best = re.search(best_speed_pattern, section_text)
@@ -5417,17 +5434,17 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         is_2nd_lasix_high_pct = False
         try:
             # Parse trainer win %: "Trnr: Eikleberry Kevin (50 11-7-4 22%)"
-            trainer_match = re.search(r'Trnr:.*?\(\d+\s+\d+-\d+-\d+\s+(\d+)%\)', pp_text)
+            trainer_match = re.search(r'Trnr:.*?\(\d+\s+\d+-\d+-\d+\s+(\d+)%\)', _horse_block)
             if trainer_match:
                 trainer_win_pct = int(trainer_match.group(1)) / 100.0
 
             # Check for hot trainer in last 14 days (look for patterns like "9 4-0-0")
-            hot_l14_match = re.search(r'Hot Trainer in last 14 days \((\d+) (\d+)-\d+-\d+\)', pp_text)
+            hot_l14_match = re.search(r'Hot Trainer in last 14 days \((\d+) (\d+)-\d+-\d+\)', _horse_block)
             if hot_l14_match and int(hot_l14_match.group(2)) >= 4:
                 is_hot_l14 = True
 
             # Check for 2nd time Lasix with high % angle
-            if '2nd time Lasix' in pp_text and trainer_win_pct >= 0.25:
+            if '2nd time Lasix' in _horse_block and trainer_win_pct >= 0.25:
                 is_2nd_lasix_high_pct = True
 
             tier2_bonus += calculate_hot_trainer_bonus(trainer_win_pct, is_hot_l14, is_2nd_lasix_high_pct)
@@ -5611,7 +5628,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
         # Now check if Prime Power is available
         prime_power_raw = safe_float(row.get('Prime Power', 0.0), 0.0)
-        if prime_power_raw > 0:
+        if prime_power_raw > 0:  # noqa: race_class_shown guard below
             # Normalize Prime Power (typical range: 110-130, clip outliers to 0-2 scale)
             pp_normalized = np.clip((prime_power_raw - 110) / 20, 0, 2)  # 0 to 2 scale (allows up to 150)
             pp_contribution = pp_normalized * 10  # Scale to match component range
@@ -5686,26 +5703,28 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             elif race_type_clean == 'stakes_graded' and race_quality != "elite":
                 race_quality = "elite"
 
-            # STEP 3: Display detected metadata for user validation
-            with st.expander("🔍 Race Classification & Detection Details", expanded=False):
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Detected Purse", f"${purse_amount:,}" if purse_amount > 0 else "Unknown")
-                with col2:
-                    st.metric("Race Type", race_type_clean.replace('_', ' ').title())
-                with col3:
-                    st.metric("Quality Tier", race_quality.upper())
-                with col4:
-                    confidence_color = "🟢" if detection_confidence >= 0.8 else "🟡" if detection_confidence >= 0.5 else "🔴"
-                    st.metric("Confidence", f"{confidence_color} {detection_confidence:.0%}")
+            # STEP 3: Display detected metadata for user validation (ONCE per race, not per horse)
+            if not _race_class_shown:
+                _race_class_shown = True
+                with st.expander("🔍 Race Classification & Detection Details", expanded=False):
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Detected Purse", f"${purse_amount:,}" if purse_amount > 0 else "Unknown")
+                    with col2:
+                        st.metric("Race Type", race_type_clean.replace('_', ' ').title())
+                    with col3:
+                        st.metric("Quality Tier", race_quality.upper())
+                    with col4:
+                        confidence_color = "🟢" if detection_confidence >= 0.8 else "🟡" if detection_confidence >= 0.5 else "🔴"
+                        st.metric("Confidence", f"{confidence_color} {detection_confidence:.0%}")
 
-                st.caption(f"**Detection Method:** {race_metadata['detection_method'].replace('_', ' ').title()}")
-                st.caption(f"**Raw Race Type:** {race_metadata['race_type'] or race_type or 'Not detected'}")
+                    st.caption(f"**Detection Method:** {race_metadata['detection_method'].replace('_', ' ').title()}")
+                    st.caption(f"**Raw Race Type:** {race_metadata['race_type'] or race_type or 'Not detected'}")
 
-                if detection_confidence < 0.5:
-                    st.warning("⚠️ **Low confidence detection** - Verify race type is correctly classified")
-                if purse_amount == 0:
-                    st.info("ℹ️ Purse not detected - Using race type classification only")
+                    if detection_confidence < 0.5:
+                        st.warning("⚠️ **Low confidence detection** - Verify race type is correctly classified")
+                    if purse_amount == 0:
+                        st.info("ℹ️ Purse not detected - Using race type classification only")
 
             # Apply pace component with claiming race cap (TUP R7)
             pace_contribution = cpace * 1.5
@@ -7409,9 +7428,11 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                 try:
                     from phase3_probability_engine import Phase3ProbabilityEngine, format_phase3_report
                     
-                    # Get win probabilities from primary_df
-                    if 'Win%' in primary_df.columns:
-                        win_probs = primary_df['Win%'].values / 100.0  # Convert percentage to decimal
+                    # Get win probabilities from primary_df (column is 'Fair %' with string values like '25.5%')
+                    if 'Fair %' in primary_df.columns:
+                        win_probs = primary_df['Fair %'].apply(
+                            lambda x: float(str(x).replace('%', '').strip()) / 100.0 if pd.notna(x) and str(x).replace('%', '').replace('.', '').strip().isdigit() else 0.0
+                        ).values
                         horse_names = primary_df['Horse'].values if 'Horse' in primary_df.columns else None
                         
                         # Run Phase 3 analysis
