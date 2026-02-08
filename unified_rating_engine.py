@@ -1252,7 +1252,12 @@ class UnifiedRatingEngine:
         return float(np.clip(rating, -3.0, 3.0))
 
     def _calc_speed(self, horse: HorseData, horses_in_race: List[HorseData]) -> float:
-        """Speed figure rating relative to field"""
+        """Speed figure rating relative to field
+        
+        CALIBRATION FIX (Feb 7, 2026): Increased multiplier from 0.05 to 0.08
+        to better differentiate horses with significant speed advantages.
+        Also added last_fig consideration alongside avg_top2.
+        """
         if not horse.speed_figures or horse.avg_top2 == 0:
             return 0.0  # Neutral for first-timers
 
@@ -1260,8 +1265,15 @@ class UnifiedRatingEngine:
         race_figs: List[float] = [h.avg_top2 for h in horses_in_race if h.avg_top2 > 0]
         race_avg = np.mean(race_figs) if race_figs else 85.0
 
-        # Differential scoring
-        differential = (horse.avg_top2 - race_avg) * 0.05
+        # Differential scoring (CALIBRATED: was 0.05, now 0.08 for better separation)
+        differential = (horse.avg_top2 - race_avg) * 0.08
+        
+        # Also consider last figure (recency matters)
+        if horse.last_fig and horse.last_fig > 0:
+            last_race_figs = [h.last_fig for h in horses_in_race if h.last_fig and h.last_fig > 0]
+            last_avg = np.mean(last_race_figs) if last_race_figs else race_avg
+            last_diff = (horse.last_fig - last_avg) * 0.04  # Half weight for last fig
+            differential += last_diff
 
         return float(np.clip(differential, -2.0, 2.0))
 
@@ -1528,12 +1540,16 @@ class UnifiedRatingEngine:
 
     def _calc_class_drop_bonus(self, horse: HorseData, today_purse: int, today_race_type: str) -> float:
         """
-        CLASS DROP BONUS (Feb 5, 2026 Training)
+        CLASS DROP BONUS (Feb 5, 2026 Training, CALIBRATED Feb 7, 2026)
         
         Problem: Both Enos Slaughter AND Silver Dash were dropping in class, both hit top 2
         Solution: Explicit bonus for class droppers with decent recent speed
         
-        Returns: +0.3 to +0.5 for class drop with speed, amplified by trainer angles
+        CALIBRATION FIX (Feb 7, 2026): Original bonuses too small for major class drops.
+        Suncroft dropping from OC80k→Clm40k (massive drop) only got +0.16 total C-Class.
+        Increased bonuses for large purse drops and multi-level type drops.
+        
+        Returns: +0.3 to +1.0 for class drop with speed, amplified by trainer angles
         """
         bonus = 0.0
         
@@ -1543,15 +1559,18 @@ class UnifiedRatingEngine:
             if avg_recent > 0:
                 purse_ratio = today_purse / avg_recent
                 
-                if purse_ratio <= 0.7:  # Dropping 30%+ in purse
-                    # Check if horse has decent recent speed
+                if purse_ratio <= 0.5:  # Dropping 50%+ in purse (MASSIVE drop)
                     has_decent_speed = horse.last_fig and horse.last_fig >= 75
-                    
+                    if has_decent_speed:
+                        bonus += 0.8  # CALIBRATED: was 0.5
+                    else:
+                        bonus += 0.5  # CALIBRATED: was 0.3
+                elif purse_ratio <= 0.7:  # Dropping 30%+ in purse
+                    has_decent_speed = horse.last_fig and horse.last_fig >= 75
                     if has_decent_speed:
                         bonus += 0.5  # Major class drop with speed
                     else:
                         bonus += 0.3  # Class drop without proven speed
-                    
                 elif purse_ratio <= 0.85:  # Moderate drop
                     bonus += 0.2
         
@@ -1565,7 +1584,9 @@ class UnifiedRatingEngine:
             
             type_drop = avg_recent_score - today_score
             
-            if type_drop >= 1.0:  # Dropping 1+ class level
+            if type_drop >= 2.0:  # Dropping 2+ class levels (e.g., AOC/OC → CLM)
+                bonus += 0.6  # CALIBRATED: was not differentiated
+            elif type_drop >= 1.0:  # Dropping 1+ class level
                 bonus += 0.3
             elif type_drop >= 0.5:
                 bonus += 0.15

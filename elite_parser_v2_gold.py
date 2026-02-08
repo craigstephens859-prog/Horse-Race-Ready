@@ -649,51 +649,82 @@ class GoldStandardBRISNETParser:
             raw_block=block
         )
 
-        # Parse each component with error isolation
+        # Parse each component with ISOLATED error handling
+        # CRITICAL FIX (Feb 7, 2026): Previously all parsers were in one try/except,
+        # meaning if odds parsing failed, speed/form/class were ALL skipped.
+        # Now each parser is independently wrapped so failures don't cascade.
+        
         try:
             horse.style_confidence = 1.0 if style != "NA" else 0.3
+        except Exception:
+            horse.style_confidence = 0.3
 
-            # ODDS
+        # ODDS
+        try:
             ml_odds, ml_decimal, odds_conf = self._parse_odds_with_confidence(block, full_pp, name)
             horse.ml_odds = ml_odds
             horse.ml_odds_decimal = ml_decimal
             horse.odds_confidence = odds_conf
+        except Exception as e:
+            horse.errors.append(f"Odds parsing error: {str(e)}")
+            logger.warning(f"Odds parsing failed for {name}: {e}")
 
-            # JOCKEY
+        # JOCKEY
+        try:
             jockey, jockey_pct, jockey_conf = self._parse_jockey_with_confidence(block)
             horse.jockey = jockey
             horse.jockey_win_pct = jockey_pct
             horse.jockey_confidence = jockey_conf
+        except Exception as e:
+            horse.errors.append(f"Jockey parsing error: {str(e)}")
+            logger.warning(f"Jockey parsing failed for {name}: {e}")
 
-            # TRAINER
+        # TRAINER
+        try:
             trainer, trainer_pct, trainer_conf = self._parse_trainer_with_confidence(block)
             horse.trainer = trainer
             horse.trainer_win_pct = trainer_pct
             horse.trainer_confidence = trainer_conf
+        except Exception as e:
+            horse.errors.append(f"Trainer parsing error: {str(e)}")
+            logger.warning(f"Trainer parsing failed for {name}: {e}")
 
-            # SPEED FIGURES
+        # SPEED FIGURES
+        try:
             figs, avg_top2, peak, last, speed_conf = self._parse_speed_figures_with_confidence(block)
             horse.speed_figures = figs
             horse.avg_top2 = avg_top2
             horse.peak_fig = peak
             horse.last_fig = last
             horse.speed_confidence = speed_conf
+        except Exception as e:
+            horse.errors.append(f"Speed parsing error: {str(e)}")
+            logger.warning(f"Speed parsing failed for {name}: {e}")
 
-            # FORM CYCLE
+        # FORM CYCLE
+        try:
             days_since, last_date, finishes, form_conf = self._parse_form_cycle_with_confidence(block)
             horse.days_since_last = days_since
             horse.last_race_date = last_date
             horse.recent_finishes = finishes
             horse.form_confidence = form_conf
+        except Exception as e:
+            horse.errors.append(f"Form parsing error: {str(e)}")
+            logger.warning(f"Form parsing failed for {name}: {e}")
 
-            # CLASS
+        # CLASS
+        try:
             purses, types, avg_purse, class_conf = self._parse_class_with_confidence(block)
             horse.recent_purses = purses
             horse.race_types = types
             horse.avg_purse = avg_purse
             horse.class_confidence = class_conf
+        except Exception as e:
+            horse.errors.append(f"Class parsing error: {str(e)}")
+            logger.warning(f"Class parsing failed for {name}: {e}")
 
-            # PEDIGREE
+        # PEDIGREE
+        try:
             pedigree_data, ped_conf = self._parse_pedigree_with_confidence(block)
             horse.sire = pedigree_data.get('sire', 'Unknown')
             horse.dam = pedigree_data.get('dam', 'Unknown')
@@ -702,82 +733,126 @@ class GoldStandardBRISNETParser:
             horse.sire_awd = pedigree_data.get('sire_awd')
             horse.dam_dpi = pedigree_data.get('dam_dpi')
             horse.pedigree_confidence = ped_conf
+        except Exception as e:
+            horse.errors.append(f"Pedigree parsing error: {str(e)}")
+            logger.warning(f"Pedigree parsing failed for {name}: {e}")
 
-            # ANGLES
+        # ANGLES
+        try:
             angles, angle_conf = self._parse_angles_with_confidence(block)
             horse.angles = angles
             horse.angle_count = len(angles)
             horse.angle_confidence = angle_conf
+        except Exception as e:
+            horse.errors.append(f"Angles parsing error: {str(e)}")
+            logger.warning(f"Angles parsing failed for {name}: {e}")
 
-            # WORKOUTS
+        # WORKOUTS
+        try:
             work_count, days_since_work, last_speed, work_conf = self._parse_workouts_with_confidence(block)
             horse.workout_count = work_count
             horse.days_since_work = days_since_work
             horse.last_work_speed = last_speed
             horse.workout_confidence = work_conf
-            
-            # EQUIPMENT CHANGES & MEDICATION
+        except Exception as e:
+            horse.errors.append(f"Workout parsing error: {str(e)}")
+            logger.warning(f"Workout parsing failed for {name}: {e}")
+        
+        # EQUIPMENT CHANGES & MEDICATION
+        try:
             equipment_info = self._parse_equipment_changes(block)
             horse.equipment_change = equipment_info['change']
             horse.first_lasix = equipment_info['first_lasix']
-            
-            # TRIP COMMENTS
+        except Exception as e:
+            horse.errors.append(f"Equipment parsing error: {str(e)}")
+            logger.warning(f"Equipment parsing failed for {name}: {e}")
+        
+        # TRIP COMMENTS
+        try:
             horse.trip_comments = self._parse_trip_comments(block)
-            
-            # SURFACE STATISTICS
+        except Exception as e:
+            horse.errors.append(f"Trip comments parsing error: {str(e)}")
+        
+        # SURFACE STATISTICS
+        try:
             horse.surface_stats = self._parse_surface_stats(block)
-            
-            # EARLY SPEED PERCENTAGE
+        except Exception as e:
+            horse.errors.append(f"Surface stats parsing error: {str(e)}")
+        
+        # EARLY SPEED PERCENTAGE
+        try:
             horse.early_speed_pct = self._calculate_early_speed_pct(horse)
+        except Exception as e:
+            horse.errors.append(f"Early speed pct error: {str(e)}")
 
-            # RACE RATING (RR) & CLASS RATING (CR)
+        # RACE RATING (RR) & CLASS RATING (CR)
+        try:
             rr, cr = self._parse_rr_cr_from_running_lines(block)
             horse.race_rating = rr
             horse.class_rating_individual = cr
-            
-            # RACE SHAPES (pace scenario vs par)
+        except Exception as e:
+            horse.errors.append(f"RR/CR parsing error: {str(e)}")
+        
+        # RACE SHAPES (pace scenario vs par)
+        try:
             shape_1c, shape_2c = self._parse_race_shapes(block)
             horse.race_shape_1c = shape_1c
             horse.race_shape_2c = shape_2c
-            
-            # RELIABILITY INDICATOR
+        except Exception as e:
+            horse.errors.append(f"Race shapes parsing error: {str(e)}")
+        
+        # RELIABILITY INDICATOR
+        try:
             horse.reliability_indicator = self._parse_reliability_indicator(block)
-            
-            # ACL and R1/R2/R3
+        except Exception as e:
+            horse.errors.append(f"Reliability parsing error: {str(e)}")
+        
+        # ACL and R1/R2/R3
+        try:
             acl, r1, r2, r3 = self._parse_acl_and_recent_ratings(block)
             horse.acl = acl
             horse.r1 = r1
             horse.r2 = r2
             horse.r3 = r3
-            
-            # BACK SPEED & BEST PACE
+        except Exception as e:
+            horse.errors.append(f"ACL parsing error: {str(e)}")
+        
+        # BACK SPEED & BEST PACE
+        try:
             back_speed, bp_e1, bp_e2, bp_lp = self._parse_back_speed_best_pace(block)
             horse.back_speed = back_speed
             horse.best_pace_e1 = bp_e1
             horse.best_pace_e2 = bp_e2
             horse.best_pace_lp = bp_lp
-            
-            # TRACK BIAS IMPACT VALUES
+        except Exception as e:
+            horse.errors.append(f"Back speed parsing error: {str(e)}")
+        
+        # TRACK BIAS IMPACT VALUES
+        try:
             run_style_iv, post_iv, markers = self._parse_track_bias_impact_values(block, horse.pace_style, horse.post)
             horse.track_bias_run_style_iv = run_style_iv
             horse.track_bias_post_iv = post_iv
             horse.track_bias_markers = markers
-            
-            # PEDIGREE RATINGS
+        except Exception as e:
+            horse.errors.append(f"Track bias IV parsing error: {str(e)}")
+        
+        # PEDIGREE RATINGS
+        try:
             ped_fast, ped_off, ped_dist, ped_turf = self._parse_pedigree_ratings(block)
             horse.pedigree_fast = ped_fast
             horse.pedigree_off = ped_off
             horse.pedigree_distance = ped_dist
             horse.pedigree_turf = ped_turf
+        except Exception as e:
+            horse.errors.append(f"Pedigree ratings parsing error: {str(e)}")
 
-            # PRIME POWER
+        # PRIME POWER
+        try:
             pp_value, pp_rank = self._parse_prime_power(block)
             horse.prime_power = pp_value
             horse.prime_power_rank = pp_rank
-
         except Exception as e:
-            horse.errors.append(f"Parsing error: {str(e)}")
-            logger.error(f"Error parsing {name}: {e}")
+            horse.errors.append(f"Prime power parsing error: {str(e)}")
 
         # Calculate overall confidence
         horse.calculate_overall_confidence()

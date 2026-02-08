@@ -125,27 +125,35 @@ class BayesianComponentRater:
         Estimate data uncertainty from quality indicators
         
         Higher values = more uncertainty = less confidence in rating
+        
+        CALIBRATION FIX (Feb 7, 2026): Previous version was too aggressive,
+        shrinking all component values to ~7% of the deterministic rating.
+        Reduced impact of parsing_confidence and variance to allow the
+        deterministic ratings (which are already well-calibrated) to shine through.
         """
         base_uncertainty = self.PRIORS[self.component_name]['std']
         
         # Factor 1: Sample size (more races = lower uncertainty)
         n = indicators.get('n_data_points', 3)
-        sample_size_factor = np.sqrt(n) / 3.0  # Normalize by typical n=3 races
-        sample_size_factor = np.clip(sample_size_factor, 0.5, 2.0)
+        sample_size_factor = np.sqrt(max(n, 1)) / 2.0  # CALIBRATED: was /3.0, now /2.0
+        sample_size_factor = np.clip(sample_size_factor, 0.7, 3.0)  # CALIBRATED: min raised from 0.5
         
         # Factor 2: Data variance (erratic performances = higher uncertainty)
+        # CALIBRATED: Take sqrt and normalize to reduce impact
         variance = indicators.get('data_variance', 1.0)
-        variance_factor = np.sqrt(variance)
-        variance_factor = np.clip(variance_factor, 0.5, 3.0)
+        variance_factor = 1.0 + np.sqrt(variance) * 0.15  # CALIBRATED: was raw sqrt, now dampened
+        variance_factor = np.clip(variance_factor, 0.8, 2.0)  # CALIBRATED: tighter range
         
         # Factor 3: Parsing confidence (low confidence = higher uncertainty)
+        # CALIBRATED: Softer penalty - confidence 0.7 should NOT double uncertainty
         parsing_conf = indicators.get('parsing_confidence', 0.9)
-        parsing_factor = 1.0 / parsing_conf
+        parsing_factor = 1.0 + (1.0 - parsing_conf) * 0.5  # CALIBRATED: was 1/conf, now linear
+        # conf=0.9 → 1.05, conf=0.7 → 1.15, conf=0.5 → 1.25
         
         # Factor 4: Recency (long layoff = higher uncertainty)
-        days = indicators.get('time_since_last', 30)
-        recency_factor = 1.0 + (days / 180.0)  # +100% uncertainty after 180 days
-        recency_factor = np.clip(recency_factor, 1.0, 2.0)
+        days = indicators.get('time_since_last', 30) or 30
+        recency_factor = 1.0 + (days / 365.0)  # CALIBRATED: was /180, now /365 (gentler)
+        recency_factor = np.clip(recency_factor, 1.0, 1.5)  # CALIBRATED: max reduced from 2.0
         
         # Combine factors multiplicatively
         total_uncertainty = (base_uncertainty * 

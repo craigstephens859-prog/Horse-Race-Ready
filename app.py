@@ -430,9 +430,9 @@ def _distance_bucket_from_text(distance_txt: str) -> str:
         if m:
             val = float(m.group(1))
             if val <= 6.0:
-                return "≤6"
+                return "≤6f"
             if val < 8.0:
-                return "6.5–7"
+                return "6.5–7f"
             return "8f+"
     # Miles
     if "mile" in d:
@@ -452,9 +452,9 @@ def _distance_bucket_from_text(distance_txt: str) -> str:
         total_mi = base + extra
         total_f = total_mi * 8.0
         if total_f < 6.5:
-            return "≤6"
+            return "≤6f"
         if total_f < 8.0:
-            return "6.5–7"
+            return "6.5–7f"
         return "8f+"
     return "8f+"
 
@@ -1168,6 +1168,70 @@ TRACK_BIAS_PROFILES = {
                        "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
             "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
+        }
+    },
+    "Oaklawn Park": {
+        "Dirt": {
+            "≤6f": {"runstyle": {"E": 0.30, "E/P": 0.15, "P": -0.10, "S": -0.20},
+                    "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.10}},
+            "6.5–7f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                       "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                    "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
+        }
+    },
+    "Fair Grounds": {
+        "Dirt": {
+            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.20},
+                    "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.10}},
+            "6.5–7f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                       "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                    "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                    "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                       "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                    "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Aqueduct": {
+        "Dirt": {
+            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+                    "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                       "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                    "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                    "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                       "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
+            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                    "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        }
+    },
+    "Laurel Park": {
+        "Dirt": {
+            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+                    "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                       "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+                    "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
+        },
+        "Turf": {
+            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                    "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
+            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+                       "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
+            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+                    "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Fairmount Park": {
@@ -5077,6 +5141,8 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                                 track_name, surface_type, distance_txt, style_val, post_val
                             )
                             unified_ratings.at[idx, 'Atrack'] = a_track
+                            # CRITICAL FIX: A-Track must be added to R (previously display-only)
+                            unified_ratings.at[idx, 'R'] = unified_ratings.at[idx, 'R'] + a_track
 
                         # Add success message
                         scratched_count = len(results_df) - len(results_df_filtered)
@@ -6027,36 +6093,31 @@ def fair_probs_from_ratings(ratings_df: pd.DataFrame,
 
     # ML ODDS REALITY CHECK: Blend model probabilities with market wisdom
     # The market odds reflect real money and decades of handicapping experience
+    # CALIBRATED (Feb 7, 2026): Softened caps to reduce Rating/Fair% disconnect.
+    # Previously, heavy favorites got Floor=15% even if model rated them 7th,
+    # causing Fair% to be #1 while Rating was #6 (confusing to users).
     if ml_odds_dict:
         adjusted = False
         for horse, prob in result.items():
             ml_odds = ml_odds_dict.get(horse, 5.0)
 
             # --- LONGSHOT CAPS: Prevent longshots from getting unrealistic probabilities ---
-            if ml_odds >= 30.0 and prob > 0.10:
-                result[horse] = 0.10
+            # SOFTENED: Only cap extreme outliers (was 10/1+, now 20/1+)
+            if ml_odds >= 30.0 and prob > 0.12:
+                result[horse] = 0.12
                 adjusted = True
-            elif ml_odds >= 20.0 and prob > 0.15:
-                result[horse] = 0.15
-                adjusted = True
-            elif ml_odds >= 15.0 and prob > 0.20:
-                result[horse] = 0.20
-                adjusted = True
-            elif ml_odds >= 10.0 and prob > 0.25:
-                result[horse] = 0.25
+            elif ml_odds >= 20.0 and prob > 0.18:
+                result[horse] = 0.18
                 adjusted = True
 
             # --- FAVORITE FLOORS: Prevent strong favorites from being crushed ---
-            # A 9/5 favorite should never be below ~15% (market says ~35%)
-            # A 2/1 favorite should never be below ~12%
-            elif ml_odds <= 2.0 and prob < 0.15:
-                result[horse] = max(prob, 0.15)
-                adjusted = True
-            elif ml_odds <= 3.0 and prob < 0.10:
+            # SOFTENED: Only apply to very strong favorites, lower floors
+            # A 1/1 or lower (even money) should never be below ~10%
+            elif ml_odds <= 1.0 and prob < 0.10:
                 result[horse] = max(prob, 0.10)
                 adjusted = True
-            elif ml_odds <= 5.0 and prob < 0.06:
-                result[horse] = max(prob, 0.06)
+            elif ml_odds <= 2.0 and prob < 0.08:
+                result[horse] = max(prob, 0.08)
                 adjusted = True
 
         # If we adjusted any probabilities, renormalize
