@@ -1961,13 +1961,14 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     # --- ANGLES BONUS LOGIC ---
     # Add bonus for horses with positive angles
     ANGLE_BONUS = 0.10  # Bonus per positive angle
+    MAX_ANGLE_BONUS = 0.80  # Cap at 8 angles worth (matches unified engine)
     df["AngleBonus"] = 0.0
     for horse, angles_df in angles_per_horse.items():
         if angles_df is not None and not angles_df.empty:
             # Count positive angles (rows in the dataframe)
             num_angles = len(angles_df)
             if num_angles > 0:
-                bonus = num_angles * ANGLE_BONUS
+                bonus = min(num_angles * ANGLE_BONUS, MAX_ANGLE_BONUS)
                 df.loc[df["Horse"] == horse, "AngleBonus"] = bonus
 
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"] + df["AngleBonus"]
@@ -2015,8 +2016,9 @@ def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processe
     df.drop(columns=["SavantBonus"], inplace=True)
     # --- END SAVANT LOGIC ---
 
-    # Apply the final adjustment
+    # Apply the final adjustment with cap to prevent bonus domination
     df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].fillna(0.0)  # Ensure no NaNs
+    df["R_ENHANCE_ADJ"] = df["R_ENHANCE_ADJ"].clip(-1.0, 1.5)  # Cap speed+angles+savant layer
     df["R"] = (df["R"].astype(float) + df["R_ENHANCE_ADJ"].astype(float)).round(2)
 
     return df
@@ -5556,6 +5558,11 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
         # ======================== End Tier 2 Bonuses ========================
 
+        # CAP tier2_bonus: Bonuses should supplement, not dominate, core ratings
+        # Race 4 Oaklawn validation: Track Phantom got +7.30 in bonuses on 3.67 core (2:1 ratio!)
+        # With cap, bonuses limited to ~60% of typical core (0-5 range)
+        tier2_bonus = np.clip(tier2_bonus, -2.0, 2.5)
+
         # HYBRID MODEL: Surface-Adaptive + Maiden-Aware PP Weight (SA R8 + GP R1 + GP R2 - Feb 2026)
         #
         # THREE-RACE VALIDATION:
@@ -5998,14 +6005,14 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
             # If 6+ speed horses and this horse is P or S, boost rating
             if speed_types >= 6 and (style in ['P', 'S'] or 'P' in style or 'S' in style):
-                pace_scenario_bonus = 1.5  # Significant boost for closers in speed duels
+                pace_scenario_bonus = 0.75  # Moderate boost for closers in speed duels
 
         R += pace_scenario_bonus
 
         # ELITE: Single-pass outlier clipping with data quality monitoring
-        # Typical racing range: -5 to +20. Values beyond suggest parsing errors or unrealistic bonuses
-        if R > 30 or R < -10:
-            R = np.clip(R, -5, 20)
+        # Typical racing range: -3 to +15. Values beyond suggest parsing errors or unrealistic bonuses
+        if R > 20 or R < -5:
+            R = np.clip(R, -3, 15)
 
         # Ensure Quirin is formatted correctly for display (handle NaN)
         quirin_display = quirin if pd.notna(quirin) else None
