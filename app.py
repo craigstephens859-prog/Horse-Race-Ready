@@ -5321,6 +5321,90 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         # Per-horse PP block for tier-2 searches (falls back to full pp_text only if block not found)
         _horse_block = _horse_pp_blocks.get(name, pp_text)
 
+        # ---- DISTANCE SPECIALIST BONUS (Race 4 Oaklawn tuning) ----
+        # Winnemac Avenue: 9-4-2-0 at distance = 44% wins, yet got 0 credit
+        # Parse 'Dis (XXX) starts wins - places - shows' from PP header
+        try:
+            dis_match = re.search(
+                r'Dis\s*\(\d+\)\s+(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)',
+                _horse_block
+            )
+            if dis_match:
+                dis_starts = int(dis_match.group(1))
+                dis_wins = int(dis_match.group(2))
+                dis_places = int(dis_match.group(3))
+                if dis_starts >= 4:
+                    dis_win_pct = dis_wins / dis_starts
+                    dis_itm_pct = (dis_wins + dis_places) / dis_starts
+                    if dis_win_pct >= 0.35:
+                        tier2_bonus += 0.8  # Elite distance specialist
+                    elif dis_win_pct >= 0.25:
+                        tier2_bonus += 0.5  # Strong at distance
+                    elif dis_itm_pct >= 0.50:
+                        tier2_bonus += 0.3  # Consistently competitive at distance
+        except BaseException:
+            pass
+
+        # ---- TRACK SPECIALIST BONUS (Race 4 Oaklawn tuning) ----
+        # Parse track-specific record: 'OP starts wins - places - shows'
+        try:
+            # Extract track code from track_name (e.g., 'Oaklawn Park' -> 'OP')
+            track_code_for_search = ''
+            track_code_map = {
+                'oaklawn': 'OP', 'churchill': 'CD', 'saratoga': 'Sar',
+                'belmont': 'Bel', 'gulfstream': 'GP', 'keeneland': 'Kee',
+                'santa anita': 'SA', 'del mar': 'Dmr', 'fair grounds': 'FG',
+                'aqueduct': 'Aqu', 'laurel': 'Lrl', 'pimlico': 'Pim',
+                'remington': 'RP', 'turf paradise': 'TuP', 'tampa bay': 'Tam',
+                'parx': 'Prx', 'monmouth': 'Mth', 'woodbine': 'WO',
+            }
+            for key, code in track_code_map.items():
+                if key in (track_name or '').lower():
+                    track_code_for_search = code
+                    break
+
+            if track_code_for_search:
+                trk_pattern = rf'{re.escape(track_code_for_search)}\s+(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)'
+                trk_match = re.search(trk_pattern, _horse_block)
+                if trk_match:
+                    trk_starts = int(trk_match.group(1))
+                    trk_wins = int(trk_match.group(2))
+                    trk_places = int(trk_match.group(3))
+                    if trk_starts >= 4:
+                        trk_win_pct = trk_wins / trk_starts
+                        trk_itm_pct = (trk_wins + trk_places) / trk_starts
+                        if trk_win_pct >= 0.30:
+                            tier2_bonus += 0.6  # Track specialist
+                        elif trk_win_pct >= 0.20:
+                            tier2_bonus += 0.35  # Solid track record
+                        elif trk_itm_pct >= 0.45:
+                            tier2_bonus += 0.2  # Competitive at track
+        except BaseException:
+            pass
+
+        # ---- P-STYLE ROUTE BONUS (Race 4 Oaklawn tuning) ----
+        # P (presser/stalker) styles dominated Race 4 (top 3 all P)
+        # In route races, P styles save ground and have tactical advantage
+        try:
+            race_furlongs = 8.0  # Default
+            dist_lower = (distance_txt or '').lower()
+            if 'f' in dist_lower:
+                race_furlongs = float(dist_lower.replace('f', '').strip())
+            elif 'mile' in dist_lower:
+                race_furlongs = 8.0
+                if '1/4' in dist_lower or '1.25' in dist_lower:
+                    race_furlongs = 10.0
+                elif '1/8' in dist_lower or '1.125' in dist_lower:
+                    race_furlongs = 9.0
+                elif '1/16' in dist_lower:
+                    race_furlongs = 8.5
+                elif '1/2' in dist_lower or '1.5' in dist_lower:
+                    race_furlongs = 12.0
+            if race_furlongs >= 8.0 and style == 'P':
+                tier2_bonus += 0.25  # Route tactical advantage for pressers
+        except BaseException:
+            pass
+
         # ELITE: Weather Impact
         weather_data = st.session_state.get('weather_data', None)
         if weather_data:

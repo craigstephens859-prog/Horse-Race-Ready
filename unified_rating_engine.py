@@ -1151,24 +1151,40 @@ class UnifiedRatingEngine:
 
             return float(np.clip(rating, -2.0, 3.0))
 
-        # Layoff factor (PEGASUS TUNING: More aggressive penalties for long layoffs)
-        # Validation: White Abarrio 146-day layoff finished 2nd despite heavy penalty
+        # Layoff factor with CLASS-BASED PROTECTION
+        # Race 4 Oaklawn tuning: Sandman ($1.5M earner, G1-placed) had form=0.00
+        # at 161 days off because penalties were too harsh for proven horses.
+        # High-class horses returning from layoffs should be penalized less
+        # because trainers of top horses choose returns carefully.
         if horse.days_since_last is not None:
             days = horse.days_since_last
+            
+            # Class-based layoff dampening: reduce penalty for proven earners
+            # High earnings = proven horse, trainer picks spots carefully
+            earnings = getattr(horse, 'earnings', 0) or 0
+            if earnings >= 1_000_000:
+                layoff_dampener = 0.35  # 65% reduction for millionaires
+            elif earnings >= 500_000:
+                layoff_dampener = 0.50  # 50% reduction
+            elif earnings >= 200_000:
+                layoff_dampener = 0.70  # 30% reduction
+            else:
+                layoff_dampener = 1.0   # Full penalty for unproven
+            
             if days <= 14:
-                rating += 0.8  # INCREASED: Sharp horses
+                rating += 0.8  # Sharp horses
             elif days <= 30:
-                rating += 0.4  # INCREASED: Optimal freshness
+                rating += 0.4  # Optimal freshness
             elif days <= 60:
                 rating += 0.0
             elif days <= 90:
-                rating -= 0.8  # INCREASED penalty
+                rating -= 0.8 * layoff_dampener
             elif days <= 120:
-                rating -= 2.0  # INCREASED from -1.5
+                rating -= 2.0 * layoff_dampener
             elif days <= 180:
-                rating -= 4.0  # INCREASED from -3.0
+                rating -= 3.5 * layoff_dampener  # Tuned from -4.0
             else:
-                rating -= 6.0  # INCREASED from -5.0
+                rating -= 5.0 * layoff_dampener  # Tuned from -6.0
 
         # Form trend (PEGASUS TUNING: Reward winners MORE aggressively)
         # Validation: Skippylongstocking won last out and WON AGAIN
@@ -1269,10 +1285,12 @@ class UnifiedRatingEngine:
         differential = (horse.avg_top2 - race_avg) * 0.08
         
         # Also consider last figure (recency matters)
+        # Race 4 Oaklawn tuning: Track Phantom avg_top2=94 but last=34
+        # Increased from 0.04 to 0.08 so last-out figure has real impact
         if horse.last_fig and horse.last_fig > 0:
             last_race_figs = [h.last_fig for h in horses_in_race if h.last_fig and h.last_fig > 0]
             last_avg = np.mean(last_race_figs) if last_race_figs else race_avg
-            last_diff = (horse.last_fig - last_avg) * 0.04  # Half weight for last fig
+            last_diff = (horse.last_fig - last_avg) * 0.08  # Equal weight to avg_top2
             differential += last_diff
 
         return float(np.clip(differential, -2.0, 2.0))

@@ -155,6 +155,9 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     pedigree_distance: Optional[int] = None  # Distance breeding rating
     pedigree_turf: Optional[int] = None  # Turf breeding rating
 
+    # === CAREER EARNINGS ===
+    earnings: float = 0.0  # Lifetime career earnings (used for layoff dampening)
+
     # === VALIDATION ===
     parsing_confidence: float = 1.0  # Overall confidence
     warnings: List[str] = field(default_factory=list)
@@ -853,6 +856,12 @@ class GoldStandardBRISNETParser:
             horse.prime_power_rank = pp_rank
         except Exception as e:
             horse.errors.append(f"Prime power parsing error: {str(e)}")
+
+        # CAREER EARNINGS
+        try:
+            horse.earnings = self._parse_earnings(block)
+        except Exception as e:
+            horse.errors.append(f"Earnings parsing error: {str(e)}")
 
         # Calculate overall confidence
         horse.calculate_overall_confidence()
@@ -1853,7 +1862,48 @@ class GoldStandardBRISNETParser:
         
         return pedigree_fast, pedigree_off, pedigree_distance, pedigree_turf
 
-    # ============ PRIME POWER ============
+    # ============ CAREER EARNINGS ============
+
+    def _parse_earnings(self, block: str) -> float:
+        """
+        Parse lifetime career earnings from BRISNET PP block.
+        
+        Looks for patterns like:
+          Life  16  2  3  0  $1,563,660
+          Life:  8  2-1-0  $145,000
+          Lifetime  $1,563,660
+          $XXX,XXX appearing after "Life" keyword
+        
+        Returns:
+            float: Career earnings in dollars, 0.0 if not found
+        """
+        earnings_patterns = [
+            # "Life  16  2  3  0  $1,563,660"  (BRISNET standard)
+            r'Life\s+\d+\s+\d+\s+\d+\s+\d+\s+\$([0-9,]+)',
+            # "Life: 8 2-1-0 $145,000"
+            r'Life[:\s]+\d+\s+\d+-\d+-\d+\s+\$([0-9,]+)',
+            # General: "Life" followed by dollar amount on same line
+            r'Life[^\n]*\$([0-9,]+)',
+            # "Lifetime" followed by dollar amount
+            r'Lifetime[^\n]*\$([0-9,]+)',
+            # "Life  starts  wins  places  shows  earnings" (tab-separated)
+            r'Life\s+\d+\s+\d+\s+\d+\s+\d+\s+([0-9,]+)',
+        ]
+        
+        for pattern in earnings_patterns:
+            match = re.search(pattern, block, re.IGNORECASE)
+            if match:
+                try:
+                    earnings_str = match.group(1).replace(',', '')
+                    earnings = float(earnings_str)
+                    if earnings > 0:
+                        return earnings
+                except (ValueError, IndexError):
+                    continue
+        
+        return 0.0
+
+    # ============ PRIME POWER (method) ============
 
     def _parse_prime_power(self, block: str) -> Tuple[Optional[float], Optional[int]]:
         """Parse BRISNET Prime Power rating and rank"""

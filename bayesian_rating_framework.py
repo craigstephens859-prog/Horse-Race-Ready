@@ -126,39 +126,51 @@ class BayesianComponentRater:
         
         Higher values = more uncertainty = less confidence in rating
         
-        CALIBRATION FIX (Feb 7, 2026): Previous version was too aggressive,
-        shrinking all component values to ~7% of the deterministic rating.
-        Reduced impact of parsing_confidence and variance to allow the
-        deterministic ratings (which are already well-calibrated) to shine through.
+        CALIBRATION FIX v3 (Feb 7, 2026 - Race 4 Oaklawn tuning):
+        v1: Original - crushed components to ~7% of deterministic
+        v2: Reduced factors - retained ~54% of deterministic
+        v3: Added 0.4x dampening - now retains ~88% of deterministic
+        
+        The core issue: deterministic calcs (class, speed, form, pace) are
+        well-calibrated but the Bayesian prior (mean=0) pulls everything to
+        zero. We need data_uncertainty << prior_std so the likelihood dominates.
+        
+        Race 4 validation: Winnemac Avenue had 0.02 class, 0.01 speed despite
+        being a legitimate 7/2 contender who ran 2nd. Over-shrinkage made
+        ALL horses look similar, causing bonuses to dominate rankings.
         """
         base_uncertainty = self.PRIORS[self.component_name]['std']
         
         # Factor 1: Sample size (more races = lower uncertainty)
         n = indicators.get('n_data_points', 3)
-        sample_size_factor = np.sqrt(max(n, 1)) / 2.0  # CALIBRATED: was /3.0, now /2.0
-        sample_size_factor = np.clip(sample_size_factor, 0.7, 3.0)  # CALIBRATED: min raised from 0.5
+        sample_size_factor = np.sqrt(max(n, 1)) / 2.0
+        sample_size_factor = np.clip(sample_size_factor, 0.7, 3.0)
         
         # Factor 2: Data variance (erratic performances = higher uncertainty)
-        # CALIBRATED: Take sqrt and normalize to reduce impact
         variance = indicators.get('data_variance', 1.0)
-        variance_factor = 1.0 + np.sqrt(variance) * 0.15  # CALIBRATED: was raw sqrt, now dampened
-        variance_factor = np.clip(variance_factor, 0.8, 2.0)  # CALIBRATED: tighter range
+        variance_factor = 1.0 + np.sqrt(variance) * 0.10  # v3: 0.15 -> 0.10
+        variance_factor = np.clip(variance_factor, 0.8, 1.5)  # v3: max 2.0 -> 1.5
         
-        # Factor 3: Parsing confidence (low confidence = higher uncertainty)
-        # CALIBRATED: Softer penalty - confidence 0.7 should NOT double uncertainty
+        # Factor 3: Parsing confidence
         parsing_conf = indicators.get('parsing_confidence', 0.9)
-        parsing_factor = 1.0 + (1.0 - parsing_conf) * 0.5  # CALIBRATED: was 1/conf, now linear
-        # conf=0.9 → 1.05, conf=0.7 → 1.15, conf=0.5 → 1.25
+        parsing_factor = 1.0 + (1.0 - parsing_conf) * 0.3  # v3: 0.5 -> 0.3
+        # conf=0.9 -> 1.03, conf=0.7 -> 1.09, conf=0.5 -> 1.15
         
         # Factor 4: Recency (long layoff = higher uncertainty)
         days = indicators.get('time_since_last', 30) or 30
-        recency_factor = 1.0 + (days / 365.0)  # CALIBRATED: was /180, now /365 (gentler)
-        recency_factor = np.clip(recency_factor, 1.0, 1.5)  # CALIBRATED: max reduced from 2.0
+        recency_factor = 1.0 + (days / 500.0)  # v3: /365 -> /500 (gentler)
+        recency_factor = np.clip(recency_factor, 1.0, 1.3)  # v3: max 1.5 -> 1.3
         
         # Combine factors multiplicatively
-        total_uncertainty = (base_uncertainty * 
-                           variance_factor / sample_size_factor *
-                           parsing_factor * recency_factor)
+        raw_uncertainty = (base_uncertainty * 
+                          variance_factor / sample_size_factor *
+                          parsing_factor * recency_factor)
+        
+        # v3 CRITICAL: Apply global dampening so data dominates prior
+        # Without this, data_unc ~= base_std -> 50% shrinkage toward prior(0)
+        # With 0.4x, data_unc ~= 0.4*base_std -> ~88% retention of deterministic
+        DAMPENING = 0.4
+        total_uncertainty = raw_uncertainty * DAMPENING
         
         return float(np.clip(total_uncertainty, 0.1, 5.0))
 
