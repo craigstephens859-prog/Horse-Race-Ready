@@ -7757,6 +7757,13 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             st.info(f"📊 Saved {len(horses_data)} horses with {len([k for k in horses_data[0].keys() if k.startswith('rating_') or k.startswith('angle_')])} ML features each")
                             st.session_state['last_saved_race_id'] = race_id
                             st.info("🏁 After race completes, submit actual top 4 finishers in **Section E** below!")
+
+                            # CLOUD BACKUP after analysis save
+                            try:
+                                if backup_to_github_async:
+                                    backup_to_github_async(gold_db.db_path)
+                            except Exception:
+                                pass
                         else:
                             st.error(f"❌ Failed to save race {race_id} to database")
 
