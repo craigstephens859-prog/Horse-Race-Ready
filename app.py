@@ -7808,16 +7808,25 @@ else:
     try:
         import os
         db_path = gold_db.db_path
+        _is_persistent = False
+        if get_persistence_status:
+            p_status = get_persistence_status(db_path)
+            _plevel = p_status.get('persistence_level', '')
+            _is_persistent = 'PERSISTENT DISK' in _plevel or 'GITHUB BACKUP' in _plevel or 'LOCAL' in _plevel
+        else:
+            _plevel = '💻 LOCAL (development mode)'
+            _is_persistent = True
+
         if os.path.exists(db_path):
             db_size_mb = os.path.getsize(db_path) / (1024 * 1024)
-            st.success(f"✅ **Database Verified:** {db_path} ({db_size_mb:.2f} MB) - Data persists across sessions!")
+            if _is_persistent:
+                st.success(f"✅ **Database Verified:** {db_path} ({db_size_mb:.2f} MB) — data persists across sessions!")
+            else:
+                st.warning(f"⚠️ **Database Active:** {db_path} ({db_size_mb:.2f} MB) — **EPHEMERAL** storage! Data will be lost on next Render redeploy. Add a Persistent Disk ($0.25/mo) or set GITHUB_TOKEN for backup.")
         else:
             st.info(f"📁 New database will be created: {db_path}")
 
-        # Show persistence layer status
-        if get_persistence_status:
-            p_status = get_persistence_status(db_path)
-            st.caption(f"🔐 Storage: {p_status['persistence_level']}")
+        st.caption(f"🔐 Storage: {_plevel}")
     except Exception as verify_error:
         st.warning(f"Could not verify database: {verify_error}")
 
@@ -7833,6 +7842,23 @@ else:
 
         # Tab 1: Dashboard
         with tab_overview:
+            # Build persistence note based on actual storage status
+            if get_persistence_status:
+                _ps = get_persistence_status(PERSISTENT_DB_PATH)
+                _pl = _ps.get('persistence_level', '')
+                if 'PERSISTENT DISK' in _pl:
+                    _persist_note = "🔒 **Data Persistence:** All analyzed races are permanently saved. Data survives Render redeploys!"
+                elif 'GITHUB BACKUP' in _pl:
+                    _persist_note = "☁️ **Data Persistence:** Backed up to GitHub. Restored automatically on redeploy."
+                elif 'EPHEMERAL' in _pl:
+                    _persist_note = ("⚠️ **Data Persistence:** Database is saved but on **ephemeral** storage. "
+                                     "Data persists between browser sessions but **will be lost on Render redeploy**. "
+                                     "Add a Persistent Disk ($0.25/mo) in Render Dashboard → Disks to keep data permanently.")
+                else:
+                    _persist_note = "💻 **Data Persistence:** Saved locally (development mode)."
+            else:
+                _persist_note = "💻 **Data Persistence:** Saved locally."
+
             st.markdown(f"""
             ### Real Data Learning System
 
@@ -7844,10 +7870,9 @@ else:
             After the race completes, submit the actual top 4 finishers below.
             The system learns from real outcomes to reach 90%+ accuracy.
 
-            🔒 **Data Persistence:** All analyzed races are permanently saved to the database.
-            You can safely close your browser and return anytime - your data persists!
+            {_persist_note}
 
-            📁 **Database Location:** `{PERSISTENT_DB_PATH}` (persists across Render redeployments!)
+            📁 **Database Location:** `{PERSISTENT_DB_PATH}`
             """)
 
             # Calculate total analyzed races (completed + pending)
