@@ -5796,11 +5796,22 @@ def detect_surface_switch(
         else:
             result["bonus"] = 0.02
 
+    # TURF-EXPERIENCE-ON-DIRT BONUS: Any horse with turf history racing on dirt
+    # gets a bonus. Turf experience translates positively to dirt performance.
+    if today_is_dirt and turf_count > 0:
+        turf_dirt_bonus = 0.0
+        if turf_count >= 4:
+            turf_dirt_bonus = 0.12  # Extensive turf experience
+        elif turf_count >= 2:
+            turf_dirt_bonus = 0.08  # Solid turf experience
+        else:
+            turf_dirt_bonus = 0.05  # Some turf experience
+        result["bonus"] += turf_dirt_bonus
+
     # Additional penalty: mostly raced on opposite surface
     if today_is_turf and total > 0 and (dirt_count / total) >= 0.80:
         result["bonus"] -= 0.08  # 80%+ dirt horse trying turf
-    elif today_is_dirt and total > 0 and (turf_count / total) >= 0.80:
-        result["bonus"] -= 0.05  # 80%+ turf horse trying dirt
+    # NOTE: No penalty for turf-heavy horse trying dirt — turf experience is a positive
 
     result["bonus"] = float(np.clip(result["bonus"], -0.25, 0.15))
     return result
