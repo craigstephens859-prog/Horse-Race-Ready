@@ -5774,13 +5774,11 @@ def detect_surface_switch(
 
     elif today_is_dirt and last_surface == "Turf":
         result["switch_type"] = "turf_to_dirt"
-        # Turf-to-dirt is a POSITIVE angle — horses often improve switching to dirt
-        if dirt_count >= 3:
-            result["bonus"] = 0.12  # Proven dirt horse returning from turf
+        if dirt_count == 0:
+            # FIRST TIME ON DIRT after racing on turf = positive angle
+            result["bonus"] = 0.15  # Turf-to-dirt first-timer bonus
         elif dirt_count >= 1:
-            result["bonus"] = 0.08  # Has some dirt experience
-        else:
-            result["bonus"] = 0.05  # First time dirt but turf-to-dirt angle is positive
+            result["bonus"] = 0.05  # Has dirt experience, smaller bonus
 
     elif today_is_turf and last_surface == "Turf":
         result["switch_type"] = "same_turf"
@@ -5796,22 +5794,9 @@ def detect_surface_switch(
         else:
             result["bonus"] = 0.02
 
-    # TURF-EXPERIENCE-ON-DIRT BONUS: Any horse with turf history racing on dirt
-    # gets a bonus. Turf experience translates positively to dirt performance.
-    if today_is_dirt and turf_count > 0:
-        turf_dirt_bonus = 0.0
-        if turf_count >= 4:
-            turf_dirt_bonus = 0.12  # Extensive turf experience
-        elif turf_count >= 2:
-            turf_dirt_bonus = 0.08  # Solid turf experience
-        else:
-            turf_dirt_bonus = 0.05  # Some turf experience
-        result["bonus"] += turf_dirt_bonus
-
     # Additional penalty: mostly raced on opposite surface
     if today_is_turf and total > 0 and (dirt_count / total) >= 0.80:
         result["bonus"] -= 0.08  # 80%+ dirt horse trying turf
-    # NOTE: No penalty for turf-heavy horse trying dirt — turf experience is a positive
 
     result["bonus"] = float(np.clip(result["bonus"], -0.25, 0.15))
     return result
