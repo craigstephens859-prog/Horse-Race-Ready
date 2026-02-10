@@ -4656,8 +4656,8 @@ for _, r in df_final_field.iterrows():
         pedigree=ped,
         angles_df=ang if ang is not None else pd.DataFrame(),
         pp_text=pp_text,  # NEW: Full PP for race analysis
-        distance_furlongs=distance_to_furlongs(distance_txt),  # NEW: Distance
-        surface_type=race_surface,  # NEW: Surface type
+        _distance_furlongs=distance_to_furlongs(distance_txt),  # NEW: Distance
+        _surface_type=race_surface,  # NEW: Surface type
     )
 
     # Add pedigree/angle tweaks on top of class
