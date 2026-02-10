@@ -5717,6 +5717,183 @@ def parse_race_history_from_block(block: str) -> list[dict]:
     return races[:10]
 
 
+def apply_track_pattern_bonus(
+    track_patterns: dict,
+    post_position: int,
+    running_style: str,
+    best_beyer: int,
+    class_rating: float,
+    days_since_last: int,
+    workout_pattern: str,
+    prime_power: float,
+    jockey: str = "",
+    trainer: str = "",
+) -> dict:
+    """
+    Apply learned track pattern data to compute a bonus/penalty for a horse.
+
+    Uses historical winner profiles at this track/surface/distance to reward
+    horses that match winning patterns and penalize mismatches.
+
+    Returns dict with 'bonus' (float) and 'details' (list of str explanations).
+    """
+    bonus = 0.0
+    details: list[str] = []
+    min_sample = 3  # Minimum races before patterns are meaningful
+
+    if not track_patterns:
+        return {"bonus": 0.0, "details": ["No track patterns available"]}
+
+    total_races = 0
+    tr = track_patterns.get("total_races_analyzed", {})
+    if isinstance(tr, dict):
+        total_races = int(tr.get("value", 0))
+    if total_races < min_sample:
+        return {
+            "bonus": 0.0,
+            "details": [f"Only {total_races} races recorded (need {min_sample})"],
+        }
+
+    # ---- 1. Post Position Pattern ----
+    post_data = track_patterns.get("post_win_rates", {})
+    if post_data and post_data.get("sample_size", 0) >= min_sample:
+        rates = post_data.get("value", {})
+        if isinstance(rates, dict):
+            pp_str = str(post_position)
+            pp_rate = rates.get(pp_str, None)
+            avg_rate = sum(rates.values()) / max(len(rates), 1) if rates else 0
+            if pp_rate is not None:
+                if pp_rate >= avg_rate * 1.5 and pp_rate >= 0.15:
+                    b = min(0.15, pp_rate * 0.4)
+                    bonus += b
+                    details.append(
+                        f"Post {post_position} wins {pp_rate * 100:.0f}% (+{b:.2f})"
+                    )
+                elif pp_rate <= avg_rate * 0.3:
+                    p = -0.08
+                    bonus += p
+                    details.append(
+                        f"Post {post_position} wins only {pp_rate * 100:.0f}% ({p:.2f})"
+                    )
+
+    # Best posts check
+    best_posts_data = track_patterns.get("best_posts", {})
+    if best_posts_data and best_posts_data.get("sample_size", 0) >= min_sample:
+        best_posts = best_posts_data.get("value", [])
+        if isinstance(best_posts, list) and str(post_position) in best_posts:
+            bonus += 0.05
+            details.append(f"Post {post_position} is a top winning post (+0.05)")
+
+    # ---- 2. Running Style Pattern ----
+    style_data = track_patterns.get("style_win_rates", {})
+    dom_style_data = track_patterns.get("dominant_winning_style", {})
+    if style_data and style_data.get("sample_size", 0) >= min_sample:
+        rates = style_data.get("value", {})
+        if isinstance(rates, dict) and running_style in rates:
+            style_rate = rates[running_style]
+            avg_style_rate = sum(rates.values()) / max(len(rates), 1) if rates else 0
+            if style_rate >= avg_style_rate * 1.5 and style_rate >= 0.20:
+                b = min(0.15, style_rate * 0.35)
+                bonus += b
+                details.append(
+                    f"Style '{running_style}' wins {style_rate * 100:.0f}% (+{b:.2f})"
+                )
+            elif style_rate <= avg_style_rate * 0.3:
+                p = -0.08
+                bonus += p
+                details.append(
+                    f"Style '{running_style}' wins only {style_rate * 100:.0f}% ({p:.2f})"
+                )
+
+    if dom_style_data:
+        dom = dom_style_data.get("value", "")
+        if dom and running_style == dom:
+            bonus += 0.05
+            details.append(f"Matches dominant winning style '{dom}' (+0.05)")
+
+    # ---- 3. Speed Figure Comparison ----
+    avg_beyer_data = track_patterns.get("avg_winner_best_beyer", {})
+    if avg_beyer_data and avg_beyer_data.get("sample_size", 0) >= min_sample:
+        avg_wb = float(avg_beyer_data.get("value", 0))
+        if avg_wb > 0 and best_beyer > 0:
+            diff = best_beyer - avg_wb
+            if diff >= 5:
+                b = min(0.15, diff * 0.02)
+                bonus += b
+                details.append(
+                    f"Best Beyer {best_beyer} vs avg winner {avg_wb:.0f} (+{b:.2f})"
+                )
+            elif diff <= -10:
+                p = max(-0.12, diff * 0.01)
+                bonus += p
+                details.append(
+                    f"Best Beyer {best_beyer} vs avg winner {avg_wb:.0f} ({p:.2f})"
+                )
+
+    # ---- 4. Class Rating Comparison ----
+    avg_class_data = track_patterns.get("avg_winner_class_rating", {})
+    if avg_class_data and avg_class_data.get("sample_size", 0) >= min_sample:
+        avg_wc = float(avg_class_data.get("value", 0))
+        if avg_wc > 0 and class_rating > 0:
+            diff = class_rating - avg_wc
+            if diff >= 0.5:
+                b = min(0.10, diff * 0.08)
+                bonus += b
+                details.append(
+                    f"Class {class_rating:.1f} vs avg winner {avg_wc:.1f} (+{b:.2f})"
+                )
+
+    # ---- 5. Freshness (Days Since Last) ----
+    avg_dsl_data = track_patterns.get("avg_winner_days_since_last", {})
+    if avg_dsl_data and avg_dsl_data.get("sample_size", 0) >= min_sample:
+        avg_dsl = float(avg_dsl_data.get("value", 0))
+        if avg_dsl > 0 and days_since_last > 0:
+            # Penalize if horse is much more rested or tighter than winners
+            diff = abs(days_since_last - avg_dsl)
+            if diff <= 7:
+                bonus += 0.05
+                details.append("Freshness matches winners (within 7 days, +0.05)")
+            elif diff >= 60:
+                bonus -= 0.05
+                details.append(
+                    f"Freshness differs by {diff:.0f} days from winner avg (-0.05)"
+                )
+
+    # ---- 6. Workout Pattern ----
+    workout_data = track_patterns.get("winner_workout_patterns", {})
+    if workout_data and workout_data.get("sample_size", 0) >= min_sample:
+        patterns = workout_data.get("value", {})
+        if isinstance(patterns, dict):
+            total_w = sum(patterns.values())
+            if total_w > 0 and workout_pattern in patterns:
+                wp_rate = patterns[workout_pattern] / total_w
+                if wp_rate >= 0.5:
+                    bonus += 0.05
+                    details.append(
+                        f"Workout '{workout_pattern}' matches {wp_rate * 100:.0f}% of winners (+0.05)"
+                    )
+
+    # ---- 7. Top Jockey/Trainer ----
+    jockey_data = track_patterns.get("top_jockeys", {})
+    if jockey_data and jockey and jockey_data.get("sample_size", 0) >= min_sample:
+        top_j = jockey_data.get("value", {})
+        if isinstance(top_j, dict) and jockey in top_j:
+            bonus += 0.05
+            details.append(f"Jockey '{jockey}' is a top winner here (+0.05)")
+
+    trainer_data = track_patterns.get("top_trainers", {})
+    if trainer_data and trainer and trainer_data.get("sample_size", 0) >= min_sample:
+        top_t = trainer_data.get("value", {})
+        if isinstance(top_t, dict) and trainer in top_t:
+            bonus += 0.05
+            details.append(f"Trainer '{trainer}' is a top winner here (+0.05)")
+
+    # Cap total bonus in [-0.30, +0.50]
+    bonus = max(-0.30, min(0.50, bonus))
+
+    return {"bonus": round(bonus, 3), "details": details}
+
+
 def detect_surface_switch(
     race_history: list[dict],
     today_surface: str,
@@ -6628,6 +6805,26 @@ def compute_bias_ratings(
         else {}
     )
 
+    # ======================== TRACK PATTERN LEARNING: Fetch learned patterns ========================
+    _track_patterns: dict = {}
+    try:
+        if track_name and "gold_db" in dir() or True:
+            # Use the global gold_db instance
+            _gold_db = globals().get("gold_db")
+            if _gold_db and hasattr(_gold_db, "get_track_patterns"):
+                _track_patterns = _gold_db.get_track_patterns(
+                    track_code=track_name,
+                    surface=surface_type,
+                    distance=distance_txt,
+                )
+                if _track_patterns:
+                    logger.info(
+                        f"📊 Loaded {len(_track_patterns)} track patterns for "
+                        f"{track_name} {surface_type} {distance_txt}"
+                    )
+    except Exception as tp_err:
+        logger.debug(f"Track pattern fetch skipped: {tp_err}")
+
     # Calculate speed component from figs_df
     speed_map = {}
     if figs_df is not None and not figs_df.empty and "AvgTop2" in figs_df.columns:
@@ -6860,6 +7057,50 @@ def compute_bias_ratings(
             workout_quality = score_workout_quality(_horse_block)
             workout_bonus = workout_quality.get("quality_bonus", 0.0)
             tier2_bonus += workout_bonus
+        except BaseException:
+            pass
+
+        # ======================== TRACK PATTERN LEARNING BONUS ========================
+        # Apply learned historical patterns at this track/surface/distance.
+        # Rewards horses matching characteristics of past winners; penalizes mismatches.
+        track_pattern_detail = []
+        try:
+            if _track_patterns:
+                # Extract horse-level attributes for pattern matching
+                _h_best_beyer = int(
+                    row.get("best_beyer", row.get("Best_Beyer", 0)) or 0
+                )
+                _h_class_rat = float(row.get("Cclass", row.get("class_rating", 0)) or 0)
+                _h_dsl = int(
+                    row.get("days_since_last", row.get("Days_Since_Last", 0)) or 0
+                )
+                _h_pp = float(row.get("prime_power", row.get("Prime_Power", 0)) or 0)
+                _h_workout = "Steady"
+                try:
+                    wq = score_workout_quality(_horse_block)
+                    wq_b = wq.get("quality_bonus", 0)
+                    if wq_b >= 0.08:
+                        _h_workout = "Sharp"
+                    elif wq_b <= -0.05:
+                        _h_workout = "Sparse"
+                except BaseException:
+                    pass
+
+                tp_result = apply_track_pattern_bonus(
+                    track_patterns=_track_patterns,
+                    post_position=int(post) if str(post).isdigit() else 0,
+                    running_style=style,
+                    best_beyer=_h_best_beyer,
+                    class_rating=_h_class_rat,
+                    days_since_last=_h_dsl,
+                    workout_pattern=_h_workout,
+                    prime_power=_h_pp,
+                    jockey=str(row.get("jockey", row.get("Jockey", ""))),
+                    trainer=str(row.get("trainer", row.get("Trainer", ""))),
+                )
+                tp_bonus = tp_result.get("bonus", 0.0)
+                track_pattern_detail = tp_result.get("details", [])
+                tier2_bonus += tp_bonus
         except BaseException:
             pass
 
@@ -10544,6 +10785,50 @@ else:
                                                 except Exception as learn_err:
                                                     logger.warning(
                                                         f"Intelligent learning failed: {learn_err}"
+                                                    )
+
+                                                # TRACK PATTERN LEARNING: Show pattern update confirmation
+                                                try:
+                                                    if hasattr(
+                                                        gold_db, "get_track_patterns"
+                                                    ):
+                                                        # Patterns were stored during submit_race_results
+                                                        # Show what we learned
+                                                        _tp = gold_db.get_track_patterns(
+                                                            track_code=race_id.split(
+                                                                "_"
+                                                            )[0]
+                                                            if "_" in race_id
+                                                            else "UNK",
+                                                            surface=st.session_state.get(
+                                                                "race_surface", "Dirt"
+                                                            ),
+                                                            distance=st.session_state.get(
+                                                                "race_distance", "6F"
+                                                            ),
+                                                        )
+                                                        if _tp:
+                                                            _tp_races = _tp.get(
+                                                                "total_races_analyzed",
+                                                                {},
+                                                            ).get("value", 0)
+                                                            _tp_style = _tp.get(
+                                                                "dominant_winning_style",
+                                                                {},
+                                                            ).get("value", "?")
+                                                            _tp_beyer = _tp.get(
+                                                                "avg_winner_best_beyer",
+                                                                {},
+                                                            ).get("value", "?")
+                                                            st.info(
+                                                                f"📊 Track patterns updated! "
+                                                                f"{_tp_races} races learned | "
+                                                                f"Dominant style: {_tp_style} | "
+                                                                f"Avg winner Beyer: {_tp_beyer}"
+                                                            )
+                                                except Exception as tp_err:
+                                                    logger.debug(
+                                                        f"Track pattern display: {tp_err}"
                                                     )
 
                                                 # CLOUD BACKUP: Push to GitHub so data survives Render redeploys
