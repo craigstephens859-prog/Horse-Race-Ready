@@ -5774,12 +5774,13 @@ def detect_surface_switch(
 
     elif today_is_dirt and last_surface == "Turf":
         result["switch_type"] = "turf_to_dirt"
-        if dirt_count == 0:
-            result["bonus"] = -0.15  # Never on dirt
-        elif dirt_count <= 1:
-            result["bonus"] = -0.08
+        # Turf-to-dirt is a POSITIVE angle — horses often improve switching to dirt
+        if dirt_count >= 3:
+            result["bonus"] = 0.12  # Proven dirt horse returning from turf
+        elif dirt_count >= 1:
+            result["bonus"] = 0.08  # Has some dirt experience
         else:
-            result["bonus"] = -0.03
+            result["bonus"] = 0.05  # First time dirt but turf-to-dirt angle is positive
 
     elif today_is_turf and last_surface == "Turf":
         result["switch_type"] = "same_turf"
