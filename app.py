@@ -249,7 +249,7 @@ if 'surface_type' not in st.session_state:
 if 'condition_txt' not in st.session_state:
     st.session_state['condition_txt'] = "fast"
 if 'distance_txt' not in st.session_state:
-    st.session_state['distance_txt'] = "6 Furlongs"
+    st.session_state['distance_txt'] = DEFAULT_DISTANCE
 if 'purse_val' not in st.session_state:
     st.session_state['purse_val'] = 80000
 
@@ -354,7 +354,7 @@ MODEL_CONFIG = {
     "style_match_table": {
         "favoring": {"E": 0.70, "E/P": 0.50, "P": -0.20, "S": -0.50},
         "closer favoring": {"E": -0.50, "E/P": -0.20, "P": 0.25, "S": 0.50},
-        "fair/neutral": {"E": 0.0, "E/P": 0.0, "P": 0.0, "S": 0.0},
+        BIAS_FAIR_NEUTRAL: {"E": 0.0, "E/P": 0.0, "P": 0.0, "S": 0.0},
     },
     "style_quirin_threshold": 6,  # Quirin score needed for "strong" style bonus.
     "style_quirin_bonus": 0.10,  # Bonus for strong style (e.g., E w/ Q>=6).
@@ -408,7 +408,7 @@ DISTANCE_OPTIONS = [
     # Short sprints
     "4 Furlongs", "4 1/2 Furlongs", "4.5 Furlongs",
     "5 Furlongs", "5 1/2 Furlongs", "5.5 Furlongs",
-    "6 Furlongs", "6 1/2 Furlongs", "6.5 Furlongs", "7 Furlongs",
+    DEFAULT_DISTANCE, "6 1/2 Furlongs", "6.5 Furlongs", "7 Furlongs",
     # Routes & variants
     "1 Mile", "1 Mile 70 Yards",
     "1 1/16 Miles", "1 1/8 Miles", "1 3/16 Miles", "1 1/4 Miles",
@@ -429,14 +429,14 @@ def _distance_bucket_from_text(distance_txt: str) -> str:
         if m:
             val = float(m.group(1))
             if val <= 6.0:
-                return "≤6f"
+                return DIST_BUCKET_SPRINT
             if val < 8.0:
-                return "6.5–7f"
-            return "8f+"
+                return DIST_BUCKET_MID
+            return DIST_BUCKET_ROUTE
     # Miles
     if "mile" in d:
         if "70" in d and "yard" in d:
-            return "8f+"
+            return DIST_BUCKET_ROUTE
         fracs = {"1/16": 1 / 16, "1/8": 1 / 8, "3/16": 3 / 16, "1/4": 1 / 4,
                  "5/16": 5 / 16, "3/8": 3 / 8, "7/16": 7 / 16, "1/2": 0.5}
         base = 0.0
@@ -451,11 +451,11 @@ def _distance_bucket_from_text(distance_txt: str) -> str:
         total_mi = base + extra
         total_f = total_mi * 8.0
         if total_f < 6.5:
-            return "≤6f"
+            return DIST_BUCKET_SPRINT
         if total_f < 8.0:
-            return "6.5–7f"
-        return "8f+"
-    return "8f+"
+            return DIST_BUCKET_MID
+        return DIST_BUCKET_ROUTE
+    return DIST_BUCKET_ROUTE
 
 
 def distance_to_furlongs(dist_str: str) -> float:
@@ -486,7 +486,7 @@ def distance_bucket(distance_txt: str) -> str:
     try:
         return _distance_bucket_from_text(distance_txt)
     except Exception:
-        return "8f+"
+        return DIST_BUCKET_ROUTE
 
 
 # -------- Canonical track names + aliases --------
@@ -713,7 +713,7 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
                 result['race_date'] = comma_parts[1].strip()
             text = text[:date_match.start()].strip().rstrip(',').strip()
 
-        # --- Extract Distance (e.g., "6 Furlongs", "1 1/16 Miles", "1„ Mile") ---
+        # --- Extract Distance (e.g., DEFAULT_DISTANCE, "1 1/16 Miles", "1„ Mile") ---
         dist_pattern = r'([\d½¼¾„ˆ]+(?:\s*[\d½¼¾/]+)?\s*(?:Furlongs?|Miles?|Yards?)\b)'
         dist_match = re.search(dist_pattern, text, re.IGNORECASE)
         if dist_match:
@@ -807,7 +807,7 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
                 pass
             continue
 
-        # Distance (e.g., "6 Furlongs", "1 Mile", "1„ Mile")
+        # Distance (e.g., DEFAULT_DISTANCE, "1 Mile", "1„ Mile")
         if re.search(r'\d+\s*(?:furlong|mile|yard|f\b)', part_lower):
             result['distance'] = part
             continue
@@ -851,13 +851,13 @@ base_class_bias = {
     "stakes (listed)": 0.95,
     "stakes": 0.95,
     "allowance optional claiming (aoc)": 0.96,
-    "maiden special weight": 0.97,
+    RACE_TYPE_MAIDEN_SP_WT: 0.97,
     "allowance": 0.99,
     "starter handicap": 1.02,
     "starter allowance": 1.03,
     "waiver claiming": 1.07,
     "claiming": 1.12,
-    "maiden claiming": 1.15,
+    RACE_TYPE_MAIDEN_CLM: 1.15,
 }
 
 condition_modifiers = {
@@ -889,10 +889,10 @@ def detect_race_type(pp_text: str) -> str:
     # Maiden
     if re.search(r'\b(mdn|maiden)\b', s):
         if re.search(r'(mcl|mdn\s*clm|maiden\s*claim)', s):
-            return "maiden claiming"
+            return RACE_TYPE_MAIDEN_CLM
         if re.search(r'(msw|maiden\s*special|maiden\s*sp\s*wt)', s):
-            return "maiden special weight"
-        return "maiden special weight"
+            return RACE_TYPE_MAIDEN_SP_WT
+        return RACE_TYPE_MAIDEN_SP_WT
 
     # AOC
     if re.search(r'\b(oc|aoc|optional\s*claim)\b', s):
@@ -923,360 +923,360 @@ def detect_race_type(pp_text: str) -> str:
 TRACK_BIAS_PROFILES = {
     "Keeneland": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.35, "E/P": 0.20, "P": -0.10, "S": -0.25},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.35, "E/P": 0.20, "P": -0.10, "S": -0.25},
                     "post": {"rail": 0.20, "inner": 0.10, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": 0.00, "S": -0.10},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": 0.00, "S": -0.10},
                        "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Del Mar": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Churchill Downs": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.05, "P": 0.00, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.05, "P": 0.00, "S": -0.10},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Kentucky Downs": {
         "Turf": {
-            "≤6f": {"runstyle": {"E": -0.05, "E/P": 0.00, "P": 0.10, "S": 0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": -0.05, "E/P": 0.00, "P": 0.10, "S": 0.15},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
-            "6.5–7f": {"runstyle": {"E": -0.05, "E/P": 0.00, "P": 0.10, "S": 0.15},
+            DIST_BUCKET_MID: {"runstyle": {"E": -0.05, "E/P": 0.00, "P": 0.10, "S": 0.15},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
-            "8f+": {"runstyle": {"E": -0.10, "E/P": 0.00, "P": 0.10, "S": 0.20},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": -0.10, "E/P": 0.00, "P": 0.10, "S": 0.20},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}}
         }
     },
     "Saratoga": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Santa Anita": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Mountaineer": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
         }
     },
     "Charles Town": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.45, "E/P": 0.25, "P": -0.15, "S": -0.35},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.45, "E/P": 0.25, "P": -0.15, "S": -0.35},
                     "post": {"rail": 0.25, "inner": 0.15, "mid": -0.05, "outside": -0.10}},
-            "6.5–7f": {"runstyle": {"E": 0.30, "E/P": 0.20, "P": -0.10, "S": -0.25},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.30, "E/P": 0.20, "P": -0.10, "S": -0.25},
                        "post": {"rail": 0.15, "inner": 0.10, "mid": -0.05, "outside": -0.10}},
-            "8f+": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": 0.00, "S": -0.10},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": 0.00, "S": -0.10},
                     "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
         }
     },
     "Gulfstream Park": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Synthetic": {
-            "≤6f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
         }
     },
     "Tampa Bay Downs": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Belmont Park": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.05, "P": 0.00, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.05, "P": 0.00, "S": -0.10},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Horseshoe Indianapolis": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
         }
     },
     "Penn National": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": 0.00}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": 0.00}}
         }
     },
     "Presque Isle Downs": {
         "Synthetic": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": 0.00, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": 0.00, "S": -0.10},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.05, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.05}}
         }
     },
     "Woodbine": {
         "Synthetic": {
-            "≤6f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.00}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.05, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Evangeline Downs": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
         }
     },
     "Oaklawn Park": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.30, "E/P": 0.15, "P": -0.10, "S": -0.20},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.30, "E/P": 0.15, "P": -0.10, "S": -0.20},
                     "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.10}},
-            "6.5–7f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                        "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
         }
     },
     "Fair Grounds": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.20},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.20},
                     "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.10}},
-            "6.5–7f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                        "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Aqueduct": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.05, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Laurel Park": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.20, "E/P": 0.10, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.05, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.05, "mid": 0.05, "outside": -0.05}}
         }
     },
     "Fairmount Park": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
         }
     },
     "Finger Lakes": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.25, "E/P": 0.15, "P": -0.05, "S": -0.15},
                     "post": {"rail": 0.10, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}},
-            "8f+": {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.05, "E/P": 0.00, "P": 0.05, "S": -0.05},
                     "post": {"rail": 0.05, "inner": 0.00, "mid": 0.00, "outside": -0.05}}
         }
     },
     # Default fallback profile for tracks not specifically listed
     "_DEFAULT": {
         "Dirt": {
-            "≤6f": {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.15, "E/P": 0.10, "P": -0.05, "S": -0.10},
                     "post": {"rail": 0.05, "inner": 0.05, "mid": 0.00, "outside": -0.05}},
-            "6.5–7f": {"runstyle": {"E": 0.08, "E/P": 0.05, "P": 0.00, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.08, "E/P": 0.05, "P": 0.00, "S": -0.05},
                        "post": {"rail": 0.03, "inner": 0.03, "mid": 0.00, "outside": -0.03}},
-            "8f+": {"runstyle": {"E": 0.03, "E/P": 0.03, "P": 0.03, "S": -0.03},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.03, "E/P": 0.03, "P": 0.03, "S": -0.03},
                     "post": {"rail": 0.03, "inner": 0.03, "mid": 0.00, "outside": -0.03}}
         },
         "Turf": {
-            "≤6f": {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.08},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.10, "E/P": 0.05, "P": 0.00, "S": -0.08},
                     "post": {"rail": 0.00, "inner": 0.03, "mid": 0.00, "outside": -0.03}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.03, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.03, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.03, "mid": 0.03, "outside": -0.03}},
-            "8f+": {"runstyle": {"E": 0.00, "E/P": 0.03, "P": 0.05, "S": -0.03},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.00, "E/P": 0.03, "P": 0.05, "S": -0.03},
                     "post": {"rail": 0.00, "inner": 0.03, "mid": 0.03, "outside": -0.03}}
         },
         "Synthetic": {
-            "≤6f": {"runstyle": {"E": 0.08, "E/P": 0.05, "P": 0.03, "S": -0.05},
+            DIST_BUCKET_SPRINT: {"runstyle": {"E": 0.08, "E/P": 0.05, "P": 0.03, "S": -0.05},
                     "post": {"rail": 0.00, "inner": 0.00, "mid": 0.03, "outside": 0.00}},
-            "6.5–7f": {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.03, "S": -0.05},
+            DIST_BUCKET_MID: {"runstyle": {"E": 0.05, "E/P": 0.05, "P": 0.03, "S": -0.05},
                        "post": {"rail": 0.00, "inner": 0.00, "mid": 0.03, "outside": 0.00}},
-            "8f+": {"runstyle": {"E": 0.03, "E/P": 0.05, "P": 0.05, "S": -0.03},
+            DIST_BUCKET_ROUTE: {"runstyle": {"E": 0.03, "E/P": 0.05, "P": 0.05, "S": -0.03},
                     "post": {"rail": 0.00, "inner": 0.03, "mid": 0.03, "outside": 0.00}}
         }
     }
@@ -2119,12 +2119,12 @@ def overlay_table(fair_probs: dict[str, float], offered: dict[str, float]) -> pd
 
         rows.append({
             "Horse": h,
-            "Fair %": round(p * 100, 2),
+            COL_FAIR_PCT: round(p * 100, 2),
             "Fair (AM)": fair_to_american_str(p),
             "Board (dec)": round(off_dec, 3),
             "Board %": round(off_prob * 100, 2),
-            "Edge (pp)": round((p - off_prob) * 100, 2),
-            "EV per $1": round(ev, 3),
+            COL_EDGE_PP: round((p - off_prob) * 100, 2),
+            COL_EV_PER_DOLLAR: round(ev, 3),
             "Overlay?": "YES" if off_prob < p else "NO"
         })
 
@@ -2174,9 +2174,9 @@ def calculate_exotics_biased(fair_probs: dict[str, float],
         r["Prob"] = r["Prob"] / ex_total
     for r in ex_rows:
         if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
+            r[COL_FAIR_ODDS] = (1.0 / r["Prob"]) - 1
         else:
-            r["Fair Odds"] = float('inf')
+            r[COL_FAIR_ODDS] = float('inf')
     df_ex = pd.DataFrame(ex_rows).sort_values(by="Prob", ascending=False).head(top_n)
 
     if n < 3:
@@ -2203,9 +2203,9 @@ def calculate_exotics_biased(fair_probs: dict[str, float],
         r["Prob"] = r["Prob"] / tri_total
     for r in tri_rows:
         if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
+            r[COL_FAIR_ODDS] = (1.0 / r["Prob"]) - 1
         else:
-            r["Fair Odds"] = float('inf')
+            r[COL_FAIR_ODDS] = float('inf')
     df_tri = pd.DataFrame(tri_rows).sort_values(by="Prob", ascending=False).head(top_n)
 
     if n < 4:
@@ -2234,9 +2234,9 @@ def calculate_exotics_biased(fair_probs: dict[str, float],
         r["Prob"] = r["Prob"] / super_total
     for r in super_rows:
         if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
+            r[COL_FAIR_ODDS] = (1.0 / r["Prob"]) - 1
         else:
-            r["Fair Odds"] = float('inf')
+            r[COL_FAIR_ODDS] = float('inf')
     df_super = pd.DataFrame(super_rows).sort_values(by="Prob", ascending=False).head(top_n)
 
     if n < 5:
@@ -2276,9 +2276,9 @@ def calculate_exotics_biased(fair_probs: dict[str, float],
         r["Prob"] = r["Prob"] / sh5_total
     for r in sh5_rows:
         if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
+            r[COL_FAIR_ODDS] = (1.0 / r["Prob"]) - 1
         else:
-            r["Fair Odds"] = float('inf')
+            r[COL_FAIR_ODDS] = float('inf')
     df_super_hi_5 = pd.DataFrame(sh5_rows).sort_values(by="Prob", ascending=False).head(top_n)
 
     return df_ex, df_tri, df_super, df_super_hi_5
@@ -2288,11 +2288,11 @@ def format_exotics_for_prompt(df: pd.DataFrame, title: str) -> str:
     if df is None or df.empty:
         return f"**{title} (Model-Derived)**\nNone.\n"
     df = df.copy()
-    if "Prob %" not in df.columns:
-        df["Prob %"] = (df["Prob"] * 100).round(2)
+    if COL_PROB_PCT not in df.columns:
+        df[COL_PROB_PCT] = (df["Prob"] * 100).round(2)
     # Format Fair Odds to handle potential infinity
-    df["Fair Odds"] = df["Fair Odds"].apply(lambda x: f"{x:.2f}" if np.isfinite(x) else "in")
-    md = df[["Ticket", "Prob %", "Fair Odds"]].to_markdown(index=False)
+    df[COL_FAIR_ODDS] = df[COL_FAIR_ODDS].apply(lambda x: f"{x:.2f}" if np.isfinite(x) else "in")
+    md = df[["Ticket", COL_PROB_PCT, COL_FAIR_ODDS]].to_markdown(index=False)
     return f"**{title} (Model-Derived)**\n{md}\n"
 
 # -------- Class + suitability model --------
@@ -2617,7 +2617,7 @@ def evaluate_first_time_starter(
         if '1st time str' in angle_text or 'debut' in angle_text:
             debut_rating += 0.5  # Trainer pattern recognition
 
-        if 'maiden sp wt' in angle_text or 'maiden special weight' in angle_text:
+        if 'maiden sp wt' in angle_text or RACE_TYPE_MAIDEN_SP_WT in angle_text:
             debut_rating += 0.3  # MSW debut angle
 
         # High ROI trainer debut pattern
@@ -2631,9 +2631,9 @@ def evaluate_first_time_starter(
                     debut_rating += 0.4
 
     # 4. RACE TYPE CONTEXT
-    if 'maiden special weight' in horse_block.lower():
+    if RACE_TYPE_MAIDEN_SP_WT in horse_block.lower():
         debut_rating += 0.2  # MSW is better spot than MCL for debuts
-    elif 'maiden claiming' in horse_block.lower():
+    elif RACE_TYPE_MAIDEN_CLM in horse_block.lower():
         debut_rating -= 0.3  # MCL debut is tougher
 
     return float(np.clip(debut_rating, -2.0, 3.5))
@@ -2801,11 +2801,11 @@ def extract_race_metadata_from_pp(pp_text: str) -> dict[str, Any]:
             result['confidence'] += 0.5
         elif re.search(r'\bMaiden\s+Special\s+Weight\b', after_purse, re.IGNORECASE):
             result['race_type_raw'] = 'Maiden Special Weight'
-            result['race_type_normalized'] = 'maiden special weight'
+            result['race_type_normalized'] = RACE_TYPE_MAIDEN_SP_WT
             result['confidence'] += 0.5
         elif re.search(r'\bMaiden\s+Claiming\b', after_purse, re.IGNORECASE):
             result['race_type_raw'] = 'Maiden Claiming'
-            result['race_type_normalized'] = 'maiden claiming'
+            result['race_type_normalized'] = RACE_TYPE_MAIDEN_CLM
             result['confidence'] += 0.5
         elif re.search(r'\b(Stakes?|G[123]|Grade)\b', after_purse, re.IGNORECASE):
             result['race_type_raw'] = 'Stakes'
@@ -2863,7 +2863,7 @@ def extract_race_metadata_from_pp(pp_text: str) -> dict[str, Any]:
                 result['race_type_raw'] = race_type_line.group(1).strip()
                 result['confidence'] += 0.3
             elif 'maiden' in race_text:
-                result['race_type_normalized'] = 'maiden special weight'
+                result['race_type_normalized'] = RACE_TYPE_MAIDEN_SP_WT
                 result['race_type_raw'] = race_type_line.group(1).strip()
                 result['confidence'] += 0.3
 
@@ -3142,10 +3142,10 @@ def calculate_comprehensive_class_rating(
     # Based on industry-standard US horse racing hierarchy (1-7 scale)
     race_type_scores = {
         # Maiden (Level 1)
-        'msw': 1, 'maiden special weight': 1, 'md sp wt': 1,
+        'msw': 1, RACE_TYPE_MAIDEN_SP_WT: 1, 'md sp wt': 1,
         'mdn': 1, 'md': 1, 'maiden': 1,
         'moc': 1, 'maiden optional claiming': 1,
-        'mcl': 1, 'maiden claiming': 1, 'md cl': 1, 'mdnclm': 1, 'mdc': 1,
+        'mcl': 1, RACE_TYPE_MAIDEN_CLM: 1, 'md cl': 1, 'mdnclm': 1, 'mdc': 1,
         'msc': 1, 'maiden starter claiming': 1,
 
         # Claiming (Level 2)
@@ -3518,13 +3518,13 @@ def _auto_distance_label(s: str) -> str:
         return "1 1/16 Miles"
     if re.search(r'(?i)\b7\s*furlongs?\b', s):
         return "7 Furlongs"
-    return "6 Furlongs"
+    return DEFAULT_DISTANCE
 
 
 auto_distance = _auto_distance_label(first_line)
 # try to map to option variants
 preferred = (auto_distance or "").replace("½", "1/2").replace(" 1/2", " 1/2")
-idx = DISTANCE_OPTIONS.index("6 Furlongs") if "6 Furlongs" in DISTANCE_OPTIONS else 0
+idx = DISTANCE_OPTIONS.index(DEFAULT_DISTANCE) if DEFAULT_DISTANCE in DISTANCE_OPTIONS else 0
 for opt in (preferred, auto_distance, st.session_state['distance_txt']):
     if opt in DISTANCE_OPTIONS:
         idx = DISTANCE_OPTIONS.index(opt)
@@ -3758,7 +3758,7 @@ def _infer_horse_distance_pref(ped: dict) -> str:
     if m <= 6.5:
         return "≤6"
     if m >= 7.5:
-        return "8f+"
+        return DIST_BUCKET_ROUTE
     return "6.5–7"
 
 
@@ -3778,12 +3778,12 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
     if awds:
         awd_mean = float(np.nanmean(awds))
         if pd.notna(awd_mean):  # Use pandas notna for clarity
-            if race_bucket == "≤6f":
+            if race_bucket == DIST_BUCKET_SPRINT:
                 if awd_mean <= 6.5:
                     tweak += MODEL_CONFIG['ped_dist_bonus']
                 elif awd_mean >= 7.5:
                     tweak += MODEL_CONFIG['ped_dist_penalty']
-            elif race_bucket == "8f+":
+            elif race_bucket == DIST_BUCKET_ROUTE:
                 if awd_mean >= 7.5:
                     tweak += MODEL_CONFIG['ped_dist_bonus']
                 elif awd_mean <= 6.5:
@@ -3803,8 +3803,8 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
     if ang is not None and not ang.empty:
         cats = " ".join(ang["Category"].astype(str).tolist()).lower()
         if "1st time str" in cats or "debut mdnspwt" in cats or "maiden sp wt" in cats:
-            tweak += MODEL_CONFIG['angle_debut_msw_bonus'] if race_type_detected == "maiden special weight" else MODEL_CONFIG['angle_debut_other_bonus']
-            if race_bucket == "≤6f":
+            tweak += MODEL_CONFIG['angle_debut_msw_bonus'] if race_type_detected == RACE_TYPE_MAIDEN_SP_WT else MODEL_CONFIG['angle_debut_other_bonus']
+            if race_bucket == DIST_BUCKET_SPRINT:
                 tweak += MODEL_CONFIG['angle_debut_sprint_bonus']
         if "2nd career" in cats:
             tweak += MODEL_CONFIG['angle_second_career_bonus']
@@ -3831,7 +3831,7 @@ def _angles_pedigree_tweak(name: str, race_surface: str, race_bucket: str, race_
 
     # 3) Condition nuance
     if race_cond in {"muddy", "sloppy", "heavy"} and awd_mean == awd_mean:  # Check if not NaN
-        if race_bucket != "≤6f" and awd_mean >= 7.5:
+        if race_bucket != DIST_BUCKET_SPRINT and awd_mean >= 7.5:
             tweak += MODEL_CONFIG['angle_off_track_route_bonus']
 
     return float(np.clip(round(tweak, 3), MODEL_CONFIG['angle_tweak_min_clip'], MODEL_CONFIG['angle_tweak_max_clip']))
@@ -3956,7 +3956,7 @@ def _style_bias_label_from_choice(choice: str) -> str:
         return "speed favoring"
     if up in ("P", "S"):
         return "closer favoring"
-    return "fair/neutral"
+    return BIAS_FAIR_NEUTRAL
 
 
 def style_match_score(running_style_bias: str, style: str, quirin: float) -> float:
@@ -3965,7 +3965,7 @@ def style_match_score(running_style_bias: str, style: str, quirin: float) -> flo
     stl = (style or "NA").upper()
 
     table = MODEL_CONFIG['style_match_table']
-    base = table.get(bias, table["fair/neutral"]).get(stl, 0.0)
+    base = table.get(bias, table[BIAS_FAIR_NEUTRAL]).get(stl, 0.0)
 
     try:
         q = float(quirin)
@@ -3998,7 +3998,7 @@ def style_match_score_multi(running_style_biases: list, style: str, quirin: floa
         bias_label = _style_bias_label_from_choice(bias_choice)
         bias_lower = bias_label.strip().lower()
 
-        bonus = table.get(bias_lower, table["fair/neutral"]).get(stl, 0.0)
+        bonus = table.get(bias_lower, table[BIAS_FAIR_NEUTRAL]).get(stl, 0.0)
 
         # Add Quirin bonus if applicable
         if stl in ("E", "E/P") and pd.notna(q) and q >= MODEL_CONFIG['style_quirin_threshold']:
@@ -5872,7 +5872,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     race_type_clean = 'allowance'
                 elif 'aoc' in race_type_lower or 'optional' in race_type_lower:
                     race_type_clean = 'allowance_optional'
-                elif 'maiden claiming' in race_type_lower or 'mcl' in race_type_lower:
+                elif RACE_TYPE_MAIDEN_CLM in race_type_lower or 'mcl' in race_type_lower:
                     race_type_clean = 'maiden_claiming'
                 elif 'claiming' in race_type_lower or 'clm' in race_type_lower:
                     race_type_clean = 'claiming'
@@ -6241,7 +6241,7 @@ def get_weight_preset(surface: str, distance: str) -> dict:
     - Route (≥8f): Class/stamina more important
     """
     surf = (surface or "Dirt").strip().lower()
-    dist_bucket = distance_bucket(distance) if distance else "8f+"
+    dist_bucket = distance_bucket(distance) if distance else DIST_BUCKET_ROUTE
 
     base = {
         "class_form": 1.0,
@@ -6264,10 +6264,10 @@ def get_weight_preset(surface: str, distance: str) -> dict:
         base["class_form"] = 1.0
 
     # Distance adjustments
-    if dist_bucket == "≤6f":  # Sprint
+    if dist_bucket == DIST_BUCKET_SPRINT:  # Sprint
         base["pace_speed"] *= 1.20  # Pace critical in sprints
         base["class_form"] *= 0.90  # Class less predictive in sprints
-    elif dist_bucket == "6.5–7f":  # Middle distance
+    elif dist_bucket == DIST_BUCKET_MID:  # Middle distance
         base["pace_speed"] *= 1.05
         base["class_form"] *= 1.05
     else:  # Route (8f+)
@@ -6478,11 +6478,11 @@ for i, (rbias, pbias) in enumerate(scenarios):
 
         fair_probs = fair_probs_from_ratings(ratings_df, ml_odds_dict)
         if 'Horse' in ratings_df.columns:
-            ratings_df["Fair %"] = ratings_df["Horse"].map(lambda h: f"{fair_probs.get(h, 0) * 100:.1f}%")
-            ratings_df["Fair Odds"] = ratings_df["Horse"].map(lambda h: fair_to_american_str(fair_probs.get(h, 0)))
+            ratings_df[COL_FAIR_PCT] = ratings_df["Horse"].map(lambda h: f"{fair_probs.get(h, 0) * 100:.1f}%")
+            ratings_df[COL_FAIR_ODDS] = ratings_df["Horse"].map(lambda h: fair_to_american_str(fair_probs.get(h, 0)))
         else:
-            ratings_df["Fair %"] = ""
-            ratings_df["Fair Odds"] = ""
+            ratings_df[COL_FAIR_PCT] = ""
+            ratings_df[COL_FAIR_ODDS] = ""
         all_scenario_ratings[(rbias, pbias)] = (ratings_df.copy(), fair_probs)  # Store copy and probs
 
         disp = ratings_df.sort_values(by="R", ascending=False)
@@ -6552,8 +6552,8 @@ st.dataframe(
     df_ol,
     use_container_width=True, hide_index=True,
     column_config={
-        "EV per $1": st.column_config.NumberColumn("EV per $1", format="$%.3"),
-        "Edge (pp)": st.column_config.NumberColumn("Edge (pp)")
+        COL_EV_PER_DOLLAR: st.column_config.NumberColumn(COL_EV_PER_DOLLAR, format="$%.3"),
+        COL_EDGE_PP: st.column_config.NumberColumn(COL_EDGE_PP)
     }
 )
 
@@ -6717,7 +6717,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             primary_probs_dict[horse] = 1.0 / max(len(primary_df), 1)
             continue
 
-        prob_str = horse_df['Fair %'].iloc[0]
+        prob_str = horse_df[COL_FAIR_PCT].iloc[0]
         try:
             # Handle multiple formats: "25.5%", "0.255", 25.5
             if isinstance(prob_str, str):
@@ -6761,7 +6761,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         if df is None or df.empty:
             return []
 
-        if 'Horse' not in df.columns or 'Fair %' not in df.columns:
+        if 'Horse' not in df.columns or COL_FAIR_PCT not in df.columns:
             return []
 
         horses = df['Horse'].tolist()
@@ -6776,7 +6776,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                 win_probs.append(1.0 / len(horses))  # Fallback to uniform
                 continue
 
-            prob_str = horse_df['Fair %'].iloc[0]
+            prob_str = horse_df[COL_FAIR_PCT].iloc[0]
             try:
                 # Handle various formats: "25.5%", "0.255", 25.5
                 if isinstance(prob_str, str):
@@ -6875,7 +6875,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
             if h in selected_horses and h != primary_horse:
                 continue
 
-            h_prob_str = primary_df[primary_df['Horse'] == h]['Fair %'].iloc[0]
+            h_prob_str = primary_df[primary_df['Horse'] == h][COL_FAIR_PCT].iloc[0]
             try:
                 if isinstance(h_prob_str, str):
                     h_prob = float(h_prob_str.strip('%').strip()) / (100.0 if '%' in str(h_prob_str) else 1.0)
@@ -6956,7 +6956,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
     _sorted_for_groups['_R_numeric'] = pd.to_numeric(_sorted_for_groups['R'], errors='coerce')
     _sorted_for_groups = _sorted_for_groups.sort_values('_R_numeric', ascending=False, na_position='last')
     all_horses = _sorted_for_groups['Horse'].tolist()
-    pos_ev_horses = set(df_ol[df_ol["EV per $1"] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
+    pos_ev_horses = set(df_ol[df_ol[COL_EV_PER_DOLLAR] > 0.05]['Horse'].tolist()) if not df_ol.empty else set()
 
     # ═══════════════════════════════════════════════════════════════
     # PEGASUS 2026 TUNING: Block horses with massive odds drift from A-Group
@@ -7324,7 +7324,7 @@ else:
                         st.session_state['primary_d'] = primary_df
 
                 # VALIDATION: Check required columns exist
-                required_cols = ['Horse', 'R', 'Fair %', 'Fair Odds']
+                required_cols = ['Horse', 'R', COL_FAIR_PCT, COL_FAIR_ODDS]
                 missing_cols = [col for col in required_cols if col not in primary_df.columns]
                 if missing_cols:
                     st.error(f"❌ CRITICAL ERROR: Missing required columns: {missing_cols}")
@@ -7351,7 +7351,7 @@ else:
                     st.stop()
 
                 # VALIDATION: Check Fair % exists and is valid
-                if primary_df['Fair %'].isna().all():
+                if primary_df[COL_FAIR_PCT].isna().all():
                     st.error("❌ CRITICAL ERROR: No fair probabilities calculated")
                     st.stop()
 
@@ -7542,10 +7542,10 @@ else:
                 # Re-sort after applying all odds-based adjustments
                 primary_sorted = primary_df.sort_values(by="R", ascending=False)
 
-                top_table = primary_sorted[['Horse', 'R', 'Fair %', 'Fair Odds']].head(5).to_markdown(index=False)
+                top_table = primary_sorted[['Horse', 'R', COL_FAIR_PCT, COL_FAIR_ODDS]].head(5).to_markdown(index=False)
 
-                overlay_pos = df_ol[df_ol["EV per $1"] > 0] if not df_ol.empty else pd.DataFrame()
-                overlay_table_md = (overlay_pos[['Horse', 'Fair %', 'Fair (AM)', 'Board (dec)', 'EV per $1']].to_markdown(
+                overlay_pos = df_ol[df_ol[COL_EV_PER_DOLLAR] > 0] if not df_ol.empty else pd.DataFrame()
+                overlay_table_md = (overlay_pos[['Horse', COL_FAIR_PCT, 'Fair (AM)', 'Board (dec)', 'EV per $1']].to_markdown(
                     index=False) if not overlay_pos.empty else "None.")
 
                 # --- 2. NEW: Generate Simplified A/B/C/D Strategy Report ---
@@ -7626,9 +7626,9 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                         format_phase3_report,
                     )
 
-                    # Get win probabilities from primary_df (column is 'Fair %' with string values like '25.5%')
-                    if 'Fair %' in primary_df.columns:
-                        win_probs = primary_df['Fair %'].apply(
+                    # Get win probabilities from primary_df (column is COL_FAIR_PCT with string values like '25.5%')
+                    if COL_FAIR_PCT in primary_df.columns:
+                        win_probs = primary_df[COL_FAIR_PCT].apply(
                             lambda x: float(str(x).replace('%', '').strip()) / 100.0 if pd.notna(x) and str(x).replace('%', '').replace('.', '').strip().isdigit() else 0.0
                         ).values
                         horse_names = primary_df['Horse'].values if 'Horse' in primary_df.columns else None
@@ -7793,7 +7793,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             horse_name = str(row.get('Horse', f'Horse_{rank_idx + 1}'))
 
                             # Extract Fair % with percentage handling
-                            fair_pct_raw = row.get('Fair %', 0.0)
+                            fair_pct_raw = row.get(COL_FAIR_PCT, 0.0)
                             fair_pct_value = safe_float(fair_pct_raw) / 100.0  # Convert to probability (0-1)
 
                             # Get individual horse angles and pedigree data
@@ -7860,7 +7860,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 'rating_final': safe_float(row.get('R', 0.0)),
                                 'predicted_probability': fair_pct_value,
                                 'predicted_rank': int(rank_idx + 1),
-                                'fair_odds': safe_float(row.get('Fair Odds', 99.0), 99.0),
+                                'fair_odds': safe_float(row.get(COL_FAIR_ODDS, 99.0), 99.0),
                                 # PhD enhancements if available
                                 'rating_confidence': safe_float(row.get('Confidence', 0.5), 0.5),
                                 'form_decay_score': safe_float(row.get('Form Decay', 0.0)),
@@ -8233,7 +8233,7 @@ else:
                             display_df['predicted_probability'] * 100).round(1).astype(str) + '%'
                         display_df['fair_odds'] = display_df['fair_odds'].round(2)
                         # Now rename columns for display
-                        display_df.columns = ['#', 'Horse Name', 'Post', 'Predicted Win %', 'Fair Odds']
+                        display_df.columns = ['#', 'Horse Name', 'Post', 'Predicted Win %', COL_FAIR_ODDS]
 
                         st.dataframe(display_df, use_container_width=True, hide_index=True)
 

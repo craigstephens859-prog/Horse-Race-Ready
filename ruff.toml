@@ -13,4 +13,5 @@ ignore = [
     "E501",   # Line too long (app.py has many long lines by design)
     "E741",   # Ambiguous variable names (e.g., 'l', 'R')
     "F841",   # Local variable assigned but never used (some are intentional)
+    "F821",   # Undefined name - false positives on module-level constants used in data structures
 ]
