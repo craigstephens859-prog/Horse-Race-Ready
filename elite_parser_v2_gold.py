@@ -166,6 +166,19 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     # === CAREER EARNINGS ===
     earnings: float = 0.0  # Lifetime career earnings (used for layoff dampening)
 
+    # === STRUCTURED RACE HISTORY (Feb 10, 2026) ===
+    # Per-race data: surface, distance, finish, speed fig, race type, track
+    # Enables: surface switch detection, distance change analysis, form trends
+    race_history: list[dict] = field(default_factory=list)
+    # Each dict: {"date", "track", "surface", "distance_f", "race_type",
+    #             "finish", "speed_fig", "odds", "comment"}
+
+    # === STRUCTURED WORKOUT DETAILS (Feb 10, 2026) ===
+    # Individual workout data for quality scoring
+    workouts: list[dict] = field(default_factory=list)
+    # Each dict: {"date", "track", "distance_f", "time_str", "grade",
+    #             "rank", "total", "bullet"}
+
     # === VALIDATION ===
     parsing_confidence: float = 1.0  # Overall confidence
     warnings: list[str] = field(default_factory=list)
@@ -920,6 +933,32 @@ class GoldStandardBRISNETParser:
         except Exception as e:
             horse.errors.append(f"Earnings parsing error: {str(e)}")
 
+        # STRUCTURED RACE HISTORY (per-race surface, distance, type, finish, fig)
+        try:
+            horse.race_history = self._parse_race_history(block)
+        except Exception as e:
+            horse.errors.append(f"Race history parsing error: {str(e)}")
+
+        # STRUCTURED WORKOUT DETAILS (per-workout date, distance, time, rank)
+        try:
+            horse.workouts = self._parse_workout_details(block)
+            if horse.workouts:
+                # Also set the legacy workout_pattern field
+                # Must match unified_rating_engine.py expectations: "Sharp" / "Sparse"
+                num_works = len(horse.workouts)
+                avg_rank_pct = (
+                    sum(w["rank"] / max(w["total"], 1) for w in horse.workouts)
+                    / num_works
+                )
+                if avg_rank_pct <= 0.25 and num_works >= 4:
+                    horse.workout_pattern = "Sharp"
+                elif num_works < 3 or avg_rank_pct > 0.60:
+                    horse.workout_pattern = "Sparse"
+                else:
+                    horse.workout_pattern = "Steady"
+        except Exception as e:
+            horse.errors.append(f"Workout details parsing error: {str(e)}")
+
         # Calculate overall confidence
         horse.calculate_overall_confidence()
 
@@ -1440,6 +1479,259 @@ class GoldStandardBRISNETParser:
 
         confidence = 0.8 if count > 0 else 0.2
         return count, days_since, last_speed, confidence
+
+    # ============ STRUCTURED RACE HISTORY (Feb 10, 2026) ============
+
+    def _parse_race_history(self, block: str) -> list[dict]:
+        """
+        Parse structured race history from BRISNET running lines.
+
+        Extracts per-race: date, track, surface, distance (furlongs), race type,
+        finish position, speed figure, odds, and top finisher comments.
+
+        BRISNET running line format (from JWB screenshot):
+        29Jan26Tup7   6½ f  :22² :45¹1:04  1:17¹ ⁴⁴ 107 Clm6250/4.5 n3l¹⁰³ 66 69/ 68
+        19Apr25Tup⁹ ⓘ 1m fm  :23  :47¹1:11⁴  1:37  ...
+
+        Surface codes: ft=fast(dirt), sy=sloppy(dirt), my=muddy(dirt),
+                      fm=firm(turf), gd=good, yl=yielding(turf),
+                      sf=soft(turf), gf=good-firm(turf), hy=heavy(turf)
+
+        Returns: list of dicts (most recent first, up to 10 races)
+        """
+        races = []
+        lines = block.split("\n")
+
+        # Surface code → surface type mapping
+        surface_map = {
+            "ft": "Dirt",
+            "fst": "Dirt",
+            "fast": "Dirt",
+            "sy": "Dirt",
+            "sly": "Dirt",
+            "sloppy": "Dirt",
+            "my": "Dirt",
+            "mdy": "Dirt",
+            "muddy": "Dirt",
+            "gd": "Dirt",  # "good" defaults to dirt
+            "fm": "Turf",
+            "frm": "Turf",
+            "firm": "Turf",
+            "yl": "Turf",
+            "yld": "Turf",
+            "yielding": "Turf",
+            "sf": "Turf",
+            "sft": "Turf",
+            "soft": "Turf",
+            "gf": "Turf",
+            "gd-fm": "Turf",
+            "hy": "Turf",
+            "aw": "Synthetic",
+            "tp": "Synthetic",
+            "syn": "Synthetic",
+        }
+
+        for line in lines:
+            # Running lines start with date (ddMMMyy) + track code
+            date_match = re.match(
+                r"(\d{2}[A-Za-z]{3}\d{2})(\w{2,4})\d*\s+", line.strip()
+            )
+            if not date_match:
+                continue
+
+            try:
+                date_str = date_match.group(1)
+                track_code = date_match.group(2)
+
+                # ---- SURFACE DETECTION ----
+                surface = "Dirt"
+                surface_area = line[:80].lower()
+
+                for code, surf in surface_map.items():
+                    if re.search(rf"\b{re.escape(code)}\b", surface_area):
+                        surface = surf
+                        break
+
+                # BRISNET turf indicator symbol
+                if "\u24d8" in line or "\u2460" in line or "ⓘ" in line:
+                    surface = "Turf"
+
+                # ---- DISTANCE EXTRACTION ----
+                distance_f = 0.0
+                dist_match = re.search(
+                    r"(\d+)\s*½?\s*f(?:ur)?", line[:60], re.IGNORECASE
+                )
+                if dist_match:
+                    base = int(dist_match.group(1))
+                    distance_f = base + (0.5 if "½" in line[:60] else 0.0)
+                else:
+                    mile_match = re.search(
+                        r"(\d+)\s*(?:(\d+)/(\d+))?\s*m(?:ile)?",
+                        line[:60],
+                        re.IGNORECASE,
+                    )
+                    if mile_match:
+                        miles = int(mile_match.group(1))
+                        if mile_match.group(2) and mile_match.group(3):
+                            frac = int(mile_match.group(2)) / int(mile_match.group(3))
+                            miles += frac
+                        distance_f = miles * 8.0
+
+                # ---- RACE TYPE ----
+                race_type = ""
+                type_match = re.search(
+                    r"(Clm\d+[a-zA-Z0-9/.\-]*|"
+                    r"MC\d+[a-zA-Z0-9/.\-]*|"
+                    r"Mdn\d*|Md\s*Sp\s*Wt|"
+                    r"Alw\d*[a-zA-Z0-9/.\-]*|"
+                    r"OC\d+[a-zA-Z0-9/.\-]*|"
+                    r"Stk[a-zA-Z0-9/.\-]*|"
+                    r"G[123]\s*\w*|"
+                    r"Hcp\d*|"
+                    r"Moc\d*|"
+                    r"S\s*Mdn\s*\d*k?)",
+                    line,
+                    re.IGNORECASE,
+                )
+                if type_match:
+                    race_type = type_match.group(1).strip()
+
+                # ---- SPEED FIGURE ----
+                speed_fig = 0
+                spd_matches = re.findall(r"\b(\d{2,3})\b", line[40:])
+                for spd_str in spd_matches:
+                    fig = int(spd_str)
+                    if 20 <= fig <= 130:
+                        speed_fig = fig
+                        break
+
+                # ---- FINISH POSITION ----
+                finish = 0
+                fin_matches = re.findall(
+                    r"(\d{1,2})[ƒ®«ª³©¨°¬²‚±¹²³⁴⁵⁶⁷⁸⁹⁰ⁿ]*", line[80:]
+                )
+                if fin_matches:
+                    for fm in reversed(fin_matches):
+                        try:
+                            f_val = int(fm)
+                            if 1 <= f_val <= 20:
+                                finish = f_val
+                                break
+                        except ValueError:
+                            continue
+
+                # ---- ODDS ----
+                odds = 0.0
+                odds_match = re.search(
+                    r"(?:Lb|Db|L|D)\s+\*?(\d+\.?\d*)", line, re.IGNORECASE
+                )
+                if odds_match:
+                    try:
+                        odds = float(odds_match.group(1))
+                    except ValueError:
+                        pass
+
+                # ---- COMMENT (after odds at end of line) ----
+                comment = ""
+                comment_match = re.search(r"(?:Lb|Db|L|D)\s+\*?[\d.]+\s+(.*?)$", line)
+                if comment_match:
+                    comment = comment_match.group(1).strip()
+
+                if date_str and (distance_f > 0 or race_type):
+                    races.append(
+                        {
+                            "date": date_str,
+                            "track": track_code,
+                            "surface": surface,
+                            "distance_f": round(distance_f, 1),
+                            "race_type": race_type,
+                            "finish": finish,
+                            "speed_fig": speed_fig,
+                            "odds": odds,
+                            "comment": comment,
+                        }
+                    )
+
+            except Exception:
+                continue
+
+        return races[:10]
+
+    # ============ STRUCTURED WORKOUT DETAILS (Feb 10, 2026) ============
+
+    def _parse_workout_details(self, block: str) -> list[dict]:
+        """
+        Parse individual workout details from BRISNET PP text.
+
+        BRISNET workout format (from JWB screenshot):
+        07Jan Tup 4f :51¹ H 43/43   12Apr'25 Tup 4f :50¹ H 24/27
+
+        Returns: list of dicts (most recent first, up to 12 workouts)
+        """
+        workouts = []
+        lines = block.split("\n")
+
+        workout_pattern = re.compile(
+            r"([×]?)(\d{2}[A-Za-z]{3}(?:\d{0,2}|'?\d{2}))\s+"
+            r"(\w{2,4})\s+"
+            r"(\d+)f\s+"
+            r":?(\d{2,3}[.:]\d?[¹²³⁴⁵⁶⁷⁸⁹⁰ƒ®«ª³©¨°¬²‚±]*)\s+"
+            r"([HBG]g?)\s+"
+            r"(\d+)/(\d+)"
+        )
+
+        for line in lines:
+            for match in workout_pattern.finditer(line):
+                try:
+                    bullet = match.group(1) == "×"
+                    date_str = match.group(2)
+                    track = match.group(3)
+                    distance_f = int(match.group(4))
+                    time_str = match.group(5)
+                    grade = match.group(6)
+                    rank = int(match.group(7))
+                    total = int(match.group(8))
+                    time_clean = re.sub(r"[¹²³⁴⁵⁶⁷⁸⁹⁰ƒ®«ª³©¨°¬²‚±]", "", time_str)
+                    workouts.append(
+                        {
+                            "date": date_str,
+                            "track": track,
+                            "distance_f": distance_f,
+                            "time_str": time_clean,
+                            "grade": grade,
+                            "rank": rank,
+                            "total": total,
+                            "bullet": bullet,
+                        }
+                    )
+                except Exception:
+                    continue
+
+        # Fallback simpler pattern
+        if not workouts:
+            simple_pattern = re.compile(
+                r"(\d{2}[A-Za-z]{3})\s+\w+\s+(\d+)f\s+"
+                r"[\d:.]+\s+([HBG]g?)\s+(\d+)/(\d+)"
+            )
+            for line in lines:
+                for match in simple_pattern.finditer(line):
+                    try:
+                        workouts.append(
+                            {
+                                "date": match.group(1),
+                                "track": "",
+                                "distance_f": int(match.group(2)),
+                                "time_str": "",
+                                "grade": match.group(3),
+                                "rank": int(match.group(4)),
+                                "total": int(match.group(5)),
+                                "bullet": False,
+                            }
+                        )
+                    except Exception:
+                        continue
+
+        return workouts[:12]
 
     # ============ EQUIPMENT CHANGES ============
 
