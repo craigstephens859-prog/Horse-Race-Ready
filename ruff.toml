@@ -1,0 +1,16 @@
+# Ruff configuration for Horse Racing Picks
+target-version = "py311"
+
+[lint]
+# Enable common rule sets
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+# Allow all auto-fixable rules
+fixable = ["ALL"]
+
+# Ignore rules that conflict with the codebase style
+ignore = [
+    "E501",   # Line too long (app.py has many long lines by design)
+    "E741",   # Ambiguous variable names (e.g., 'l', 'R')
+    "F841",   # Local variable assigned but never used (some are intentional)
+]

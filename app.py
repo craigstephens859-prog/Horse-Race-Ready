@@ -12,14 +12,13 @@
 # - Classic bullet-style report with download buttons
 # - Resilient to older/newer Streamlit rerun APIs
 
+import logging
+import math
 import os
 import re
-import math
-import time
-import logging
-from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 from itertools import product
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -32,9 +31,9 @@ logger = logging.getLogger(__name__)
 # DATABASE PERSISTENCE: Ensures data survives Render redeployments
 try:
     from db_persistence import (
-        initialize_persistent_db,
         backup_to_github_async,
         get_persistence_status,
+        initialize_persistent_db,
         is_render,
     )
     PERSISTENT_DB_PATH = initialize_persistent_db("gold_high_iq.db")
@@ -74,12 +73,12 @@ except ImportError:
 # RACE CLASS PARSER: Comprehensive race type and purse analysis
 try:
     from race_class_parser import (
+        CLASS_MAP,
+        LEVEL_MAP,
+        calculate_class_weight,
+        get_hierarchy_level,
         parse_and_calculate_class,
         parse_race_conditions,
-        get_hierarchy_level,
-        calculate_class_weight,
-        CLASS_MAP,
-        LEVEL_MAP
     )
     RACE_CLASS_PARSER_AVAILABLE = True
 except ImportError:
@@ -128,12 +127,12 @@ except Exception as e:
 # Loads weights that have been tuned from historical race results
 try:
     from auto_calibration_engine_v2 import (
-        get_live_learned_weights,
         AutoCalibrationEngine,
-        auto_calibrate_on_result_submission
+        auto_calibrate_on_result_submission,
+        get_live_learned_weights,
     )
     ADAPTIVE_LEARNING_AVAILABLE = True
-    
+
     # Load learned weights at startup (persisted from past calibrations)
     LEARNED_WEIGHTS = get_live_learned_weights(PERSISTENT_DB_PATH)
     print(f"✅ Loaded {len(LEARNED_WEIGHTS)} learned weights from {PERSISTENT_DB_PATH}")
@@ -146,7 +145,7 @@ except ImportError as e:
 try:
     from intelligent_learning_engine import (
         IntelligentLearningEngine,
-        analyze_and_learn_from_result
+        analyze_and_learn_from_result,
     )
     INTELLIGENT_LEARNING_AVAILABLE = True
     print("✅ Intelligent Learning Engine loaded")
@@ -159,11 +158,11 @@ except ImportError as e:
 # SECURITY: Import input validation and protection utilities
 try:
     from security_validators import (
+        RateLimiter,
         sanitize_pp_text,
-        validate_track_name,
-        validate_distance_string,
         sanitize_race_metadata,
-        RateLimiter
+        validate_distance_string,
+        validate_track_name,
     )
     SECURITY_VALIDATORS_AVAILABLE = True
 except ImportError as e:
@@ -182,15 +181,15 @@ try:
         import sqlite3
         conn = sqlite3.connect(gold_db.db_path, timeout=5.0)
         cursor = conn.cursor()
-        
+
         # Get total races analyzed
         cursor.execute("SELECT COUNT(DISTINCT race_id) FROM races_analyzed")
         total_analyzed = cursor.fetchone()[0]
-        
+
         # Get races with results
         cursor.execute("SELECT COUNT(DISTINCT race_id) FROM gold_high_iq")
         with_results = cursor.fetchone()[0]
-        
+
         # Get most recent save timestamp
         cursor.execute("""
             SELECT analyzed_timestamp FROM races_analyzed 
@@ -198,9 +197,9 @@ try:
         """)
         last_save = cursor.fetchone()
         last_save_time = last_save[0] if last_save else "No races yet"
-        
+
         conn.close()
-        
+
         # Display community banner
         if total_analyzed > 0:
             cols = st.columns([2, 2, 2, 3])
@@ -226,11 +225,11 @@ try:
                         else:
                             time_str = f"{int(time_ago/86400)}d ago"
                         st.metric("🕐 Last Save", time_str, help=f"Full timestamp: {last_save_time}")
-                    except:
+                    except Exception:
                         st.metric("🕐 Last Save", "Recently")
                 else:
                     st.metric("🕐 Last Save", "None yet")
-            
+
             st.caption("💾 **Database Auto-Saves:** All analyzed races persist permanently. Come back anytime!")
 except Exception as banner_err:
     pass  # Silently fail if database not ready yet
@@ -298,7 +297,7 @@ def model_supports_temperature(model_name: str) -> bool:
     return not (m.startswith("gpt-5") or m.startswith("o4") or m.startswith("o3"))
 
 
-def call_openai_messages(messages: List[Dict]) -> str:
+def call_openai_messages(messages: list[dict]) -> str:
     # SECURITY: Check rate limit before making API call
     if openai_rate_limiter is not None and not openai_rate_limiter.allow_call():
         return "(Rate limit exceeded. Please wait before generating another report. Max 10 reports per minute.)"
@@ -638,7 +637,7 @@ def parse_track_name_from_pp(pp_text: str) -> str:
     return ""
 
 
-def detect_race_number(pp_text: str) -> Optional[int]:
+def detect_race_number(pp_text: str) -> int | None:
     """Extract race number from PP text header (e.g., 'Race 6')."""
     s = pp_text or ""
     # Look for "Race N" pattern in first few lines
@@ -652,7 +651,7 @@ def detect_race_number(pp_text: str) -> Optional[int]:
     return None
 
 
-def parse_brisnet_race_header(pp_text: str) -> Dict[str, Any]:
+def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
     """
     Parse comprehensive BRISNET race header information.
 
@@ -804,7 +803,7 @@ def parse_brisnet_race_header(pp_text: str) -> Dict[str, Any]:
             result['race_type'] = race_type_match.group(1)
             try:
                 result['purse_amount'] = int(race_type_match.group(2))
-            except BaseException:
+            except Exception:
                 pass
             continue
 
@@ -836,7 +835,7 @@ def parse_brisnet_race_header(pp_text: str) -> Dict[str, Any]:
         if race_num_match:
             try:
                 result['race_number'] = int(race_num_match.group(1))
-            except BaseException:
+            except Exception:
                 pass
             continue
 
@@ -1407,7 +1406,7 @@ def calculate_style_strength(style: str, quirin: float) -> str:
     return "Solid"
 
 
-def split_into_horse_chunks(pp_text: str) -> List[tuple]:
+def split_into_horse_chunks(pp_text: str) -> list[tuple]:
     chunks = []
     matches = list(HORSE_HDR_RE.finditer(pp_text or ""))
     for i, m in enumerate(matches):
@@ -1452,7 +1451,7 @@ _ODDS_TOKEN = r"(\d+\s*/\s*\d+|\d+\s*-\s*\d+|[+-]?\d+(?:\.\d+)?)"
 # ========================================================
 
 
-def extract_morning_line_by_horse(pp_text: str) -> Dict[str, str]:
+def extract_morning_line_by_horse(pp_text: str) -> dict[str, str]:
     ml = {}
     blocks = {name: block for _, name, block in split_into_horse_chunks(pp_text)}
     for name, block in blocks.items():
@@ -1511,7 +1510,7 @@ def parse_pedigree_snips(block) -> dict:
 # ========== SAVANT-LEVEL ENHANCEMENTS (Jan 2026) ==========
 
 
-def parse_claiming_prices(block) -> List[int]:
+def parse_claiming_prices(block) -> list[int]:
     """Extract claiming prices from race lines. Returns list of prices (most recent first)."""
     prices = []
     if not block:
@@ -1521,12 +1520,12 @@ def parse_claiming_prices(block) -> List[int]:
     for m in re.finditer(r'Clm\s+(\d+)', block_str):
         try:
             prices.append(int(m.group(1)))
-        except BaseException:
+        except Exception:
             pass
     return prices[:5]
 
 
-def analyze_claiming_price_movement(recent_prices: List[int], today_price: int) -> float:
+def analyze_claiming_price_movement(recent_prices: list[int], today_price: int) -> float:
     """SAVANT ANGLE: Claiming price class movement. Returns bonus from -0.10 to +0.15"""
     bonus = 0.0
     if not recent_prices or today_price <= 0:
@@ -1568,7 +1567,7 @@ def detect_lasix_change(block) -> float:
     return bonus
 
 
-def parse_fractional_positions(block) -> List[List[int]]:
+def parse_fractional_positions(block) -> list[list[int]]:
     """Extract running positions: PP, Start, 1C, 2C, Stretch, Finish."""
     positions = []
     if not block:
@@ -1596,7 +1595,7 @@ def parse_fractional_positions(block) -> List[List[int]]:
     return positions[:5]
 
 
-def calculate_trip_quality(positions: List[List[int]], field_size: int = 10) -> float:
+def calculate_trip_quality(positions: list[list[int]], field_size: int = 10) -> float:
     """SAVANT ANGLE: Trip handicapping. Returns bonus from -0.04 to +0.12"""
     bonus = 0.0
     # CRITICAL FIX: Check positions exists AND has elements before accessing
@@ -1636,7 +1635,7 @@ def parse_e1_e2_lp_values(block) -> dict:
     return {'e1': e1_vals[:5], 'e2': e2_vals[:5], 'lp': lp_vals[:5]}
 
 
-def analyze_pace_figures(e1_vals: List[int], e2_vals: List[int], lp_vals: List[int]) -> float:
+def analyze_pace_figures(e1_vals: list[int], e2_vals: list[int], lp_vals: list[int]) -> float:
     """SAVANT ANGLE: E1/E2/LP pace analysis. Returns bonus from -0.05 to +0.07"""
     bonus = 0.0
     if len(e1_vals) < 3 or len(lp_vals) < 3:
@@ -1656,7 +1655,7 @@ def analyze_pace_figures(e1_vals: List[int], e2_vals: List[int], lp_vals: List[i
     return bonus
 
 
-def detect_bounce_risk(speed_figs: List[int]) -> float:
+def detect_bounce_risk(speed_figs: list[int]) -> float:
     """SAVANT ANGLE: Bounce detection. Returns penalty/bonus from -0.09 to +0.07"""
     penalty = 0.0
     if len(speed_figs) < 3:
@@ -1694,7 +1693,7 @@ SPEED_FIG_RE = re.compile(
 )
 
 
-def parse_speed_figures_for_block(block) -> List[int]:
+def parse_speed_figures_for_block(block) -> list[int]:
     """
     Parses a horse's PP text block and extracts all main speed figures.
     CRITICAL: Speed figure is in the 4th capture group after E1, E2, LP
@@ -1766,7 +1765,7 @@ def safe_float(value, default=0.0):
 # ---------- GOLD-STANDARD Probability helpers with mathematical rigor ----------
 
 
-def softmax_from_rating(ratings: np.ndarray, tau: Optional[float] = None) -> np.ndarray:
+def softmax_from_rating(ratings: np.ndarray, tau: float | None = None) -> np.ndarray:
     """
     MATHEMATICALLY RIGOROUS softmax with overflow protection and validation.
 
@@ -1921,11 +1920,11 @@ def compute_ppi(df_styles: pd.DataFrame) -> dict:
     return {"ppi": round(ppi_val, 3), "by_horse": by_horse}
 
 
-def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: Dict[str, float],
+def apply_enhancements_and_figs(ratings_df: pd.DataFrame, pp_text: str, processed_weights: dict[str, float],
                                 chaos_index: float, track_name: str, surface_type: str,
                                 distance_txt: str, race_type: str,
-                                angles_per_horse: Dict[str, pd.DataFrame],
-                                pedigree_per_horse: Dict[str, dict], figs_df: pd.DataFrame) -> pd.DataFrame:
+                                angles_per_horse: dict[str, pd.DataFrame],
+                                pedigree_per_horse: dict[str, dict], figs_df: pd.DataFrame) -> pd.DataFrame:
     """
     Applies speed figure enhancements (R_ENHANCE_ADJ) to the base ratings.
     """
@@ -2042,7 +2041,7 @@ def fair_to_american_str(p: float) -> str:
     return f"+{int(v)}" if v > 0 else f"{int(v)}"
 
 
-def str_to_decimal_odds(s: str) -> Optional[float]:
+def str_to_decimal_odds(s: str) -> float | None:
     s = (s or "").strip()
     if not s:
         return None
@@ -2070,7 +2069,7 @@ def str_to_decimal_odds(s: str) -> Optional[float]:
     return None
 
 
-def overlay_table(fair_probs: Dict[str, float], offered: Dict[str, float]) -> pd.DataFrame:
+def overlay_table(fair_probs: dict[str, float], offered: dict[str, float]) -> pd.DataFrame:
     """
     GOLD STANDARD overlay calculation with mathematical rigor.
 
@@ -2134,13 +2133,13 @@ def overlay_table(fair_probs: Dict[str, float], offered: Dict[str, float]) -> pd
 # ---------- Exotics (Harville + bias anchors) ----------
 
 
-def calculate_exotics_biased(fair_probs: Dict[str, float],
-                             anchor_first: Optional[str] = None,
-                             anchor_second: Optional[str] = None,
-                             pool_third: Optional[set] = None,
-                             pool_fourth: Optional[set] = None,
+def calculate_exotics_biased(fair_probs: dict[str, float],
+                             anchor_first: str | None = None,
+                             anchor_second: str | None = None,
+                             pool_third: set | None = None,
+                             pool_fourth: set | None = None,
                              weights=MODEL_CONFIG['exotic_bias_weights'],
-                             top_n: int = 50) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+                             top_n: int = 50) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
     horses = list(fair_probs.keys())
     probs = np.array([fair_probs[h] for h in horses])
@@ -2334,7 +2333,7 @@ def calculate_final_rating(race_type,
 # ===================== Form Cycle & Recency Analysis =====================
 
 
-def parse_recent_races_detailed(block) -> List[dict]:
+def parse_recent_races_detailed(block) -> list[dict]:
     """
     Extract detailed recent race history with dates, finishes, beaten lengths.
     Returns list of dicts with date, finish, beaten_lengths, days_ago
@@ -2394,7 +2393,7 @@ def calculate_layoff_factor(days_since_last: int) -> float:
         return -5.0
 
 
-def calculate_form_trend(recent_finishes: List[int]) -> float:
+def calculate_form_trend(recent_finishes: list[int]) -> float:
     """
     Analyze finish positions for improvement/decline trend.
     Returns: trend factor (-1.5 to +4.0)
@@ -2506,7 +2505,7 @@ def parse_workout_data(block) -> dict:
                 'rank': rank,
                 'total': total
             })
-        except BaseException:
+        except Exception:
             pass
 
     workouts['num_recent'] = len(work_details)
@@ -2740,7 +2739,7 @@ def odds_to_decimal(odds_str: str) -> float:
 # ===================== Class Rating Calculator (Comprehensive) =====================
 
 
-def extract_race_metadata_from_pp(pp_text: str) -> Dict[str, Any]:
+def extract_race_metadata_from_pp(pp_text: str) -> dict[str, Any]:
     """
     🎯 ELITE EXTRACTION: Parse race type and purse from BRISNET PP text header.
 
@@ -2871,7 +2870,7 @@ def extract_race_metadata_from_pp(pp_text: str) -> Dict[str, Any]:
     return result
 
 
-def extract_race_metadata_from_pp_text(pp_text: str) -> Dict[str, Any]:
+def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
     """
     UNIVERSAL: Extract race type and purse from BRISNET PP text headers.
     Works across ALL tracks, ALL purse levels, ALL race types.
@@ -2924,7 +2923,7 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> Dict[str, Any]:
                 result['detection_method'] = 'purse_text'
                 result['confidence'] = 0.9
                 break
-            except BaseException:
+            except Exception:
                 pass
 
     # ========== RACE TYPE EXTRACTION (Multi-Pattern) ==========
@@ -2985,7 +2984,7 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> Dict[str, Any]:
                 else:
                     result['purse_amount'] = int(amount_str)
                 result['detection_method'] = 'embedded_format'
-            except BaseException:
+            except Exception:
                 pass
 
         # Map prefix to race type if not already found
@@ -3011,7 +3010,7 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> Dict[str, Any]:
     return result
 
 
-def infer_purse_from_race_type(race_type: str) -> Optional[int]:
+def infer_purse_from_race_type(race_type: str) -> int | None:
     """
     LEGACY: Infer purse from race type names like 'Clm25000n2L' or 'MC50000'.
     BRISNET embeds purse values in race type strings.
@@ -3052,7 +3051,7 @@ def infer_purse_from_race_type(race_type: str) -> Optional[int]:
     return None
 
 
-def parse_recent_class_levels(block) -> List[dict]:
+def parse_recent_class_levels(block) -> list[dict]:
     """
     Parse recent races to extract class progression data.
     CRITICAL FIX: Infers purses from race type names since BRISNET embeds them.
@@ -3352,7 +3351,7 @@ with progress_col4:
                 st.success(f"💾 {saved_count} Saved")
             else:
                 st.info("💾 No Races Yet")
-        except BaseException:
+        except Exception:
             st.info("💾 Database Ready")
     else:
         st.info("💾 Database Ready")
@@ -3536,19 +3535,19 @@ st.session_state['distance_txt'] = distance_txt
 # Purse
 
 
-def detect_purse_amount(pp_text: str) -> Optional[int]:
+def detect_purse_amount(pp_text: str) -> int | None:
     s = pp_text or ""
     m = re.search(r'(?mi)\bPurse\b[^$\n\r]*\$\s*([\d,]+)', s)
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except BaseException:
+        except Exception:
             pass
     m = re.search(r'(?mi)\b(?:Added|Value)\b[^$\n\r]*\$\s*([\d,]+)', s)
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except BaseException:
+        except Exception:
             pass
     m = re.search(
         r'(?mi)\b(Mdn|Maiden|Allowance|Alw|Claiming|Clm|Starter|Stake|Stakes)\b[^:\n\r]{0,50}\b(\d{2,4})\s*[Kk]\b',
@@ -3556,13 +3555,13 @@ def detect_purse_amount(pp_text: str) -> Optional[int]:
     if m:
         try:
             return int(m.group(2)) * 1000
-        except BaseException:
+        except Exception:
             pass
     m = re.search(r'(?m)\$\s*([\d,]{5,})', s)
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except BaseException:
+        except Exception:
             pass
     return None
 
@@ -3657,9 +3656,9 @@ df_editor = st.data_editor(df_styles, use_container_width=True, column_config=co
 
 # ===================== B. Angle Parsing / Pedigree / Figs =====================
 
-angles_per_horse: Dict[str, pd.DataFrame] = {}
-pedigree_per_horse: Dict[str, dict] = {}
-figs_per_horse: Dict[str, List[int]] = {}
+angles_per_horse: dict[str, pd.DataFrame] = {}
+pedigree_per_horse: dict[str, dict] = {}
+figs_per_horse: dict[str, list[int]] = {}
 
 # Try to use elite parser first for better accuracy
 elite_parser_used = False
@@ -3739,7 +3738,7 @@ st.session_state['ppi_val'] = ppi_val  # Store for Classic Report
 # ===================== Class build per horse (angles+pedigree in background) =====================
 
 
-def _infer_horse_surface_pref(name: str, ped: dict, ang_df: Optional[pd.DataFrame], race_surface: str) -> str:
+def _infer_horse_surface_pref(name: str, ped: dict, ang_df: pd.DataFrame | None, race_surface: str) -> str:
     cats = " ".join(
         ang_df["Category"].astype(str).tolist()).lower() if (
         ang_df is not None and not ang_df.empty) else ""
@@ -3982,38 +3981,38 @@ def style_match_score_multi(running_style_biases: list, style: str, quirin: floa
     """Calculate style match score from multiple selected running style biases (aggregates bonuses)"""
     if not running_style_biases:
         return 0.0
-    
+
     stl = (style or "NA").upper()
     table = MODEL_CONFIG['style_match_table']
-    
+
     try:
         q = float(quirin)
     except Exception:
         q = np.nan
-    
+
     total_bonus = 0.0
-    
+
     # Aggregate bonuses from all selected running style biases
     for bias_choice in running_style_biases:
         # Map choice to label
         bias_label = _style_bias_label_from_choice(bias_choice)
         bias_lower = bias_label.strip().lower()
-        
+
         bonus = table.get(bias_lower, table["fair/neutral"]).get(stl, 0.0)
-        
+
         # Add Quirin bonus if applicable
         if stl in ("E", "E/P") and pd.notna(q) and q >= MODEL_CONFIG['style_quirin_threshold']:
             bonus += MODEL_CONFIG['style_quirin_bonus']
-        
+
         if bonus > 0:  # Only add positive bonuses
             total_bonus += bonus
-    
+
     return float(np.clip(total_bonus, -1.0, 1.0))
 
 # ======================== Phase 1: Enhanced Parsing Functions ========================
 
 
-def parse_track_bias_impact_values(pp_text: str) -> Dict[str, float]:
+def parse_track_bias_impact_values(pp_text: str) -> dict[str, float]:
     """Extract Track Bias Impact Values from '9b. Track Bias (Numerical)' section"""
     impact_values = {}
 
@@ -4033,7 +4032,7 @@ def parse_track_bias_impact_values(pp_text: str) -> Dict[str, float]:
     return impact_values
 
 
-def parse_pedigree_spi(pp_text: str) -> Dict[str, Optional[int]]:
+def parse_pedigree_spi(pp_text: str) -> dict[str, int | None]:
     """Extract SPI (Sire Performance Index) from pedigree sections"""
     spi_values = {}
 
@@ -4060,7 +4059,7 @@ def parse_pedigree_spi(pp_text: str) -> Dict[str, Optional[int]]:
     return spi_values
 
 
-def parse_pedigree_surface_stats(pp_text: str) -> Dict[str, Dict[str, any]]:
+def parse_pedigree_surface_stats(pp_text: str) -> dict[str, dict[str, any]]:
     """Extract surface statistics (Turf/AW win%) from pedigree sections"""
     surface_stats = {}
 
@@ -4089,7 +4088,7 @@ def parse_pedigree_surface_stats(pp_text: str) -> Dict[str, Dict[str, any]]:
     return surface_stats
 
 
-def parse_awd_analysis(pp_text: str) -> Dict[str, str]:
+def parse_awd_analysis(pp_text: str) -> dict[str, str]:
     """Extract AWD (Avg Winning Distance) analysis from pedigree sections"""
     awd_data = {}
 
@@ -4110,7 +4109,7 @@ def parse_awd_analysis(pp_text: str) -> Dict[str, str]:
     return awd_data
 
 
-def calculate_spi_bonus(spi: Optional[int]) -> float:
+def calculate_spi_bonus(spi: int | None) -> float:
     """Calculate bonus/penalty based on SPI (Sire Performance Index)"""
     if spi is None:
         return 0.0
@@ -4126,7 +4125,7 @@ def calculate_spi_bonus(spi: Optional[int]) -> float:
         return -0.05
 
 
-def calculate_surface_specialty_bonus(surface_pct: Optional[float], surface_type: str) -> float:
+def calculate_surface_specialty_bonus(surface_pct: float | None, surface_type: str) -> float:
     """Calculate bonus for surface specialty (Turf or AW)"""
     if surface_pct is None:
         return 0.0
@@ -4151,7 +4150,7 @@ def calculate_surface_specialty_bonus(surface_pct: Optional[float], surface_type
     return 0.0
 
 
-def calculate_awd_mismatch_penalty(awd_status: Optional[str]) -> float:
+def calculate_awd_mismatch_penalty(awd_status: str | None) -> float:
     """Calculate penalty for distance mismatch"""
     if awd_status == 'mismatch':
         return -0.10
@@ -4160,7 +4159,7 @@ def calculate_awd_mismatch_penalty(awd_status: Optional[str]) -> float:
 # ======================== ELITE ENHANCEMENTS ========================
 
 
-def _parse_post_number(post_str: str) -> Optional[int]:
+def _parse_post_number(post_str: str) -> int | None:
     """ELITE: Fast post number extraction without regex (3x faster)"""
     try:
         # Method 1: Try direct int conversion (fastest)
@@ -4178,7 +4177,7 @@ def _parse_post_number(post_str: str) -> Optional[int]:
             return None
 
 
-def calculate_weather_impact(weather_data: Dict[str, Any], style: str, distance_txt: str) -> float:
+def calculate_weather_impact(weather_data: dict[str, Any], style: str, distance_txt: str) -> float:
     """
     ELITE: Weather impact calculation based on racing research.
 
@@ -4322,7 +4321,7 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     return float(np.clip(bonus, 0, 0.50))  # Increased cap from 0.35 to 0.50
 
 
-def calculate_track_condition_granular(track_info: Dict[str, Any], style: str, post: int) -> float:
+def calculate_track_condition_granular(track_info: dict[str, Any], style: str, post: int) -> float:
     """
     ELITE: Track condition analysis beyond basic Fast/Muddy.
 
@@ -4392,7 +4391,7 @@ def is_marathon_distance(distance_txt: str) -> bool:
         try:
             furlongs = float(distance_lower.replace('f', '').strip())
             return furlongs >= 12.0
-        except BaseException:
+        except Exception:
             pass
 
     # Mile conversions
@@ -4410,7 +4409,7 @@ def is_marathon_distance(distance_txt: str) -> bool:
     return False
 
 
-def calculate_workout_bonus_v2(workout_data: Dict[str, Any], is_marathon: bool = False) -> float:
+def calculate_workout_bonus_v2(workout_data: dict[str, Any], is_marathon: bool = False) -> float:
     """
     CALIBRATED: Improved workout bonus emphasizing percentile rankings.
 
@@ -4433,7 +4432,7 @@ def calculate_workout_bonus_v2(workout_data: Dict[str, Any], is_marathon: bool =
             rank = int(workout_data['work_rank'])
             total = int(workout_data['work_total'])
             percentile = (rank / total) * 100
-        except BaseException:
+        except Exception:
             percentile = 100
 
     # ELITE PERCENTILE BONUSES (from post-race analysis)
@@ -4596,7 +4595,7 @@ def is_sprint_distance(distance_txt: str) -> bool:
         if 'f' in distance_txt.lower():
             furlongs = float(distance_txt.lower().replace('f', '').strip())
             return furlongs <= 6.5
-    except BaseException:
+    except Exception:
         pass
     return False
 
@@ -4656,7 +4655,7 @@ def calculate_hot_combo_bonus(trainer_pct: float, jockey_pct: float, combo_pct: 
     return float(np.clip(bonus, 0.0, 0.25))
 
 
-def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse: int) -> Dict[str, Any]:
+def analyze_class_movement(past_races: list[dict], today_class: str, today_purse: int) -> dict[str, Any]:
     """
     COMPREHENSIVE: Analyze if horse is stepping up or down in class.
 
@@ -4737,7 +4736,7 @@ def analyze_class_movement(past_races: List[Dict], today_class: str, today_purse
     }
 
 
-def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dict[str, Any]:
+def analyze_distance_pattern(past_races: list[dict], today_distance: str) -> dict[str, Any]:
     """
     COMPREHENSIVE: Analyze distance changes and patterns.
 
@@ -4829,7 +4828,7 @@ def analyze_distance_pattern(past_races: List[Dict], today_distance: str) -> Dic
     }
 
 
-def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
+def analyze_form_cycle(past_races: list[dict]) -> dict[str, Any]:
     """
     COMPREHENSIVE: Analyze form cycle (improving/declining).
 
@@ -4907,7 +4906,7 @@ def analyze_form_cycle(past_races: List[Dict]) -> Dict[str, Any]:
     }
 
 
-def calculate_workout_bonus(workout_data: Dict[str, Any]) -> float:
+def calculate_workout_bonus(workout_data: dict[str, Any]) -> float:
     """
     COMPREHENSIVE: Bonus for workout quality and recency.
     """
@@ -4955,12 +4954,12 @@ def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
     """Calculate post bias score from multiple selected post biases (aggregates bonuses)"""
     if not post_bias_picks:
         return 0.0
-    
+
     # ELITE: Use optimized post parser
     post = _parse_post_number(post_str)
     if not post:
         return 0.0
-    
+
     total_bonus = 0.0
     table = {
         "favors rail (1)": lambda p: MODEL_CONFIG['post_bias_rail_bonus'] if p == 1 else 0.0,
@@ -4969,7 +4968,7 @@ def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
         "favors outside (8+)": lambda p: MODEL_CONFIG['post_bias_outside_bonus'] if p and p >= 8 else 0.0,
         "no significant post bias": lambda p: 0.0
     }
-    
+
     # Aggregate bonuses from all selected post biases
     for pick in post_bias_picks:
         pick_lower = (pick or "").strip().lower()
@@ -4977,7 +4976,7 @@ def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
         bonus = fn(post)
         if bonus > 0:  # Only add positive bonuses (horse matches this bias category)
             total_bonus += bonus
-    
+
     return float(np.clip(total_bonus, -0.5, 0.5))
 
 
@@ -4989,7 +4988,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                          running_style_bias,  # Can be list or str
                          post_bias_pick,  # Can be list or str
                          ppi_value: float = 0.0,  # ppi_value arg seems unused, ppi_map is recalculated
-                         pedigree_per_horse: Optional[Dict[str, dict]] = None,
+                         pedigree_per_horse: dict[str, dict] | None = None,
                          track_name: str = "",
                          pp_text: str = "",
                          figs_df: pd.DataFrame = None,
@@ -5161,7 +5160,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             rating_val = row.get('R')
                             # Check if rating is NaN, None, or not a real number
                             is_bad_rating = (
-                                rating_val is None 
+                                rating_val is None
                                 or (isinstance(rating_val, float) and (np.isnan(rating_val) or not np.isfinite(rating_val)))
                                 or (isinstance(rating_val, str) and rating_val.lower() == 'none')
                             )
@@ -5289,11 +5288,11 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
     rows = []
     _race_class_shown = False  # BUG 7 FIX: show Race Classification expander only once
-    
+
     # Convert single values to lists for uniform processing
     style_biases = running_style_bias if isinstance(running_style_bias, list) else [running_style_bias]
     post_biases_list = post_bias_pick if isinstance(post_bias_pick, list) else [post_bias_pick]
-    
+
     for _, row in df_styles.iterrows():
         post = str(row.get("Post", row.get("#", "")))
         name = str(row.get("Horse"))
@@ -5342,7 +5341,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         tier2_bonus += 0.5  # Strong at distance
                     elif dis_itm_pct >= 0.50:
                         tier2_bonus += 0.3  # Consistently competitive at distance
-        except BaseException:
+        except Exception:
             pass
 
         # ---- TRACK SPECIALIST BONUS (Race 4 Oaklawn tuning) ----
@@ -5379,7 +5378,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             tier2_bonus += 0.35  # Solid track record
                         elif trk_itm_pct >= 0.45:
                             tier2_bonus += 0.2  # Competitive at track
-        except BaseException:
+        except Exception:
             pass
 
         # ---- P-STYLE ROUTE BONUS (Race 4 Oaklawn tuning) ----
@@ -5402,7 +5401,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     race_furlongs = 12.0
             if race_furlongs >= 8.0 and style == 'P':
                 tier2_bonus += 0.25  # Route tactical advantage for pressers
-        except BaseException:
+        except Exception:
             pass
 
         # ELITE: Weather Impact
@@ -5434,7 +5433,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
         try:
             if 'f' in distance_txt.lower():
                 race_furlongs = float(distance_txt.lower().replace('f', '').strip())
-        except BaseException:
+        except Exception:
             pass
 
         # ======================== DISTANCE MOVEMENT ANALYSIS (NEW) ========================
@@ -5446,14 +5445,14 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             if past_races:
                 distance_analysis = analyze_distance_pattern(past_races, distance_txt)
                 distance_bonus = distance_analysis.get('bonus', 0.0)
-                
+
                 # Additional bonus for experience at distance
                 experience_count = distance_analysis.get('experience_count', 0)
                 if experience_count >= 3:
                     distance_bonus += 0.10  # Proven at distance
                 elif experience_count == 0:
                     distance_bonus -= 0.08  # Never raced this distance
-                
+
                 # Stretch out / cut back adjustments
                 distance_change = distance_analysis.get('distance_change', 'unknown')
                 if distance_change == 'stretch_out' and not is_marathon:
@@ -5464,9 +5463,9 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     # Cutting back often positive for speed horses
                     if style in ['E', 'E/P']:
                         distance_bonus += 0.05  # Speed horse cutting back
-                
+
                 tier2_bonus += distance_bonus
-        except BaseException:
+        except Exception:
             pass  # Fail silently if distance analysis fails
 
         # COMPREHENSIVE: Workout Analysis (V2 with marathon awareness)
@@ -5502,7 +5501,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
             try:
                 post_num = int(post)
                 tier2_bonus += calculate_sprint_post_position_bonus(post_num, race_furlongs, surface_type)
-            except BaseException:
+            except Exception:
                 pass
 
             # Running style bias (early speed 2.05 impact!)
@@ -5551,7 +5550,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                             tier2_bonus -= 2.0  # Massive penalty
                         elif career_win_pct < 0.10:  # Less than 10% win rate
                             tier2_bonus -= 1.0  # Significant penalty
-        except BaseException:
+        except Exception:
             pass
 
         # 6. 2ND OFF LAYOFF BONUS (TUP R7 Feb 2026)
@@ -5576,7 +5575,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     elif layoff_itm_pct >= 0.50:  # 50%+ ITM even if lower win%
                         tier2_bonus += 0.3  # Small bonus
                         is_second_off_layoff = True
-        except BaseException:
+        except Exception:
             pass
 
         # 7. BEST SPEED AT DISTANCE BONUS (TUP R7 Feb 2026)
@@ -5613,7 +5612,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                                 tier2_bonus += 0.3  # 2nd best
                             elif rank == 3:
                                 tier2_bonus += 0.2  # 3rd best
-        except BaseException:
+        except Exception:
             pass
 
         # 8. HOT TRAINER BONUS (TUP R6 + R7 Feb 2026 - Winner had 22% trainer, 4-0-0 L14, 2nd time Lasix 33%)
@@ -5637,7 +5636,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 is_2nd_lasix_high_pct = True
 
             tier2_bonus += calculate_hot_trainer_bonus(trainer_win_pct, is_hot_l14, is_2nd_lasix_high_pct)
-        except BaseException:
+        except Exception:
             pass
 
         # ======================== End Tier 2 Bonuses ========================
@@ -5745,9 +5744,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                 purse_amount = race_metadata.get('purse_amount', 0)
 
                 # Map to quality tier
-                if race_type_clean == 'stakes_graded':
-                    race_quality = "elite"
-                elif race_type_clean == 'stakes' and purse_amount >= 200000:
+                if race_type_clean == 'stakes_graded' or race_type_clean == 'stakes' and purse_amount >= 200000:
                     race_quality = "elite"
                 elif race_type_clean in ['allowance', 'allowance_optional']:
                     race_quality = "high"
@@ -5757,7 +5754,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                     race_quality = "low-maiden"
                 elif purse_amount >= 500000:
                     race_quality = "elite"
-            except BaseException:
+            except Exception:
                 pass
 
         # Set component weights based on race quality
@@ -5842,7 +5839,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
                         distance_furlongs = 10.0
                     elif '1.125' in distance_txt or '1 1/8' in distance_txt:
                         distance_furlongs = 9.0
-            except BaseException:
+            except Exception:
                 pass
 
             # ═══════════════════════════════════════════════════════════════════════
@@ -6112,7 +6109,7 @@ def compute_bias_ratings(df_styles: pd.DataFrame,
 
 
 def fair_probs_from_ratings(ratings_df: pd.DataFrame,
-                            ml_odds_dict: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+                            ml_odds_dict: dict[str, float] | None = None) -> dict[str, float]:
     """
     GOLD STANDARD probability calculation with comprehensive validation and ML odds reality check.
 
@@ -6245,7 +6242,7 @@ def get_weight_preset(surface: str, distance: str) -> dict:
     """
     surf = (surface or "Dirt").strip().lower()
     dist_bucket = distance_bucket(distance) if distance else "8f+"
-    
+
     base = {
         "class_form": 1.0,
         "pace_speed": 1.0,
@@ -6253,7 +6250,7 @@ def get_weight_preset(surface: str, distance: str) -> dict:
         "track_bias": 1.0,
         "trs_jky": 1.0
     }
-    
+
     # Surface adjustments
     if "turf" in surf:
         base["class_form"] = 1.25  # Class more predictive on turf
@@ -6265,7 +6262,7 @@ def get_weight_preset(surface: str, distance: str) -> dict:
     else:  # Dirt
         base["pace_speed"] = 1.15  # Speed/pace more dominant on dirt
         base["class_form"] = 1.0
-    
+
     # Distance adjustments
     if dist_bucket == "≤6f":  # Sprint
         base["pace_speed"] *= 1.20  # Pace critical in sprints
@@ -6276,7 +6273,7 @@ def get_weight_preset(surface: str, distance: str) -> dict:
     else:  # Route (8f+)
         base["pace_speed"] *= 0.85  # Pace less dominant in routes
         base["class_form"] *= 1.20  # Class/stamina key in routes
-    
+
     return base
 
 
@@ -6289,10 +6286,10 @@ def apply_strategy_profile_to_weights(weights: dict, profile: str) -> dict:
     """
     if not weights:
         return {"class_form": 1.0, "trs_jky": 1.0}
-    
+
     w = weights.copy()
     profile_lower = (profile or "").lower()
-    
+
     if "value" in profile_lower:
         # Value hunters look for pace/bias edges
         w["pace_speed"] = w.get("pace_speed", 1.0) * 1.15
@@ -6302,7 +6299,7 @@ def apply_strategy_profile_to_weights(weights: dict, profile: str) -> dict:
         # Confident players trust class/form
         w["class_form"] = w.get("class_form", 1.0) * 1.15
         w["pace_speed"] = w.get("pace_speed", 1.0) * 0.95
-    
+
     return w
 
 
@@ -6317,10 +6314,10 @@ def adjust_by_race_type(weights: dict, race_type: str) -> dict:
     """
     if not weights:
         return {"class_form": 1.0, "trs_jky": 1.0}
-    
+
     w = weights.copy()
     rt = (race_type or "").lower()
-    
+
     if "g1" in rt or "g2" in rt:
         # Elite stakes - class differences narrow, form is key
         w["class_form"] = w.get("class_form", 1.0) * 1.30
@@ -6340,7 +6337,7 @@ def adjust_by_race_type(weights: dict, race_type: str) -> dict:
         # Maiden - limited data, pedigree/angles matter
         w["class_form"] = w.get("class_form", 1.0) * 0.90
         w["track_bias"] = w.get("track_bias", 1.0) * 1.10
-    
+
     return w
 
 
@@ -6353,10 +6350,10 @@ def apply_purse_scaling(weights: dict, purse: int) -> dict:
     """
     if not weights:
         return {"class_form": 1.0, "trs_jky": 1.0}
-    
+
     w = weights.copy()
     purse_val = purse or 0
-    
+
     if purse_val >= 500000:  # Major stakes ($500k+)
         w["class_form"] = w.get("class_form", 1.0) * 1.25
         w["pace_speed"] = w.get("pace_speed", 1.0) * 0.90
@@ -6374,7 +6371,7 @@ def apply_purse_scaling(weights: dict, purse: int) -> dict:
         w["class_form"] = w.get("class_form", 1.0) * 0.80
         w["pace_speed"] = w.get("pace_speed", 1.0) * 1.15
         w["track_bias"] = w.get("track_bias", 1.0) * 1.20
-    
+
     return w
 
 
@@ -6388,10 +6385,10 @@ def apply_condition_adjustment(weights: dict, condition: str) -> dict:
     """
     if not weights:
         return {"class_form": 1.0, "trs_jky": 1.0}
-    
+
     w = weights.copy()
     cond = (condition or "fast").lower()
-    
+
     if "mud" in cond or "slop" in cond or "heavy" in cond:
         # Off-track - pace scenarios disrupted
         w["pace_speed"] = w.get("pace_speed", 1.0) * 0.80
@@ -6401,7 +6398,7 @@ def apply_condition_adjustment(weights: dict, condition: str) -> dict:
         w["pace_speed"] = w.get("pace_speed", 1.0) * 0.95
         w["class_form"] = w.get("class_form", 1.0) * 1.05
     # Fast/Firm = no adjustment
-    
+
     return w
 
 
@@ -6591,7 +6588,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
     # EXTRACTION: Get top 5 horses by rating
     try:
         top_horses = primary_df.nlargest(5, 'R')
-    except BaseException:
+    except Exception:
         # Fallback if rating column has issues
         top_horses = primary_df.head(5)
 
@@ -6618,7 +6615,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
             race_class_data = parse_and_calculate_class(pp_text)
             actual_class_weight = race_class_data['weight']['class_weight']
             WEIGHTS['Cclass'] = actual_class_weight  # Use actual weight from parser
-        except BaseException:
+        except Exception:
             pass  # Fall back to default
 
     breakdown = "### Component Breakdown (Top 5 Horses)\n"
@@ -6632,7 +6629,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
         # SAFE EXTRACTION: Get rating with error handling
         try:
             final_rating = float(row.get('R', 0))
-        except BaseException:
+        except Exception:
             final_rating = 0.0
 
         breakdown += f"**#{post} {horse_name}** (ML {ml}) - **Rating: {final_rating:.2f}**\n"
@@ -6652,7 +6649,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
         for comp_name, weight in WEIGHTS.items():
             try:
                 comp_value = float(row.get(comp_name, 0))
-            except BaseException:
+            except Exception:
                 comp_value = 0.0
 
             components[comp_name] = comp_value
@@ -6665,7 +6662,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
         # TRACK BIAS: Additional component
         try:
             atrack = float(row.get('Atrack', 0))
-        except BaseException:
+        except Exception:
             atrack = 0.0
         breakdown += f"- **Track Bias:** {atrack:+.2f} - Track-specific advantages (style + post combo)\n"
 
@@ -6677,7 +6674,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
         if quirin != 'N/A':
             try:
                 quirin = int(float(quirin))
-            except BaseException:
+            except Exception:
                 quirin = 'N/A'
         breakdown += f"- **Quirin Points:** {quirin} - BRISNET early pace points\n"
 
@@ -6690,9 +6687,9 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
 
 
 def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
-                           strategy_profile: str, name_to_post: Dict[str, str],
-                           name_to_odds: Dict[str, str], field_size: int, ppi_val: float,
-                           smart_money_horses: List[Dict] = None, name_to_ml: Dict[str, str] = None) -> str:
+                           strategy_profile: str, name_to_post: dict[str, str],
+                           name_to_odds: dict[str, str], field_size: int, ppi_val: float,
+                           smart_money_horses: list[dict] = None, name_to_ml: dict[str, str] = None) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,
     A/B/C/D grouping, and $50 bankroll optimization.
@@ -6702,15 +6699,15 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         name_to_ml: Dictionary mapping horse names to ML odds (for comparison with live odds)
     """
 
+
     import numpy as np
-    from itertools import combinations
 
     # Handle None defaults for mutable default arguments
     if smart_money_horses is None:
         smart_money_horses = []
     if name_to_ml is None:
         name_to_ml = {}
-    
+
     # --- GOLD STANDARD: Build probability dictionary with validation ---
     # (Populated early so underlay/overlay detection works correctly)
     primary_probs_dict = {}
@@ -6732,7 +6729,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
 
             # VALIDATION: Probability bounds [0, 1]
             prob = max(0.0, min(1.0, prob))
-        except BaseException:
+        except Exception:
             prob = 1.0 / max(len(primary_df), 1)
 
         primary_probs_dict[horse] = prob
@@ -6743,7 +6740,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         primary_probs_dict = {h: p / total_prob for h, p in primary_probs_dict.items()}
 
     # --- ELITE: Calculate Most Likely Finishing Order (Sequential Selection Algorithm) ---
-    def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> List[Tuple[str, float]]:
+    def calculate_most_likely_finishing_order(df: pd.DataFrame, top_n: int = 5) -> list[tuple[str, float]]:
         """
         GOLD STANDARD: Calculate most likely finishing order using mathematically sound sequential selection.
 
@@ -6788,7 +6785,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                     prob = float(prob_str)
                     if prob > 1.0:  # Assume percentage
                         prob = prob / 100.0
-            except BaseException:
+            except Exception:
                 prob = 1.0 / len(horses)
 
             # SANITY CHECK: Probability bounds
@@ -6887,7 +6884,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
                     if h_prob > 1.0:
                         h_prob = h_prob / 100.0
                 h_prob = max(0.0, min(1.0, h_prob))
-            except BaseException:
+            except Exception:
                 h_prob = 0.0
 
             alternatives.append((h, h_prob))
@@ -6897,7 +6894,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         most_likely[pos_idx] = alternatives[:3]
 
     # --- 1. Helper Functions ---
-    def format_horse_list(horse_names: List[str]) -> str:
+    def format_horse_list(horse_names: list[str]) -> str:
         """Creates a bulleted list of horses with post, name, and odds (shows ML → Live if different)."""
         if not horse_names:
             return "* None"
@@ -6971,7 +6968,7 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         for h in dumb_money_horses:
             if h.get('ratio', 1.0) > 2.0:  # 2x+ drift = blocked from A-Group
                 blocked_from_A.add(h['name'])
-    
+
     # Filter out blocked horses AND NaN-rated horses from A-group consideration
     # CRITICAL FIX: Never promote a NaN-rated horse to A-Group
     def _has_valid_rating(horse_name: str) -> bool:
@@ -7161,11 +7158,11 @@ def build_betting_strategy(primary_df: pd.DataFrame, df_ol: pd.DataFrame,
         bankroll_report += f"* **Trifecta** ($12): A / B / C - ${12 / max(tri_combos, 1):.2f} base × {tri_combos} combos\n"
 
         # Superfecta
-        bankroll_report += f"* **Superfecta** ($8): A / B / C / D - scaled to fit budget\n"
+        bankroll_report += "* **Superfecta** ($8): A / B / C / D - scaled to fit budget\n"
 
-    bankroll_report += f"\n**Total Investment:** $50 (optimized)\n"
+    bankroll_report += "\n**Total Investment:** $50 (optimized)\n"
     bankroll_report += f"**Risk Level:** {strategy_profile} approach - {'Wider coverage, value-based' if strategy_profile == 'Value Hunter' else 'Concentrated on top selection'}\n"
-    bankroll_report += f"\n💡 **Use Finishing Order Predictions:** The probability rankings above show the most likely finishers for each position. Build your tickets using horses with highest probabilities for each slot.\n"
+    bankroll_report += "\n💡 **Use Finishing Order Predictions:** The probability rankings above show the most likely finishers for each position. Build your tickets using horses with highest probabilities for each slot.\n"
 
     # --- Smart Money Alert Section ---
     smart_money_report = ""
@@ -7395,7 +7392,7 @@ else:
                         df_final_field["Post"].values,
                         index=df_final_field["Horse"]
                     ).to_dict()
-                    
+
                     # Store Section A data in session state for Section E validation
                     # This ensures the validation uses the ACTUAL post numbers from the race setup
                     post_to_name = {int(v): k for k, v in name_to_post.items()}
@@ -7448,7 +7445,7 @@ else:
                             missing_horses.append(horse)
 
                     if missing_horses:
-                        st.error(f"❌ CRITICAL ERROR: Horse name mismatch between ratings and Section A")
+                        st.error("❌ CRITICAL ERROR: Horse name mismatch between ratings and Section A")
                         st.error(f"Missing horses: {', '.join(missing_horses)}")
                         st.error("This usually means horse names were modified after Section A")
                         st.stop()
@@ -7482,22 +7479,22 @@ else:
                 # British Isles 20/1 → 50/1 = money LEAVING (penalize heavily)
                 # White Abarrio 4/1 → 9/2 = money STAYING (existing smart money bonus)
                 # ═══════════════════════════════════════════════════════════════
-                
+
                 dumb_money_horses = []  # Horses with odds drifting OUT (money leaving)
-                
+
                 for _, row in df_final_field.iterrows():
                     horse_name = row.get('Horse')
                     live_odds = row.get('Live Odds', '')
                     ml_odds = row.get('ML', '')
-                    
+
                     if live_odds and ml_odds:
                         try:
                             live_decimal = odds_to_decimal(live_odds)
                             ml_decimal = odds_to_decimal(ml_odds)
-                            
+
                             if live_decimal > 0 and ml_decimal > 0:
                                 ratio = live_decimal / ml_decimal
-                                
+
                                 # DUMB MONEY: Odds drifting OUT significantly
                                 # British Isles: 20/1 → 50/1 = ratio 2.5 = major red flag
                                 if ratio > 1.5:  # Odds up 50%+ = money leaving
@@ -7526,7 +7523,7 @@ else:
                                 penalty = -1.5  # Moderate penalty for 50%+ drift
                             else:
                                 penalty = 0.0
-                            
+
                             primary_df.at[idx, 'R'] = row['R'] + penalty
 
                 # Store dumb_money_horses for A-Group gate
@@ -7624,15 +7621,18 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
 
                 # ===== PHASE 3: ADVANCED PROBABILITY ANALYSIS =====
                 try:
-                    from phase3_probability_engine import Phase3ProbabilityEngine, format_phase3_report
-                    
+                    from phase3_probability_engine import (
+                        Phase3ProbabilityEngine,
+                        format_phase3_report,
+                    )
+
                     # Get win probabilities from primary_df (column is 'Fair %' with string values like '25.5%')
                     if 'Fair %' in primary_df.columns:
                         win_probs = primary_df['Fair %'].apply(
                             lambda x: float(str(x).replace('%', '').strip()) / 100.0 if pd.notna(x) and str(x).replace('%', '').replace('.', '').strip().isdigit() else 0.0
                         ).values
                         horse_names = primary_df['Horse'].values if 'Horse' in primary_df.columns else None
-                        
+
                         # Run Phase 3 analysis
                         phase3_engine = Phase3ProbabilityEngine(bankroll=50.0)
                         phase3_results = phase3_engine.analyze_race_comprehensive(
@@ -7640,15 +7640,15 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             horse_names=horse_names,
                             confidence_level=0.95
                         )
-                        
+
                         # Format Phase 3 report
                         phase3_report = format_phase3_report(phase3_results)
-                        
+
                     else:
                         phase3_report = "Phase 3 analysis unavailable (missing win probabilities)"
                 except Exception as e:
                     phase3_report = f"Phase 3 analysis error: {str(e)}"
-                
+
                 # Store Classic Report in session state so it persists across reruns
                 st.session_state['classic_report'] = report
                 st.session_state['phase3_report'] = phase3_report
@@ -7944,7 +7944,7 @@ if GOLD_DB_AVAILABLE and gold_db is not None:
         st.header(f"E. Gold High-IQ System 🏆 - {total_saved} Races Saved")
         if total_saved > 0:
             st.success(f"💾 **Database Active:** {stats.get('total_races', 0)} races with results, {len(pending_races)} pending results")
-    except BaseException:
+    except Exception:
         st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
 else:
     st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
@@ -8095,12 +8095,12 @@ else:
             st.markdown("---")
             st.markdown("#### 🌐 Community Races Log (All Users)")
             st.caption("All races analyzed by the community - permanently saved to database")
-            
+
             try:
                 import sqlite3
                 conn = sqlite3.connect(gold_db.db_path, timeout=5.0)
                 cursor = conn.cursor()
-                
+
                 # Get all races with status
                 cursor.execute("""
                     SELECT 
@@ -8116,19 +8116,19 @@ else:
                     ORDER BY r.analyzed_timestamp DESC
                     LIMIT 50
                 """)
-                
+
                 all_races = cursor.fetchall()
                 conn.close()
-                
+
                 if all_races:
                     # Create dataframe
                     races_df = pd.DataFrame(all_races, columns=[
                         'Race ID', 'Track', 'Date', 'Race #', 'Horses', 'Saved At', 'Status'
                     ])
-                    
+
                     # Format timestamp
                     races_df['Saved At'] = pd.to_datetime(races_df['Saved At']).dt.strftime('%m/%d %I:%M %p')
-                    
+
                     # Display with status colors
                     st.dataframe(
                         races_df,
@@ -8141,14 +8141,14 @@ else:
                             )
                         }
                     )
-                    
+
                     # Summary
                     completed = len([r for r in all_races if '✅' in r[6]])
                     pending = len([r for r in all_races if '⏳' in r[6]])
                     st.caption(f"Showing last 50 races | ✅ {completed} completed | ⏳ {pending} pending")
                 else:
                     st.info("📋 No races saved yet. Analyze a race above to begin!")
-                    
+
             except Exception as races_err:
                 st.warning(f"Could not load race log: {races_err}")
 
@@ -8244,11 +8244,11 @@ else:
                         # First try to use Section A data from session state (most accurate)
                         section_a_posts = st.session_state.get('section_a_posts', set())
                         section_a_post_to_name = st.session_state.get('section_a_post_to_name', {})
-                        
+
                         # Fall back to database data if Section A data not available
                         db_program_numbers = sorted([int(h['program_number']) for h in horses])
                         db_horse_names_dict = {int(h['program_number']): h['horse_name'] for h in horses}
-                        
+
                         # Use Section A data if available, otherwise use database
                         if section_a_posts:
                             program_numbers = sorted(section_a_posts)
@@ -8256,10 +8256,10 @@ else:
                         else:
                             program_numbers = db_program_numbers
                             horse_names_dict = db_horse_names_dict
-                        
+
                         # Create combined set of valid programs (both Section A and database)
                         all_known_programs = set(program_numbers) | set(db_program_numbers)
-                        
+
                         # Also allow program numbers up to max + buffer for late changes
                         max_program = max(all_known_programs) if all_known_programs else field_size
 
@@ -8368,7 +8368,7 @@ else:
                                                             st.info(f"🧠 Model learned! Winner: {accuracy:.0f}% | Top-3: {top3_acc:.0f}%")
                                                             # Refresh learned weights so next prediction uses updated values
                                                             globals()['LEARNED_WEIGHTS'] = get_live_learned_weights(gold_db.db_path)
-                                                            logger.info(f"🔄 Refreshed LEARNED_WEIGHTS after calibration")
+                                                            logger.info("🔄 Refreshed LEARNED_WEIGHTS after calibration")
                                                 except Exception as cal_err:
                                                     logger.warning(f"Auto-calibration failed: {cal_err}")
 
@@ -8434,8 +8434,8 @@ else:
                 st.markdown("### 📊 Database Integrity Verification")
 
                 try:
-                    import sqlite3
                     import os
+                    import sqlite3
                     # CRITICAL FIX: Add timeout to prevent database lock hangs
                     conn = sqlite3.connect(gold_db.db_path, timeout=10.0)
                     cursor = conn.cursor()
@@ -8475,7 +8475,7 @@ else:
                     if 'last_learning_insights' in st.session_state and st.session_state['last_learning_insights']:
                         st.markdown("#### 🎓 Latest Learning Insights")
                         insights = st.session_state['last_learning_insights']
-                        
+
                         with st.expander(f"📊 Found {len(insights)} pattern(s) from last race analysis", expanded=True):
                             for i, insight in enumerate(insights, 1):
                                 pattern_icons = {
@@ -8487,33 +8487,33 @@ else:
                                     'post_bias_alignment': '🎯'
                                 }
                                 icon = pattern_icons.get(insight['pattern'], '💡')
-                                
+
                                 st.markdown(f"""
                                 **{icon} Pattern {i}: {insight['pattern'].replace('_', ' ').title()}**
                                 - Horse: **{insight['horse']}**
                                 - {insight['description']}
                                 - Confidence: {insight['confidence']*100:.0f}%
                                 """)
-                            
+
                             st.info("💡 These insights are automatically stored and used to improve future predictions!")
-                    
+
                     # 4.6 Show Pattern Learning History
                     if INTELLIGENT_LEARNING_AVAILABLE:
                         try:
                             engine = IntelligentLearningEngine(gold_db.db_path)
                             learnings = engine.get_accumulated_learnings()
-                            
+
                             if learnings.get('total_races_analyzed', 0) > 0:
                                 st.markdown("#### 📚 Accumulated Learning History")
-                                
+
                                 col_a, col_b = st.columns(2)
                                 with col_a:
                                     st.metric(
-                                        "Races Analyzed", 
+                                        "Races Analyzed",
                                         learnings['total_races_analyzed'],
                                         help="Total races where patterns were identified"
                                     )
-                                
+
                                 with col_b:
                                     top_patterns = list(learnings.get('pattern_frequency', {}).keys())[:3]
                                     if top_patterns:
@@ -8522,7 +8522,7 @@ else:
                                             ', '.join([p.replace('_', ' ').title()[:15] for p in top_patterns]),
                                             help="Most frequently identified winning patterns"
                                         )
-                                
+
                                 # Show pattern frequency
                                 pattern_freq = learnings.get('pattern_frequency', {})
                                 if pattern_freq:
@@ -8583,16 +8583,16 @@ else:
             After every result submission, the system adjusts component weights using gradient descent
             and **persists the learned weights to the database** so they survive restarts.
             """)
-            
+
             # Load current learned weights from database (v2 system)
             try:
                 if ADAPTIVE_LEARNING_AVAILABLE:
                     # Load directly from database - these are the ACTUAL weights being used
                     db_learned_weights = get_live_learned_weights(PERSISTENT_DB_PATH)
-                    
+
                     st.markdown("#### 🧠 Learned Component Weights (From Database)")
                     st.caption("These weights have been automatically tuned from historical race results")
-                    
+
                     # Display core weights as metrics
                     cols = st.columns(6)
                     weight_names = ['class', 'speed', 'form', 'pace', 'style', 'post']
@@ -8608,36 +8608,36 @@ else:
                                 delta_color="normal",
                                 help=f"Learned emphasis on {weight_name} factor (default: {default_val})"
                             )
-                    
+
                     # Show odds drift learning
                     st.markdown("---")
                     st.markdown("#### 💰 Odds Drift Learning (Pegasus 2026 Tuned)")
                     cols2 = st.columns(4)
-                    
+
                     odds_weights = {
                         'odds_drift_penalty': ('Drift OUT Penalty', -3.0),
                         'smart_money_bonus': ('Smart $ Bonus', 2.5),
                         'a_group_drift_gate': ('A-Group Gate', 2.0)
                     }
-                    
+
                     col_idx = 0
                     for key, (label, default) in odds_weights.items():
                         with cols2[col_idx]:
                             val = db_learned_weights.get(key, default)
                             st.metric(label, f"{val:.1f}", help=f"Default: {default}")
                         col_idx += 1
-                    
+
                     st.success("✅ **Weights persist to database** - survive app restarts and Render redeploys!")
-                    
+
                     # Show calibration history from database
                     st.markdown("---")
                     st.markdown("#### 📈 Calibration History (from Database)")
-                    
+
                     try:
                         import sqlite3
                         conn = sqlite3.connect(PERSISTENT_DB_PATH, timeout=5.0)
                         cursor = conn.cursor()
-                        
+
                         cursor.execute("""
                             SELECT 
                                 calibration_timestamp,
@@ -8649,10 +8649,10 @@ else:
                             ORDER BY calibration_timestamp DESC
                             LIMIT 10
                         """)
-                        
+
                         cal_history = cursor.fetchall()
                         conn.close()
-                        
+
                         if cal_history:
                             cal_df = pd.DataFrame(cal_history, columns=[
                                 'Timestamp', 'Races', 'Winner %', 'Top-3 %', 'Improvements'
@@ -8661,26 +8661,27 @@ else:
                             cal_df['Top-3 %'] = (cal_df['Top-3 %'] * 100).round(1).astype(str) + '%'
                             cal_df['Timestamp'] = pd.to_datetime(cal_df['Timestamp']).dt.strftime('%m/%d %I:%M %p')
                             cal_df = cal_df.drop(columns=['Improvements'])
-                            
+
                             st.dataframe(cal_df, use_container_width=True, hide_index=True)
                             st.caption(f"📚 System has learned from **{cal_df['Races'].sum()}** total race analyses")
                         else:
                             st.info("📋 No calibration history yet. Submit race results to start learning!")
-                    
+
                     except Exception as db_err:
                         st.warning(f"Could not load calibration history: {db_err}")
-                
+
                 else:
                     # Fallback to v1 system
                     import importlib
+
                     import unified_rating_engine
                     importlib.reload(unified_rating_engine)
-                    
+
                     current_weights = unified_rating_engine.BASE_WEIGHTS.copy()
-                    
+
                     st.markdown("#### 🎯 Current Component Weights")
                     st.caption("These weights determine how much each factor influences the final rating")
-                    
+
                     # Display weights as metrics
                     cols = st.columns(6)
                     weight_names = ['class', 'speed', 'form', 'pace', 'style', 'post']
@@ -8692,9 +8693,9 @@ else:
                                 f"{weight_val:.3f}",
                                 help=f"Current emphasis on {weight_name} factor"
                             )
-                
+
                 st.markdown("---")
-                
+
                 # Load calibration history from DATABASE (not JSON file)
                 import json as _json_cal
                 try:
@@ -8779,7 +8780,7 @@ else:
                 except Exception as _cal_err:
                     st.warning(f"Could not load calibration history from database: {_cal_err}")
                     st.info("📋 Calibration history will appear after your first race result submission.")
-                
+
             except Exception as e:
                 st.error(f"❌ Error loading calibration data: {str(e)}")
                 import traceback
