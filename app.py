@@ -28,6 +28,20 @@ import streamlit as st
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ===================== String Constants (extracted to reduce duplication) =====================
+DIST_BUCKET_SPRINT = '≤6f'
+DIST_BUCKET_MID = '6.5–7f'
+DIST_BUCKET_ROUTE = '8f+'
+COL_FAIR_PCT = 'Fair %'
+COL_FAIR_ODDS = 'Fair Odds'
+COL_EDGE_PP = 'Edge (pp)'
+COL_EV_PER_DOLLAR = 'EV per $1'
+COL_PROB_PCT = 'Prob %'
+DEFAULT_DISTANCE = '6 Furlongs'
+BIAS_FAIR_NEUTRAL = 'fair/neutral'
+RACE_TYPE_MAIDEN_SP_WT = 'maiden special weight'
+RACE_TYPE_MAIDEN_CLM = 'maiden claiming'
+
 # DATABASE PERSISTENCE: Ensures data survives Render redeployments
 try:
     from db_persistence import (
