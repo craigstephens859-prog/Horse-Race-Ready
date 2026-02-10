@@ -1,0 +1,123 @@
+<!-- ============================================================
+     SQUARESPACE CODE INJECTION → Settings → Advanced → Header
+     Drop this ENTIRE block into the Header box.
+     Last updated: February 6, 2026  (v3 — all-valid)
+     ============================================================ -->
+
+<!-- Verification Tags -->
+<meta name="msvalidate.01" content="A675840D45A4F7E4EFD18332BFA1F7AA" />
+<meta name="google-site-verification" content="nNgfOSq6xlDd13PTKsVPGLWRbgX8hneQ1Y57JfqZy7w" />
+<meta name="facebook-domain-verification" content="ou5nacpxke1ldchdls3tc983vknpxg" />
+
+<!-- Performance: Meta Pixel preconnect -->
+<link rel="preconnect" href="https://connect.facebook.net" crossorigin />
+<link rel="dns-prefetch" href="https://connect.facebook.net" />
+
+<!-- ============================================================
+     CLEANUP: Remove Squarespace auto-generated broken schemas.
+     Squarespace injects an empty LocalBusiness (no name/address)
+     and a bare duplicate WebSite (empty description).  Both fail
+     Google Rich Results validation.  This script strips them
+     after the DOM is built but before Google's renderer reads
+     the final structured data.
+     ============================================================ -->
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var els = document.querySelectorAll('script[type="application/ld+json"]');
+  for (var i = 0; i < els.length; i++) {
+    try {
+      var d = JSON.parse(els[i].textContent);
+      if (d['@type'] === 'LocalBusiness') { els[i].parentNode.removeChild(els[i]); }
+      if (d['@type'] === 'WebSite' && !d['@id']) { els[i].parentNode.removeChild(els[i]); }
+    } catch (e) {}
+  }
+});
+</script>
+
+<!-- SCHEMA: WebSite  (standalone — no Organization reference) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "@id": "https://www.handicappinghorseraces.org/#website",
+  "name": "Horse Race Ready",
+  "alternateName": "Handicapping Horse Races",
+  "url": "https://www.handicappinghorseraces.org/",
+  "inLanguage": "en",
+  "description": "Free AI-powered horse racing handicapping tool with pace projections, speed figures, track bias analysis, and Monte Carlo win probability simulations."
+}
+</script>
+
+<!-- SCHEMA: FAQPage -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is horse race handicapping?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Horse race handicapping is the process of analyzing past performance data—speed figures, pace ratings, track bias, jockey and trainer statistics, and post position—to estimate each horse's probability of winning. Tools like Horse Race Ready automate this by processing BRIS past performances through algorithms that evaluate 50+ data points per horse."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I use past performances to handicap a horse race?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Download past performances from BRIS, DRF, or Equibase (typically $3 per race card). Look at each horse's speed figures, recent form cycle, running style (early speed vs closer), class level, days since last race, and trainer/jockey win percentages. Horse Race Ready lets you paste the raw PP text and instantly generates pace projections, bias-adjusted ratings, win probabilities, and a complete betting strategy."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What are speed figures in horse racing?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Speed figures (like Beyer Speed Figures or BRIS Speed Ratings) are numerical ratings that normalize a horse's finishing time based on track variant, distance, and surface. A higher number means a faster performance. They allow you to compare horses across different tracks and dates."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is track bias in horse racing?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Track bias refers to tendencies of a specific racetrack that favor certain running styles or post positions. For example, some tracks favor early speed horses while others have deep closers winning frequently. Horse Race Ready adjusts its ratings for known biases at Santa Anita, Churchill Downs, Gulfstream Park, Keeneland, and more."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is Horse Race Ready free to use?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Horse Race Ready is a completely free horse racing handicapping tool. Paste your own past performances and the system generates win/place/show probabilities, exacta and trifecta combinations, pace projections, and a betting strategy blueprint at no cost."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How does Monte Carlo simulation work for horse race predictions?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Monte Carlo simulation runs thousands of randomized race scenarios (Horse Race Ready uses 10,000 iterations) based on each horse's speed figures, pace ratings, and historical variance. This produces win probabilities with 95% confidence intervals rather than a single point estimate."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the best free horse racing handicapping tool?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Horse Race Ready at handicappinghorseraces.org is a free AI-powered handicapping tool that analyzes BRIS past performances to produce pace projections, bias-adjusted power ratings, Monte Carlo win probabilities, exacta/trifecta rankings, and complete betting strategy blueprints."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I build an exacta or trifecta betting strategy?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Identify your top contenders using speed figures, pace analysis, and class ratings. Then use probability-based combination rankings to find the most likely finishing orders. Horse Race Ready's Monte Carlo simulation automatically ranks the top 10 exacta and trifecta combinations by probability with confidence ratings."
+      }
+    }
+  ]
+}
+</script>

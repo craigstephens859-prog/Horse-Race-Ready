@@ -17,17 +17,17 @@ AUTHOR: PhD-level AI with software engineering expertise
 TARGET: 90% winner prediction, 2 for 2nd, 2-3 for 3rd/4th
 """
 
-import re
 import logging
+import re
 import traceback
-from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass, asdict, field
-from datetime import datetime
 from collections import defaultdict
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from difflib import get_close_matches
+from typing import Any
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,12 +35,14 @@ logger = logging.getLogger(__name__)
 
 # ===================== DATA MODELS =====================
 
+
 @dataclass
 class HorseData:  # pylint: disable=too-many-instance-attributes
     """
     GOLD-STANDARD structured horse data model.
     Every field has validation and confidence tracking.
     """
+
     # === IDENTITY ===
     post: str
     name: str
@@ -53,8 +55,8 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     style_confidence: float = 1.0  # 0.0-1.0
 
     # === ODDS ===
-    ml_odds: Optional[str] = None  # Raw string (e.g., "5/2", "3-1")
-    ml_odds_decimal: Optional[float] = None  # Decimal format (e.g., 3.5)
+    ml_odds: str | None = None  # Raw string (e.g., "5/2", "3-1")
+    ml_odds_decimal: float | None = None  # Decimal format (e.g., 3.5)
     odds_confidence: float = 1.0
 
     # === CONNECTIONS ===
@@ -67,104 +69,110 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     trainer_confidence: float = 0.5
 
     # === SPEED FIGURES ===
-    speed_figures: List[int] = field(default_factory=list)  # Most recent first
+    speed_figures: list[int] = field(default_factory=list)  # Most recent first
     avg_top2: float = 0.0  # Average of best 2 figures
     peak_fig: int = 0  # Best figure
     last_fig: int = 0  # Most recent figure
     speed_confidence: float = 0.5
 
     # === FORM CYCLE ===
-    days_since_last: Optional[int] = None
-    last_race_date: Optional[str] = None
-    recent_finishes: List[int] = field(default_factory=list)  # Last 3-5 finishes
+    days_since_last: int | None = None
+    last_race_date: str | None = None
+    recent_finishes: list[int] = field(default_factory=list)  # Last 3-5 finishes
     form_confidence: float = 0.5
 
     # === CLASS ===
-    recent_purses: List[int] = field(default_factory=list)
-    race_types: List[str] = field(default_factory=list)  # Clm, Mdn, Alw, Stk, etc.
+    recent_purses: list[int] = field(default_factory=list)
+    race_types: list[str] = field(default_factory=list)  # Clm, Mdn, Alw, Stk, etc.
     avg_purse: float = 0.0
     class_confidence: float = 0.5
 
     # === PEDIGREE ===
     sire: str = "Unknown"
     dam: str = "Unknown"
-    sire_spi: Optional[float] = None  # Speed index
-    damsire_spi: Optional[float] = None
-    sire_awd: Optional[float] = None  # Avg winning distance
-    dam_dpi: Optional[float] = None  # Dam produce index
+    sire_spi: float | None = None  # Speed index
+    damsire_spi: float | None = None
+    sire_awd: float | None = None  # Avg winning distance
+    dam_dpi: float | None = None  # Dam produce index
     pedigree_confidence: float = 0.3  # Often missing
 
     # === ANGLES ===
-    angles: List[Dict[str, Any]] = field(default_factory=list)
+    angles: list[dict[str, Any]] = field(default_factory=list)
     angle_count: int = 0
     angle_confidence: float = 0.5
 
     # === WORKOUTS ===
     workout_count: int = 0
-    days_since_work: Optional[int] = None
-    last_work_speed: Optional[str] = None  # "b" (bullet), "H" (handily), "Bg" (breezing)
+    days_since_work: int | None = None
+    last_work_speed: str | None = None  # "b" (bullet), "H" (handily), "Bg" (breezing)
     workout_confidence: float = 0.3
-    workout_pattern: Optional[str] = None  # "Sharp", "Steady", "Light"
+    workout_pattern: str | None = None  # "Sharp", "Steady", "Light"
 
     # === PRIME POWER (Proprietary BRISNET metric) ===
-    prime_power: Optional[float] = None
-    prime_power_rank: Optional[int] = None
-    
+    prime_power: float | None = None
+    prime_power_rank: int | None = None
+
     # === EQUIPMENT & MEDICATION ===
-    equipment_change: Optional[str] = None  # "Blinkers On", "Blinkers Off", etc.
+    equipment_change: str | None = None  # "Blinkers On", "Blinkers Off", etc.
     first_lasix: bool = False
-    
+
     # === TRIP COMMENTS & RUNNING LINES ===
-    trip_comments: List[str] = field(default_factory=list)  # Last 3-5 race comments
-    
+    trip_comments: list[str] = field(default_factory=list)  # Last 3-5 race comments
+
     # === SURFACE STATISTICS ===
-    surface_stats: Dict[str, Dict[str, float]] = field(default_factory=dict)  # {"Fst": {"win_pct": 25, "avg_fig": 85}, ...}
-    
+    surface_stats: dict[str, dict[str, float]] = field(
+        default_factory=dict
+    )  # {"Fst": {"win_pct": 25, "avg_fig": 85}, ...}
+
     # === ENHANCED PACE DATA ===
-    early_speed_pct: Optional[float] = None  # % of races showing early speed (0-100)
+    early_speed_pct: float | None = None  # % of races showing early speed (0-100)
 
     # === BRIS RACE RATINGS (from running lines) ===
-    race_rating: Optional[int] = None  # RR - measures competition quality/level
-    class_rating_individual: Optional[int] = None  # CR - performance vs that competition
-    
+    race_rating: int | None = None  # RR - measures competition quality/level
+    class_rating_individual: int | None = None  # CR - performance vs that competition
+
     # === RACE SHAPES (pace scenario vs par) ===
-    race_shape_1c: Optional[float] = None  # Beaten lengths vs par at first call
-    race_shape_2c: Optional[float] = None  # Beaten lengths vs par at second call
-    
+    race_shape_1c: float | None = None  # Beaten lengths vs par at first call
+    race_shape_2c: float | None = None  # Beaten lengths vs par at second call
+
     # === RELIABILITY INDICATORS ===
-    reliability_indicator: Optional[str] = None  # "*" (reliable), "." (distance), "()" (stale)
-    
+    reliability_indicator: str | None = (
+        None  # "*" (reliable), "." (distance), "()" (stale)
+    )
+
     # === RACE SUMMARY ADVANCED METRICS ===
-    acl: Optional[float] = None  # Average Competitive Level when ITM
-    r1: Optional[int] = None  # Race rating from most recent race
-    r2: Optional[int] = None  # Race rating from 2nd most recent race
-    r3: Optional[int] = None  # Race rating from 3rd most recent race
-    back_speed: Optional[int] = None  # Best speed at today's distance/surface in last year
-    best_pace_e1: Optional[int] = None  # Peak E1 at today's distance/surface
-    best_pace_e2: Optional[int] = None  # Peak E2 at today's distance/surface
-    best_pace_lp: Optional[int] = None  # Peak LP (late pace) at today's distance/surface
-    
+    acl: float | None = None  # Average Competitive Level when ITM
+    r1: int | None = None  # Race rating from most recent race
+    r2: int | None = None  # Race rating from 2nd most recent race
+    r3: int | None = None  # Race rating from 3rd most recent race
+    back_speed: int | None = None  # Best speed at today's distance/surface in last year
+    best_pace_e1: int | None = None  # Peak E1 at today's distance/surface
+    best_pace_e2: int | None = None  # Peak E2 at today's distance/surface
+    best_pace_lp: int | None = None  # Peak LP (late pace) at today's distance/surface
+
     # === TRACK BIAS IMPACT VALUES ===
-    track_bias_run_style_iv: Optional[float] = None  # Run style effectiveness multiplier (e.g., E=1.22)
-    track_bias_post_iv: Optional[float] = None  # Post position effectiveness multiplier
-    track_bias_markers: Optional[str] = None  # "++" or "+" indicating dominant/favorable
-    
+    track_bias_run_style_iv: float | None = (
+        None  # Run style effectiveness multiplier (e.g., E=1.22)
+    )
+    track_bias_post_iv: float | None = None  # Post position effectiveness multiplier
+    track_bias_markers: str | None = None  # "++" or "+" indicating dominant/favorable
+
     # === PEDIGREE RATINGS (breeding suitability) ===
-    pedigree_fast: Optional[int] = None  # Fast track breeding rating
-    pedigree_off: Optional[int] = None  # Off track (muddy/sloppy) breeding rating
-    pedigree_distance: Optional[int] = None  # Distance breeding rating
-    pedigree_turf: Optional[int] = None  # Turf breeding rating
+    pedigree_fast: int | None = None  # Fast track breeding rating
+    pedigree_off: int | None = None  # Off track (muddy/sloppy) breeding rating
+    pedigree_distance: int | None = None  # Distance breeding rating
+    pedigree_turf: int | None = None  # Turf breeding rating
 
     # === CAREER EARNINGS ===
     earnings: float = 0.0  # Lifetime career earnings (used for layoff dampening)
 
     # === VALIDATION ===
     parsing_confidence: float = 1.0  # Overall confidence
-    warnings: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     raw_block: str = ""
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary with list handling"""
         return asdict(self)
 
@@ -175,31 +183,36 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
         Special handling for scratched horses.
         """
         # SPECIAL CASE: Scratched horses (SCR/WDN odds)
-        if self.ml_odds and self.ml_odds.upper() in ['SCR', 'WDN', 'SCRATCH', 'WITHDRAWN']:
+        if self.ml_odds and self.ml_odds.upper() in [
+            "SCR",
+            "WDN",
+            "SCRATCH",
+            "WITHDRAWN",
+        ]:
             # For scratched horses, only validate basic identity fields
             self.parsing_confidence = 0.8 if self.post and self.name else 0.5
             return
 
         weights = {
-            'style': 0.15,
-            'odds': 0.15,
-            'jockey': 0.10,
-            'trainer': 0.10,
-            'speed': 0.20,
-            'form': 0.15,
-            'class': 0.10,
-            'pedigree': 0.05
+            "style": 0.15,
+            "odds": 0.15,
+            "jockey": 0.10,
+            "trainer": 0.10,
+            "speed": 0.20,
+            "form": 0.15,
+            "class": 0.10,
+            "pedigree": 0.05,
         }
 
         self.parsing_confidence = (
-            weights['style'] * self.style_confidence +
-            weights['odds'] * self.odds_confidence +
-            weights['jockey'] * self.jockey_confidence +
-            weights['trainer'] * self.trainer_confidence +
-            weights['speed'] * self.speed_confidence +
-            weights['form'] * self.form_confidence +
-            weights['class'] * self.class_confidence +
-            weights['pedigree'] * self.pedigree_confidence
+            weights["style"] * self.style_confidence
+            + weights["odds"] * self.odds_confidence
+            + weights["jockey"] * self.jockey_confidence
+            + weights["trainer"] * self.trainer_confidence
+            + weights["speed"] * self.speed_confidence
+            + weights["form"] * self.form_confidence
+            + weights["class"] * self.class_confidence
+            + weights["pedigree"] * self.pedigree_confidence
         )
 
         # Penalize for critical errors
@@ -210,6 +223,7 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
 
 
 # ===================== GOLD STANDARD PARSER =====================
+
 
 class GoldStandardBRISNETParser:
     """
@@ -236,105 +250,114 @@ class GoldStandardBRISNETParser:
             (?:\s+(\d+))?                   # Optional Quirin points
             \s*\)\s*$
         """),
-
         # Pattern 2: No Quirin points (handles foreign = prefix)
         re.compile(r"""(?mix)
             ^\s*=?(\d+[A-Z]?)\s+
             ([A-Za-z0-9][A-Za-z0-9\s'.\-&]+)
             \s*\(\s*(E\/P|EP|E|P|S|NA)\s*\)
         """),
-
         # Pattern 3: Style might be outside parens (handles foreign = prefix)
         re.compile(r"""(?mix)
             ^\s*=?(\d+[A-Z]?)\s+
             ([A-Za-z0-9][A-Za-z0-9\s'.\-&]+)
             \s+(E\/P|EP|E|P|S|NA)
         """),
-
         # Pattern 4: Fallback - just post and name (handles foreign = prefix)
         re.compile(r"""(?mix)
             ^\s*=?(\d+[A-Z]?)\s+
             ([A-Za-z][A-Za-z0-9\s'.\-&]{2,})
-        """)
+        """),
     ]
 
     # ODDS: Multiple formats
     ODDS_PATTERNS = [
-        ('scratched', re.compile(r'(?:^|\s)(SCR|WDN|SCRATCH|WITHDRAWN)(?:\s|$)', re.IGNORECASE)),
-        ('fractional', re.compile(r'(?:^|\s)(\d+)\s*/\s*(\d+)(?:\s|$)')),
-        ('range', re.compile(r'(?:^|\s)(\d+)\s*-\s*(\d+)(?:\s|$)')),
-        ('decimal', re.compile(r'(?:^|\s)(\d+\.\d+)(?:\s|$)')),
-        ('integer', re.compile(r'(?:^|\s)(\d{1,3})(?:\s|$)')),  # Single number (e.g., "5" → "5/1")
+        (
+            "scratched",
+            re.compile(r"(?:^|\s)(SCR|WDN|SCRATCH|WITHDRAWN)(?:\s|$)", re.IGNORECASE),
+        ),
+        ("fractional", re.compile(r"(?:^|\s)(\d+)\s*/\s*(\d+)(?:\s|$)")),
+        ("range", re.compile(r"(?:^|\s)(\d+)\s*-\s*(\d+)(?:\s|$)")),
+        ("decimal", re.compile(r"(?:^|\s)(\d+\.\d+)(?:\s|$)")),
+        (
+            "integer",
+            re.compile(r"(?:^|\s)(\d{1,3})(?:\s|$)"),
+        ),  # Single number (e.g., "5" → "5/1")
     ]
 
     # JOCKEY: Name + win %
     JOCKEY_PATTERNS = [
-        re.compile(r'(?mi)^([A-Z][A-Z\s\'.\-JR]+?)\s*\(\s*[\d\s\-]*?(\d+)%\s*\)'),
-        re.compile(r'(?mi)Jockey:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%'),
-        re.compile(r'(?mi)J:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%'),
+        re.compile(r"(?mi)^([A-Z][A-Z\s\'.\-JR]+?)\s*\(\s*[\d\s\-]*?(\d+)%\s*\)"),
+        re.compile(r"(?mi)Jockey:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%"),
+        re.compile(r"(?mi)J:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%"),
     ]
 
     # TRAINER: Name + win %
     TRAINER_PATTERNS = [
-        re.compile(r'(?mi)^Trnr:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(\s*[\d\s\-]*?(\d+)%\s*\)'),
-        re.compile(r'(?mi)Trainer:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%'),
-        re.compile(r'(?mi)T:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%'),
+        re.compile(
+            r"(?mi)^Trnr:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(\s*[\d\s\-]*?(\d+)%\s*\)"
+        ),
+        re.compile(r"(?mi)Trainer:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%"),
+        re.compile(r"(?mi)T:\s*([A-Za-z][A-Za-z\s,\'.\-]+?)\s*\(.*?(\d+)%"),
     ]
 
     # SPEED FIGURES: Date + figure
     SPEED_FIG_PATTERNS = [
         # Primary: Full line with date, track, type, figure
-        re.compile(r'(?mi)(\d{2}[A-Za-z]{3}\d{2})\s+\w+\s+(?:Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G[123]|Hcp)\s+.*?\s+(\d{2,3})(?:\s+|$)'),
+        re.compile(
+            r"(?mi)(\d{2}[A-Za-z]{3}\d{2})\s+\w+\s+(?:Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G[123]|Hcp)\s+.*?\s+(\d{2,3})(?:\s+|$)"
+        ),
         # Fallback: Just date + figure nearby
-        re.compile(r'(?mi)(\d{2}[A-Za-z]{3}\d{2}).*?(\d{2,3})'),
+        re.compile(r"(?mi)(\d{2}[A-Za-z]{3}\d{2}).*?(\d{2,3})"),
     ]
 
     # PRIME POWER: "Prime Power: 101.5 (4th)"
-    PRIME_POWER_PATTERN = re.compile(r'(?mi)Prime\s*Power:\s*(\d+\.?\d*)\s*\((\d+)[a-z]{2}\)')
+    PRIME_POWER_PATTERN = re.compile(
+        r"(?mi)Prime\s*Power:\s*(\d+\.?\d*)\s*\((\d+)[a-z]{2}\)"
+    )
 
     # ANGLES: Year + type + stats
     ANGLE_PATTERN = re.compile(
-        r'(?mi)^\s*(\d{4}\s+)?'  # Optional year
-        r'(1st\s*time\s*str|Debut\s*MdnSpWt|Maiden\s*Sp\s*Wt|2nd\s*career\s*race|'
-        r'Turf\s*to\s*Dirt|Dirt\s*to\s*Turf|Shipper|Blinkers\s*(?:on|off)|'
-        r'(?:\d+(?:-\d+)?)\s*days?Away|JKYw/\s*[A-Za-z]+|'
-        r'[A-Z\s/]+)\s+'  # Angle type
-        r'(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$'  # Starts, Win%, ITM%, ROI
+        r"(?mi)^\s*(\d{4}\s+)?"  # Optional year
+        r"(1st\s*time\s*str|Debut\s*MdnSpWt|Maiden\s*Sp\s*Wt|2nd\s*career\s*race|"
+        r"Turf\s*to\s*Dirt|Dirt\s*to\s*Turf|Shipper|Blinkers\s*(?:on|off)|"
+        r"(?:\d+(?:-\d+)?)\s*days?Away|JKYw/\s*[A-Za-z]+|"
+        r"[A-Z\s/]+)\s+"  # Angle type
+        r"(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$"  # Starts, Win%, ITM%, ROI
     )
 
     # PEDIGREE
     PEDIGREE_PATTERNS = {
-        'sire_stats': re.compile(
-            r'(?mi)Sire\s*Stats?:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi'
+        "sire_stats": re.compile(
+            r"(?mi)Sire\s*Stats?:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi"
         ),
-        'damsire_stats': re.compile(
-            r'(?mi)Dam\'?s?\s*Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+.*?(\d+(?:\.\d+)?)\s*spi'
+        "damsire_stats": re.compile(
+            r"(?mi)Dam\'?s?\s*Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+.*?(\d+(?:\.\d+)?)\s*spi"
         ),
-        'dam_stats': re.compile(
-            r'(?mi)Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%'
-        ),
-        'sire_name': re.compile(r'(?mi)Sire\s*:\s*([^\(]+)'),
-        'dam_name': re.compile(r'(?mi)Dam:\s*([^\(]+)'),
+        "dam_stats": re.compile(r"(?mi)Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%"),
+        "sire_name": re.compile(r"(?mi)Sire\s*:\s*([^\(]+)"),
+        "dam_name": re.compile(r"(?mi)Dam:\s*([^\(]+)"),
     }
 
     # WORKOUTS: "5 work(s)" or "12Dec23 5f :59.2 Bg"
     WORKOUT_PATTERNS = [
-        re.compile(r'(?mi)(\d+)\s*work'),  # Count
-        re.compile(r'(?mi)(\d{2}[A-Za-z]{3}\d{2})\s+\d+f?\s+[\d:.]+\s+([HBgb]+)'),  # Latest work details
+        re.compile(r"(?mi)(\d+)\s*work"),  # Count
+        re.compile(
+            r"(?mi)(\d{2}[A-Za-z]{3}\d{2})\s+\d+f?\s+[\d:.]+\s+([HBgb]+)"
+        ),  # Latest work details
     ]
 
     # RACE HISTORY: Date + Track + Type + Purse + Finish
     RACE_HISTORY_PATTERN = re.compile(
-        r'(?mi)(\d{2}[A-Za-z]{3}\d{2})\s+(\w+)\s+'  # Date + Track
-        r'(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G[123]|Hcp)\s+'  # Type
-        r'(\d+)\s+'  # Purse
-        r'.*?(\d{1,2})(?:st|nd|rd|th)?'  # Finish
+        r"(?mi)(\d{2}[A-Za-z]{3}\d{2})\s+(\w+)\s+"  # Date + Track
+        r"(Clm|Md Sp Wt|Mdn|Alw|OC|Stk|G[123]|Hcp)\s+"  # Type
+        r"(\d+)\s+"  # Purse
+        r".*?(\d{1,2})(?:st|nd|rd|th)?"  # Finish
     )
 
     # ============ FUZZY MATCHING DICTS ============
 
-    PACE_STYLES = ['E', 'E/P', 'P', 'S', 'NA']
-    RACE_TYPES = ['Clm', 'Md Sp Wt', 'Mdn', 'Alw', 'OC', 'Stk', 'G1', 'G2', 'G3', 'Hcp']
+    PACE_STYLES = ["E", "E/P", "P", "S", "NA"]
+    RACE_TYPES = ["Clm", "Md Sp Wt", "Mdn", "Alw", "OC", "Stk", "G1", "G2", "G3", "Hcp"]
 
     def __init__(self, fuzzy_threshold: float = 0.8):
         """
@@ -348,7 +371,7 @@ class GoldStandardBRISNETParser:
 
     # ============ MAIN ENTRY POINT ============
 
-    def parse_full_pp(self, pp_text: str, debug: bool = False) -> Dict[str, HorseData]:
+    def parse_full_pp(self, pp_text: str, debug: bool = False) -> dict[str, HorseData]:
         """
         MASTER PARSING FUNCTION
 
@@ -360,14 +383,14 @@ class GoldStandardBRISNETParser:
             Dictionary: {horse_name: HorseData object}
         """
         if debug:
-            logger.info("="*80)
+            logger.info("=" * 80)
             logger.info("STARTING GOLD-STANDARD PP PARSING")
-            logger.info("="*80)
+            logger.info("=" * 80)
 
         horses = {}
         self.global_warnings = []
         self.global_errors = []
-        
+
         # NEW: Extract race header metadata (purse, distance, race type)
         self.race_header = self._extract_race_header(pp_text, debug)
         if debug and self.race_header:
@@ -376,10 +399,12 @@ class GoldStandardBRISNETParser:
         try:
             # Step 1: Split into horse chunks
             chunks = self._split_into_chunks(pp_text, debug)
-            self.parsing_stats['chunks_found'] = len(chunks)
+            self.parsing_stats["chunks_found"] = len(chunks)
 
             if not chunks:
-                self.global_errors.append("⚠️ NO HORSES DETECTED - PP format may be incorrect")
+                self.global_errors.append(
+                    "⚠️ NO HORSES DETECTED - PP format may be incorrect"
+                )
                 return {}
 
             # Step 2: Parse each horse
@@ -389,10 +414,12 @@ class GoldStandardBRISNETParser:
                         post, name, style, quirin, block, pp_text, debug
                     )
                     horses[name] = horse_data
-                    self.parsing_stats['horses_parsed'] += 1
+                    self.parsing_stats["horses_parsed"] += 1
 
                     if debug:
-                        logger.info(f"✅ Parsed {name} (confidence: {horse_data.parsing_confidence:.1%})")
+                        logger.info(
+                            f"✅ Parsed {name} (confidence: {horse_data.parsing_confidence:.1%})"
+                        )
 
                 except Exception as e:
                     error_msg = f"Failed to parse {name}: {str(e)}"
@@ -402,12 +429,12 @@ class GoldStandardBRISNETParser:
 
                     # Create fallback data
                     horses[name] = self._create_fallback_data(post, name, block, str(e))
-                    self.parsing_stats['fallback_used'] += 1
+                    self.parsing_stats["fallback_used"] += 1
 
             if debug:
-                logger.info(f"\n{'='*80}")
+                logger.info(f"\n{'=' * 80}")
                 logger.info(f"PARSING COMPLETE: {len(horses)} horses")
-                logger.info(f"{'='*80}\n")
+                logger.info(f"{'=' * 80}\n")
 
         except Exception as e:
             self.global_errors.append(f"CRITICAL PARSING FAILURE: {str(e)}")
@@ -417,10 +444,10 @@ class GoldStandardBRISNETParser:
 
     # ============ RACE HEADER EXTRACTION ============
 
-    def _extract_race_header(self, pp_text: str, debug: bool = False) -> Dict[str, Any]:
+    def _extract_race_header(self, pp_text: str, debug: bool = False) -> dict[str, Any]:
         """
         Extract race metadata from header section (before first horse).
-        
+
         Returns dict with:
         - purse: int (race purse amount)
         - distance: str (e.g., "6 Furlongs", "1 1/8 Miles")
@@ -432,142 +459,156 @@ class GoldStandardBRISNETParser:
         - confidence: float (0.0-1.0)
         """
         header_info = {
-            'purse': 0,
-            'distance': '',
-            'distance_furlongs': 0.0,
-            'race_type': '',
-            'race_type_normalized': '',
-            'track_name': '',
-            'surface': '',
-            'confidence': 0.0
+            "purse": 0,
+            "distance": "",
+            "distance_furlongs": 0.0,
+            "race_type": "",
+            "race_type_normalized": "",
+            "track_name": "",
+            "surface": "",
+            "confidence": 0.0,
         }
-        
+
         # Extract header section (before first horse - typically first 800 chars)
         header_text = pp_text[:800] if pp_text else ""
-        
+
         confidence_score = 0.0
-        
+
         # === PURSE EXTRACTION ===
         purse_patterns = [
-            (r'PURSE\s+\$(\d{1,3}(?:,\d{3})*)', 1.0),  # "PURSE $100,000"
-            (r'Purse:\s+\$(\d{1,3}(?:,\d{3})*)', 1.0),  # "Purse: $50,000"
-            (r'\$(\d{1,3}(?:,\d{3})*)\s+(?:Grade|Stakes|Allowance)', 0.95),  # "$100,000 Grade 1"
-            (r'(Clm|MC|Alw|OC)(\d{4,6})', 0.85),  # "Clm25000" embedded format
+            (r"PURSE\s+\$(\d{1,3}(?:,\d{3})*)", 1.0),  # "PURSE $100,000"
+            (r"Purse:\s+\$(\d{1,3}(?:,\d{3})*)", 1.0),  # "Purse: $50,000"
+            (
+                r"\$(\d{1,3}(?:,\d{3})*)\s+(?:Grade|Stakes|Allowance)",
+                0.95,
+            ),  # "$100,000 Grade 1"
+            (r"(Clm|MC|Alw|OC)(\d{4,6})", 0.85),  # "Clm25000" embedded format
         ]
-        
+
         for pattern, conf in purse_patterns:
             match = re.search(pattern, header_text, re.IGNORECASE)
             if match:
                 try:
                     if len(match.groups()) == 1:
-                        purse_str = match.group(1).replace(',', '')
-                        header_info['purse'] = int(purse_str)
+                        purse_str = match.group(1).replace(",", "")
+                        header_info["purse"] = int(purse_str)
                     else:  # Embedded format like Clm25000
-                        header_info['purse'] = int(match.group(2))
+                        header_info["purse"] = int(match.group(2))
                     confidence_score += conf * 0.33
                     if debug:
-                        logger.info(f"  💵 Purse: ${header_info['purse']:,} (pattern: {pattern[:30]}...)")
+                        logger.info(
+                            f"  💵 Purse: ${header_info['purse']:,} (pattern: {pattern[:30]}...)"
+                        )
                     break
                 except (ValueError, AttributeError):
                     pass
-        
+
         # === DISTANCE EXTRACTION ===
         distance_patterns = [
-            (r'(\d+(?:\s+\d+/\d+)?)\s+(Furlong|Mile)s?', 1.0),  # "6 Furlongs", "1 1/8 Miles"
-            (r'(\d+)F', 0.9),  # "6F"
-            (r'(\d+\.\d+)\s*Miles?', 0.9),  # "1.125 Miles"
+            (
+                r"(\d+(?:\s+\d+/\d+)?)\s+(Furlong|Mile)s?",
+                1.0,
+            ),  # "6 Furlongs", "1 1/8 Miles"
+            (r"(\d+)F", 0.9),  # "6F"
+            (r"(\d+\.\d+)\s*Miles?", 0.9),  # "1.125 Miles"
         ]
-        
+
         for pattern, conf in distance_patterns:
             match = re.search(pattern, header_text, re.IGNORECASE)
             if match:
                 try:
-                    header_info['distance'] = match.group(0)
-                    
+                    header_info["distance"] = match.group(0)
+
                     # Convert to furlongs
-                    if 'Mile' in match.group(0):
-                        if '/' in match.group(0):  # "1 1/8 Miles"
+                    if "Mile" in match.group(0):
+                        if "/" in match.group(0):  # "1 1/8 Miles"
                             parts = match.group(1).split()
                             whole = int(parts[0]) if parts else 0
                             frac = parts[1] if len(parts) > 1 else "0/1"
-                            num, den = map(int, frac.split('/'))
+                            num, den = map(int, frac.split("/"))
                             miles = whole + (num / den)
-                            header_info['distance_furlongs'] = miles * 8
+                            header_info["distance_furlongs"] = miles * 8
                         else:  # "1.125 Miles"
                             miles = float(match.group(1))
-                            header_info['distance_furlongs'] = miles * 8
-                    elif 'Furlong' in match.group(0):
-                        header_info['distance_furlongs'] = float(match.group(1))
-                    elif 'F' in match.group(0):
-                        header_info['distance_furlongs'] = float(match.group(1))
-                    
+                            header_info["distance_furlongs"] = miles * 8
+                    elif "Furlong" in match.group(0) or "F" in match.group(0):
+                        header_info["distance_furlongs"] = float(match.group(1))
+
                     confidence_score += conf * 0.33
                     if debug:
-                        logger.info(f"  📏 Distance: {header_info['distance']} ({header_info['distance_furlongs']}F)")
+                        logger.info(
+                            f"  📏 Distance: {header_info['distance']} ({header_info['distance_furlongs']}F)"
+                        )
                     break
                 except (ValueError, AttributeError):
                     pass
-        
+
         # === RACE TYPE EXTRACTION ===
         race_type_patterns = [
-            (r'Grade\s+(I{1,3}|[123])\s+Stakes', 'g1/g2/g3', 1.0),
-            (r'G([123])\s+Stakes?', 'g1/g2/g3', 1.0),
-            (r'Stakes', 'stakes', 0.95),
-            (r'Allowance\s+Optional\s+Claiming', 'allowance_optional', 0.95),
-            (r'Optional\s+Claiming', 'allowance_optional', 0.95),
-            (r'Allowance', 'allowance', 0.95),
-            (r'\bAOC\b', 'allowance_optional', 0.9),
-            (r'Maiden\s+Claiming', 'maiden_claiming', 0.95),
-            (r'Maiden\s+Special\s+Weight', 'maiden_special_weight', 0.95),
-            (r'\bMSW\b', 'maiden_special_weight', 0.9),
-            (r'Claiming', 'claiming', 0.95),
-            (r'\bClm\d+', 'claiming', 0.9),
-            (r'\bMC\d+', 'maiden_claiming', 0.9),
+            (r"Grade\s+(I{1,3}|[123])\s+Stakes", "g1/g2/g3", 1.0),
+            (r"G([123])\s+Stakes?", "g1/g2/g3", 1.0),
+            (r"Stakes", "stakes", 0.95),
+            (r"Allowance\s+Optional\s+Claiming", "allowance_optional", 0.95),
+            (r"Optional\s+Claiming", "allowance_optional", 0.95),
+            (r"Allowance", "allowance", 0.95),
+            (r"\bAOC\b", "allowance_optional", 0.9),
+            (r"Maiden\s+Claiming", "maiden_claiming", 0.95),
+            (r"Maiden\s+Special\s+Weight", "maiden_special_weight", 0.95),
+            (r"\bMSW\b", "maiden_special_weight", 0.9),
+            (r"Claiming", "claiming", 0.95),
+            (r"\bClm\d+", "claiming", 0.9),
+            (r"\bMC\d+", "maiden_claiming", 0.9),
         ]
-        
+
         for pattern, normalized, conf in race_type_patterns:
             match = re.search(pattern, header_text, re.IGNORECASE)
             if match:
-                header_info['race_type'] = match.group(0)
-                
+                header_info["race_type"] = match.group(0)
+
                 # Normalize grade levels
-                if 'Grade' in match.group(0) or 'G' in match.group(0):
-                    if 'I' in match.group(0) or '1' in match.group(0):
-                        header_info['race_type_normalized'] = 'grade 1'
-                    elif 'II' in match.group(0) or '2' in match.group(0):
-                        header_info['race_type_normalized'] = 'grade 2'
-                    elif 'III' in match.group(0) or '3' in match.group(0):
-                        header_info['race_type_normalized'] = 'grade 3'
+                if "Grade" in match.group(0) or "G" in match.group(0):
+                    if "I" in match.group(0) or "1" in match.group(0):
+                        header_info["race_type_normalized"] = "grade 1"
+                    elif "II" in match.group(0) or "2" in match.group(0):
+                        header_info["race_type_normalized"] = "grade 2"
+                    elif "III" in match.group(0) or "3" in match.group(0):
+                        header_info["race_type_normalized"] = "grade 3"
                 else:
-                    header_info['race_type_normalized'] = normalized
-                
+                    header_info["race_type_normalized"] = normalized
+
                 confidence_score += conf * 0.34
                 if debug:
-                    logger.info(f"  🏆 Race Type: {header_info['race_type']} → {header_info['race_type_normalized']}")
+                    logger.info(
+                        f"  🏆 Race Type: {header_info['race_type']} → {header_info['race_type_normalized']}"
+                    )
                 break
-        
+
         # === TRACK NAME EXTRACTION ===
-        track_match = re.search(r'([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*)\s+Race\s+\d+', header_text[:200])
+        track_match = re.search(
+            r"([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*)\s+Race\s+\d+", header_text[:200]
+        )
         if track_match:
-            header_info['track_name'] = track_match.group(1)
+            header_info["track_name"] = track_match.group(1)
             if debug:
                 logger.info(f"  🏇 Track: {header_info['track_name']}")
-        
+
         # === SURFACE EXTRACTION ===
-        if re.search(r'\bTurf\b', header_text[:300], re.IGNORECASE):
-            header_info['surface'] = 'Turf'
-        elif re.search(r'\bSynthetic\b', header_text[:300], re.IGNORECASE):
-            header_info['surface'] = 'Synthetic'
+        if re.search(r"\bTurf\b", header_text[:300], re.IGNORECASE):
+            header_info["surface"] = "Turf"
+        elif re.search(r"\bSynthetic\b", header_text[:300], re.IGNORECASE):
+            header_info["surface"] = "Synthetic"
         else:
-            header_info['surface'] = 'Dirt'  # Default
-        
-        header_info['confidence'] = min(1.0, confidence_score)
-        
+            header_info["surface"] = "Dirt"  # Default
+
+        header_info["confidence"] = min(1.0, confidence_score)
+
         return header_info
 
     # ============ CHUNKING (HORSE SPLITTING) ============
 
-    def _split_into_chunks(self, pp_text: str, debug: bool = False) -> List[Tuple[str, str, str, float, str]]:
+    def _split_into_chunks(
+        self, pp_text: str, debug: bool = False
+    ) -> list[tuple[str, str, str, float, str]]:
         """
         Splits PP into individual horse blocks.
         Uses progressive pattern matching (strict → permissive).
@@ -583,7 +624,7 @@ class GoldStandardBRISNETParser:
 
             if matches:
                 if debug:
-                    logger.info(f"✓ Pattern {idx+1} matched {len(matches)} horses")
+                    logger.info(f"✓ Pattern {idx + 1} matched {len(matches)} horses")
 
                 for i, m in enumerate(matches):
                     # Extract fields
@@ -604,11 +645,13 @@ class GoldStandardBRISNETParser:
                         quirin = 0.0
 
                     # Clean foreign horse markers
-                    name = name.lstrip('=').strip()
+                    name = name.lstrip("=").strip()
 
                     # Extract block (text between this horse and next)
                     start = m.end()
-                    end = matches[i+1].start() if i+1 < len(matches) else len(pp_text)
+                    end = (
+                        matches[i + 1].start() if i + 1 < len(matches) else len(pp_text)
+                    )
                     block = pp_text[start:end]
 
                     chunks.append((post, name, style, quirin, block))
@@ -631,15 +674,15 @@ class GoldStandardBRISNETParser:
         quirin: float,
         block: str,
         full_pp: str,
-        debug: bool = False
+        debug: bool = False,
     ) -> HorseData:
         """
         Parse all fields for a single horse with confidence tracking.
         """
         if debug:
-            logger.info(f"\n{'─'*60}")
+            logger.info(f"\n{'─' * 60}")
             logger.info(f"Parsing: {name} (Post {post})")
-            logger.info(f"{'─'*60}")
+            logger.info(f"{'─' * 60}")
 
         # Initialize horse data
         horse = HorseData(
@@ -649,14 +692,14 @@ class GoldStandardBRISNETParser:
             pace_style=style,
             quirin_points=quirin,
             style_strength=self._calculate_style_strength(style, quirin),
-            raw_block=block
+            raw_block=block,
         )
 
         # Parse each component with ISOLATED error handling
         # CRITICAL FIX (Feb 7, 2026): Previously all parsers were in one try/except,
         # meaning if odds parsing failed, speed/form/class were ALL skipped.
         # Now each parser is independently wrapped so failures don't cascade.
-        
+
         try:
             horse.style_confidence = 1.0 if style != "NA" else 0.3
         except Exception:
@@ -664,7 +707,9 @@ class GoldStandardBRISNETParser:
 
         # ODDS
         try:
-            ml_odds, ml_decimal, odds_conf = self._parse_odds_with_confidence(block, full_pp, name)
+            ml_odds, ml_decimal, odds_conf = self._parse_odds_with_confidence(
+                block, full_pp, name
+            )
             horse.ml_odds = ml_odds
             horse.ml_odds_decimal = ml_decimal
             horse.odds_confidence = odds_conf
@@ -684,7 +729,9 @@ class GoldStandardBRISNETParser:
 
         # TRAINER
         try:
-            trainer, trainer_pct, trainer_conf = self._parse_trainer_with_confidence(block)
+            trainer, trainer_pct, trainer_conf = self._parse_trainer_with_confidence(
+                block
+            )
             horse.trainer = trainer
             horse.trainer_win_pct = trainer_pct
             horse.trainer_confidence = trainer_conf
@@ -694,7 +741,9 @@ class GoldStandardBRISNETParser:
 
         # SPEED FIGURES
         try:
-            figs, avg_top2, peak, last, speed_conf = self._parse_speed_figures_with_confidence(block)
+            figs, avg_top2, peak, last, speed_conf = (
+                self._parse_speed_figures_with_confidence(block)
+            )
             horse.speed_figures = figs
             horse.avg_top2 = avg_top2
             horse.peak_fig = peak
@@ -706,7 +755,9 @@ class GoldStandardBRISNETParser:
 
         # FORM CYCLE
         try:
-            days_since, last_date, finishes, form_conf = self._parse_form_cycle_with_confidence(block)
+            days_since, last_date, finishes, form_conf = (
+                self._parse_form_cycle_with_confidence(block)
+            )
             horse.days_since_last = days_since
             horse.last_race_date = last_date
             horse.recent_finishes = finishes
@@ -717,7 +768,9 @@ class GoldStandardBRISNETParser:
 
         # CLASS
         try:
-            purses, types, avg_purse, class_conf = self._parse_class_with_confidence(block)
+            purses, types, avg_purse, class_conf = self._parse_class_with_confidence(
+                block
+            )
             horse.recent_purses = purses
             horse.race_types = types
             horse.avg_purse = avg_purse
@@ -729,12 +782,12 @@ class GoldStandardBRISNETParser:
         # PEDIGREE
         try:
             pedigree_data, ped_conf = self._parse_pedigree_with_confidence(block)
-            horse.sire = pedigree_data.get('sire', 'Unknown')
-            horse.dam = pedigree_data.get('dam', 'Unknown')
-            horse.sire_spi = pedigree_data.get('sire_spi')
-            horse.damsire_spi = pedigree_data.get('damsire_spi')
-            horse.sire_awd = pedigree_data.get('sire_awd')
-            horse.dam_dpi = pedigree_data.get('dam_dpi')
+            horse.sire = pedigree_data.get("sire", "Unknown")
+            horse.dam = pedigree_data.get("dam", "Unknown")
+            horse.sire_spi = pedigree_data.get("sire_spi")
+            horse.damsire_spi = pedigree_data.get("damsire_spi")
+            horse.sire_awd = pedigree_data.get("sire_awd")
+            horse.dam_dpi = pedigree_data.get("dam_dpi")
             horse.pedigree_confidence = ped_conf
         except Exception as e:
             horse.errors.append(f"Pedigree parsing error: {str(e)}")
@@ -752,7 +805,9 @@ class GoldStandardBRISNETParser:
 
         # WORKOUTS
         try:
-            work_count, days_since_work, last_speed, work_conf = self._parse_workouts_with_confidence(block)
+            work_count, days_since_work, last_speed, work_conf = (
+                self._parse_workouts_with_confidence(block)
+            )
             horse.workout_count = work_count
             horse.days_since_work = days_since_work
             horse.last_work_speed = last_speed
@@ -760,28 +815,28 @@ class GoldStandardBRISNETParser:
         except Exception as e:
             horse.errors.append(f"Workout parsing error: {str(e)}")
             logger.warning(f"Workout parsing failed for {name}: {e}")
-        
+
         # EQUIPMENT CHANGES & MEDICATION
         try:
             equipment_info = self._parse_equipment_changes(block)
-            horse.equipment_change = equipment_info['change']
-            horse.first_lasix = equipment_info['first_lasix']
+            horse.equipment_change = equipment_info["change"]
+            horse.first_lasix = equipment_info["first_lasix"]
         except Exception as e:
             horse.errors.append(f"Equipment parsing error: {str(e)}")
             logger.warning(f"Equipment parsing failed for {name}: {e}")
-        
+
         # TRIP COMMENTS
         try:
             horse.trip_comments = self._parse_trip_comments(block)
         except Exception as e:
             horse.errors.append(f"Trip comments parsing error: {str(e)}")
-        
+
         # SURFACE STATISTICS
         try:
             horse.surface_stats = self._parse_surface_stats(block)
         except Exception as e:
             horse.errors.append(f"Surface stats parsing error: {str(e)}")
-        
+
         # EARLY SPEED PERCENTAGE
         try:
             horse.early_speed_pct = self._calculate_early_speed_pct(horse)
@@ -795,7 +850,7 @@ class GoldStandardBRISNETParser:
             horse.class_rating_individual = cr
         except Exception as e:
             horse.errors.append(f"RR/CR parsing error: {str(e)}")
-        
+
         # RACE SHAPES (pace scenario vs par)
         try:
             shape_1c, shape_2c = self._parse_race_shapes(block)
@@ -803,13 +858,13 @@ class GoldStandardBRISNETParser:
             horse.race_shape_2c = shape_2c
         except Exception as e:
             horse.errors.append(f"Race shapes parsing error: {str(e)}")
-        
+
         # RELIABILITY INDICATOR
         try:
             horse.reliability_indicator = self._parse_reliability_indicator(block)
         except Exception as e:
             horse.errors.append(f"Reliability parsing error: {str(e)}")
-        
+
         # ACL and R1/R2/R3
         try:
             acl, r1, r2, r3 = self._parse_acl_and_recent_ratings(block)
@@ -819,7 +874,7 @@ class GoldStandardBRISNETParser:
             horse.r3 = r3
         except Exception as e:
             horse.errors.append(f"ACL parsing error: {str(e)}")
-        
+
         # BACK SPEED & BEST PACE
         try:
             back_speed, bp_e1, bp_e2, bp_lp = self._parse_back_speed_best_pace(block)
@@ -829,16 +884,18 @@ class GoldStandardBRISNETParser:
             horse.best_pace_lp = bp_lp
         except Exception as e:
             horse.errors.append(f"Back speed parsing error: {str(e)}")
-        
+
         # TRACK BIAS IMPACT VALUES
         try:
-            run_style_iv, post_iv, markers = self._parse_track_bias_impact_values(block, horse.pace_style, horse.post)
+            run_style_iv, post_iv, markers = self._parse_track_bias_impact_values(
+                block, horse.pace_style, horse.post
+            )
             horse.track_bias_run_style_iv = run_style_iv
             horse.track_bias_post_iv = post_iv
             horse.track_bias_markers = markers
         except Exception as e:
             horse.errors.append(f"Track bias IV parsing error: {str(e)}")
-        
+
         # PEDIGREE RATINGS
         try:
             ped_fast, ped_off, ped_dist, ped_turf = self._parse_pedigree_ratings(block)
@@ -877,7 +934,7 @@ class GoldStandardBRISNETParser:
 
     def _calculate_style_strength(self, style: str, quirin: float) -> str:
         """Convert Quirin points to strength category"""
-        if style in ('E', 'E/P'):
+        if style in ("E", "E/P"):
             if quirin >= 7:
                 return "Strong"
             elif quirin >= 4:
@@ -886,7 +943,7 @@ class GoldStandardBRISNETParser:
                 return "Slight"
             else:
                 return "Weak"
-        elif style == 'P':
+        elif style == "P":
             if quirin >= 5:
                 return "Solid"
             else:
@@ -897,11 +954,8 @@ class GoldStandardBRISNETParser:
     # ============ ODDS PARSING (WITH CONFIDENCE) ============
 
     def _parse_odds_with_confidence(
-        self,
-        block: str,
-        full_pp: str,
-        horse_name: str
-    ) -> Tuple[Optional[str], Optional[float], float]:
+        self, block: str, full_pp: str, horse_name: str
+    ) -> tuple[str | None, float | None, float]:
         """
         Parse ML odds with multiple strategies.
         Returns: (odds_string, decimal_odds, confidence)
@@ -913,11 +967,24 @@ class GoldStandardBRISNETParser:
             match = pattern.search(block[:150])  # Check first 150 chars
             if match:
                 # Get first capturing group (or full match if no groups)
-                odds_str = (match.group(1) if match.lastindex and match.lastindex >= 1 else match.group(0)).strip()
+                odds_str = (
+                    match.group(1)
+                    if match.lastindex and match.lastindex >= 1
+                    else match.group(0)
+                ).strip()
 
                 # Check if scratched
-                if pattern_name == 'scratched' or odds_str.upper() in ['SCR', 'WDN', 'SCRATCH', 'WITHDRAWN']:
-                    return odds_str.upper(), None, 0.9  # Scratched: no decimal, but high confidence we found it
+                if pattern_name == "scratched" or odds_str.upper() in [
+                    "SCR",
+                    "WDN",
+                    "SCRATCH",
+                    "WITHDRAWN",
+                ]:
+                    return (
+                        odds_str.upper(),
+                        None,
+                        0.9,
+                    )  # Scratched: no decimal, but high confidence we found it
 
                 decimal = self._odds_to_decimal(odds_str)
                 if decimal:
@@ -925,8 +992,7 @@ class GoldStandardBRISNETParser:
 
         # Strategy 2: Look for "M/L" or "Morning Line" label
         ml_match = re.search(
-            r'(?mi)(?:M/?L|Morning\s*Line)[:\s]*(\d+[/\-]\d+|\d+\.?\d*)',
-            block[:250]
+            r"(?mi)(?:M/?L|Morning\s*Line)[:\s]*(\d+[/\-]\d+|\d+\.?\d*)", block[:250]
         )
         if ml_match:
             odds_str = ml_match.group(1)
@@ -936,8 +1002,7 @@ class GoldStandardBRISNETParser:
 
         # Strategy 3: Search full PP for this horse's odds (less reliable)
         horse_section_match = re.search(
-            rf'(?mi){re.escape(horse_name)}.*?(\d+[/\-]\d+|\d+\.?\d*)',
-            full_pp[:1000]
+            rf"(?mi){re.escape(horse_name)}.*?(\d+[/\-]\d+|\d+\.?\d*)", full_pp[:1000]
         )
         if horse_section_match:
             odds_str = horse_section_match.group(1)
@@ -946,7 +1011,7 @@ class GoldStandardBRISNETParser:
                 return odds_str, decimal, 0.7
 
         # Strategy 4: Look for any reasonable odds-like pattern
-        any_odds = re.search(r'(\d{1,2}[/\-]\d{1,2})', block[:300])
+        any_odds = re.search(r"(\d{1,2}[/\-]\d{1,2})", block[:300])
         if any_odds:
             odds_str = any_odds.group(1)
             decimal = self._odds_to_decimal(odds_str)
@@ -956,7 +1021,7 @@ class GoldStandardBRISNETParser:
         # No odds found
         return None, None, 0.0
 
-    def _odds_to_decimal(self, odds_str: str) -> Optional[float]:
+    def _odds_to_decimal(self, odds_str: str) -> float | None:
         """
         ROBUST odds conversion with edge case handling.
 
@@ -974,13 +1039,13 @@ class GoldStandardBRISNETParser:
         odds_str = str(odds_str).strip().upper()
 
         # Handle scratches/withdrawals
-        if odds_str in ['SCR', 'WDN', 'SCRATCH', 'WITHDRAWN', 'N/A', '-', '']:
+        if odds_str in ["SCR", "WDN", "SCRATCH", "WITHDRAWN", "N/A", "-", ""]:
             return None
 
         try:
             # Fractional: 5/2 → (5/2)+1 = 3.5
-            if '/' in odds_str:
-                parts = odds_str.split('/')
+            if "/" in odds_str:
+                parts = odds_str.split("/")
                 num = float(parts[0])
                 denom = float(parts[1])
                 if denom == 0:
@@ -988,8 +1053,8 @@ class GoldStandardBRISNETParser:
                 decimal = (num / denom) + 1.0
 
             # Range: 3-1 → 3+1 = 4.0
-            elif '-' in odds_str and not odds_str.startswith('-'):
-                parts = odds_str.split('-')
+            elif "-" in odds_str and not odds_str.startswith("-"):
+                parts = odds_str.split("-")
                 num = float(parts[0])
                 decimal = num + 1.0
 
@@ -997,7 +1062,7 @@ class GoldStandardBRISNETParser:
             else:
                 decimal = float(odds_str)
                 # If single digit (e.g., "5"), assume it's 5/1
-                if decimal < 10 and '.' not in odds_str:
+                if decimal < 10 and "." not in odds_str:
                     decimal = decimal + 1.0
 
             # Validation: Cap extremes
@@ -1013,7 +1078,7 @@ class GoldStandardBRISNETParser:
 
     # ============ JOCKEY PARSING ============
 
-    def _parse_jockey_with_confidence(self, block: str) -> Tuple[str, float, float]:
+    def _parse_jockey_with_confidence(self, block: str) -> tuple[str, float, float]:
         """
         Parse jockey name and win %.
         Returns: (name, win_pct, confidence)
@@ -1028,7 +1093,7 @@ class GoldStandardBRISNETParser:
                     win_pct = 0.0
 
                 # Clean name
-                name = re.sub(r'\s+', ' ', name).title()
+                name = re.sub(r"\s+", " ", name).title()
 
                 return name, win_pct, 1.0
 
@@ -1036,7 +1101,7 @@ class GoldStandardBRISNETParser:
 
     # ============ TRAINER PARSING ============
 
-    def _parse_trainer_with_confidence(self, block: str) -> Tuple[str, float, float]:
+    def _parse_trainer_with_confidence(self, block: str) -> tuple[str, float, float]:
         """
         Parse trainer name and win %.
         Returns: (name, win_pct, confidence)
@@ -1051,7 +1116,7 @@ class GoldStandardBRISNETParser:
                     win_pct = 0.0
 
                 # Clean name
-                name = re.sub(r'\s+', ' ', name).title()
+                name = re.sub(r"\s+", " ", name).title()
 
                 return name, win_pct, 1.0
 
@@ -1059,7 +1124,9 @@ class GoldStandardBRISNETParser:
 
     # ============ SPEED FIGURES ============
 
-    def _parse_speed_figures_with_confidence(self, block: str) -> Tuple[List[int], float, int, int, float]:
+    def _parse_speed_figures_with_confidence(
+        self, block: str
+    ) -> tuple[list[int], float, int, int, float]:
         """
         Extract speed figures from race lines.
         Returns: (figures_list, avg_top2, peak, last, confidence)
@@ -1078,7 +1145,15 @@ class GoldStandardBRISNETParser:
                 except Exception:
                     continue
 
-        # Remove duplicates and sort descending
+        # CRITICAL FIX (Feb 10, 2026): Preserve insertion order for last_fig
+        # before dedup/sort. The FIRST figure extracted is from the MOST RECENT race.
+        # Previously, sorting descending made last_fig = peak_fig (highest career),
+        # which is wrong — last_fig should be the most recent race figure.
+        last_fig_by_recency = (
+            figures[0] if figures else 0
+        )  # First extracted = most recent race
+
+        # Remove duplicates and sort descending for avg/peak calculations
         figures = sorted(list(set(figures)), reverse=True)
 
         if not figures:
@@ -1086,8 +1161,12 @@ class GoldStandardBRISNETParser:
 
         # Calculate metrics
         peak = max(figures)
-        last = figures[0] if figures else 0
-        avg_top2 = np.mean(figures[:2]) if len(figures) >= 2 else (figures[0] if figures else 0.0)
+        last = last_fig_by_recency  # Use recency-ordered figure, NOT sorted[0]
+        avg_top2 = (
+            np.mean(figures[:2])
+            if len(figures) >= 2
+            else (figures[0] if figures else 0.0)
+        )
 
         # Confidence based on count
         confidence = min(1.0, len(figures) / 5.0)  # Full confidence at 5+ figures
@@ -1096,7 +1175,9 @@ class GoldStandardBRISNETParser:
 
     # ============ FORM CYCLE ============
 
-    def _parse_form_cycle_with_confidence(self, block: str) -> Tuple[Optional[int], Optional[str], List[int], float]:
+    def _parse_form_cycle_with_confidence(
+        self, block: str
+    ) -> tuple[int | None, str | None, list[int], float]:
         """
         Parse days since last race and recent finishes.
         CRITICAL FIX: Updated to match actual BRISNET format for finish positions.
@@ -1108,24 +1189,24 @@ class GoldStandardBRISNETParser:
         # Updated pattern to match actual BRISNET format
         # Example: "11Jan26SAª 6½ ft :21ª :44¨1:09« 1:16© ¡ ¨¨¨ Clm25000n2L ¨¨© 86 88/ 83 +1 0 81 1 7 7ª‚ 4© 4© 2³"
         # The finish position appears in the FIN column or at end of race line
-        lines = block.split('\n')
-        
+        lines = block.split("\n")
+
         for line in lines:
             # Look for date pattern at start of line (indicates race line)
-            date_match = re.search(r'(\d{2}[A-Za-z]{3}\d{2})', line)
+            date_match = re.search(r"(\d{2}[A-Za-z]{3}\d{2})", line)
             if date_match:
                 date_str = date_match.group(1)
-                
+
                 # Parse date
                 try:
                     date_obj = datetime.strptime(date_str, "%d%b%y")
                     dates.append(date_obj)
                 except Exception:
                     pass
-                
+
                 # Extract finish position - multiple patterns
                 # Pattern 1: FIN column with position (most reliable)
-                finish_match = re.search(r'FIN\s+(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]', line)
+                finish_match = re.search(r"FIN\s+(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]", line)
                 if finish_match:
                     try:
                         finish = int(finish_match.group(1))
@@ -1134,10 +1215,12 @@ class GoldStandardBRISNETParser:
                             continue
                     except Exception:
                         pass
-                
+
                 # Pattern 2: Look for finish near end of line after jockey/odds
                 # Matches patterns like "2³", "4©", "5«‚", "7¨©"
-                finish_match = re.search(r'\s(\d{1,2})[ƒ®«ª³©¨°¬²‚±]+\s+\w+\s+[\d.]+\s*$', line)
+                finish_match = re.search(
+                    r"\s(\d{1,2})[ƒ®«ª³©¨°¬²‚±]+\s+\w+\s+[\d.]+\s*$", line
+                )
                 if finish_match:
                     try:
                         finish = int(finish_match.group(1))
@@ -1146,9 +1229,11 @@ class GoldStandardBRISNETParser:
                             continue
                     except Exception:
                         pass
-                
+
                 # Pattern 3: Simple digit near end (last resort)
-                finish_match = re.search(r'\s(\d{1,2})(?:st|nd|rd|th|[ƒ®«ª³©¨°¬²‚±])\s+\w+\s+', line)
+                finish_match = re.search(
+                    r"\s(\d{1,2})(?:st|nd|rd|th|[ƒ®«ª³©¨°¬²‚±])\s+\w+\s+", line
+                )
                 if finish_match:
                     try:
                         finish = int(finish_match.group(1))
@@ -1172,11 +1257,11 @@ class GoldStandardBRISNETParser:
 
     # ============ CLASS DATA ============
 
-    def _infer_purse_from_race_type(self, race_type: str) -> Optional[int]:
+    def _infer_purse_from_race_type(self, race_type: str) -> int | None:
         """
         CRITICAL: Infer purse from race type names like 'Clm25000n2L' or 'MC50000'.
         BRISNET embeds purse values in race type strings.
-        
+
         Examples:
         - 'Clm25000n2L' → $25,000
         - 'MC50000' → $50,000
@@ -1185,31 +1270,39 @@ class GoldStandardBRISNETParser:
         """
         if not race_type:
             return None
-        
+
         # Pattern 1: Direct numbers (Clm25000, MC50000, Alw28000)
-        match = re.search(r'(\d{4,6})', race_type)
+        match = re.search(r"(\d{4,6})", race_type)
         if match:
             return int(match.group(1))
-        
+
         # Pattern 2: With 'k' suffix (OC20k, Alw50k)
-        match = re.search(r'(\d+)k', race_type, re.IGNORECASE)
+        match = re.search(r"(\d+)k", race_type, re.IGNORECASE)
         if match:
             return int(match.group(1)) * 1000
-        
+
         # Pattern 3: Common defaults by type
         race_lower = race_type.lower()
-        if 'maiden' in race_lower or 'mdn' in race_lower:
+        if "maiden" in race_lower or "mdn" in race_lower:
             return 50000  # Typical maiden special weight
-        elif 'claiming' in race_lower or 'clm' in race_lower or 'mc' in race_lower:
+        elif "claiming" in race_lower or "clm" in race_lower or "mc" in race_lower:
             return 25000  # Typical claiming level
-        elif 'allowance' in race_lower or 'alw' in race_lower:
+        elif "allowance" in race_lower or "alw" in race_lower:
             return 50000  # Typical allowance
-        elif 'stake' in race_lower or 'stk' in race_lower or 'g1' in race_lower or 'g2' in race_lower or 'g3' in race_lower:
+        elif (
+            "stake" in race_lower
+            or "stk" in race_lower
+            or "g1" in race_lower
+            or "g2" in race_lower
+            or "g3" in race_lower
+        ):
             return 100000  # Stakes minimum
-        
+
         return None
 
-    def _parse_class_with_confidence(self, block: str) -> Tuple[List[int], List[str], float, float]:
+    def _parse_class_with_confidence(
+        self, block: str
+    ) -> tuple[list[int], list[str], float, float]:
         """
         Parse purses and race types.
         CRITICAL FIX: Infers purses from race type names since BRISNET doesn't show explicit purse in past performances.
@@ -1221,18 +1314,18 @@ class GoldStandardBRISNETParser:
         # Updated pattern to match actual BRISNET format
         # Example: "11Jan26SAª 6½ ft :21ª :44¨1:09« 1:16© ¡ ¨¨¨ Clm25000n2L ¨¨©"
         race_line_pattern = re.compile(
-            r'(\d{2}[A-Za-z]{3}\d{2})\w+\s+[\d½]+[f]?\s+.*?'
-            r'([A-Z][a-z]{2,}\d+[a-zA-Z0-9\-]*|MC\d+|OC\d+|Alw\d+|Stk|G[123])'
+            r"(\d{2}[A-Za-z]{3}\d{2})\w+\s+[\d½]+[f]?\s+.*?"
+            r"([A-Z][a-z]{2,}\d+[a-zA-Z0-9\-]*|MC\d+|OC\d+|Alw\d+|Stk|G[123])"
         )
-        
+
         race_matches = race_line_pattern.findall(block)
 
         for match in race_matches:
             race_type = match[1] if len(match) > 1 else match[0]
-            
+
             if race_type:
                 race_types.append(race_type)
-                
+
                 # CRITICAL: Infer purse from race type name
                 inferred_purse = self._infer_purse_from_race_type(race_type)
                 if inferred_purse and inferred_purse > 0:
@@ -1245,7 +1338,7 @@ class GoldStandardBRISNETParser:
 
     # ============ PEDIGREE ============
 
-    def _parse_pedigree_with_confidence(self, block: str) -> Tuple[Dict, float]:
+    def _parse_pedigree_with_confidence(self, block: str) -> tuple[dict, float]:
         """
         Parse sire/dam data.
         Returns: (pedigree_dict, confidence)
@@ -1254,41 +1347,41 @@ class GoldStandardBRISNETParser:
         confidence = 0.0
 
         # Sire stats
-        sire_match = self.PEDIGREE_PATTERNS['sire_stats'].search(block)
+        sire_match = self.PEDIGREE_PATTERNS["sire_stats"].search(block)
         if sire_match:
             try:
-                ped_data['sire_awd'] = float(sire_match.group(1))
-                ped_data['sire_spi'] = float(sire_match.group(4))
+                ped_data["sire_awd"] = float(sire_match.group(1))
+                ped_data["sire_spi"] = float(sire_match.group(4))
                 confidence += 0.4
             except Exception:
                 pass
 
         # Sire name
-        sire_name_match = self.PEDIGREE_PATTERNS['sire_name'].search(block)
+        sire_name_match = self.PEDIGREE_PATTERNS["sire_name"].search(block)
         if sire_name_match:
-            ped_data['sire'] = sire_name_match.group(1).strip()
+            ped_data["sire"] = sire_name_match.group(1).strip()
             confidence += 0.2
 
         # Dam stats
-        dam_match = self.PEDIGREE_PATTERNS['dam_stats'].search(block)
+        dam_match = self.PEDIGREE_PATTERNS["dam_stats"].search(block)
         if dam_match:
             try:
-                ped_data['dam_dpi'] = float(dam_match.group(1))
+                ped_data["dam_dpi"] = float(dam_match.group(1))
                 confidence += 0.2
             except Exception:
                 pass
 
         # Dam name
-        dam_name_match = self.PEDIGREE_PATTERNS['dam_name'].search(block)
+        dam_name_match = self.PEDIGREE_PATTERNS["dam_name"].search(block)
         if dam_name_match:
-            ped_data['dam'] = dam_name_match.group(1).strip()
+            ped_data["dam"] = dam_name_match.group(1).strip()
             confidence += 0.2
 
         return ped_data, min(confidence, 1.0)
 
     # ============ ANGLES ============
 
-    def _parse_angles_with_confidence(self, block: str) -> Tuple[List[Dict], float]:
+    def _parse_angles_with_confidence(self, block: str) -> tuple[list[dict], float]:
         """
         Parse handicapping angles.
         Returns: (angles_list, confidence)
@@ -1303,13 +1396,15 @@ class GoldStandardBRISNETParser:
                 itm_pct = float(match.group(5)) / 100.0
                 roi = float(match.group(6))
 
-                angles.append({
-                    'category': angle_type,
-                    'starts': starts,
-                    'win_pct': win_pct,
-                    'itm_pct': itm_pct,
-                    'roi': roi
-                })
+                angles.append(
+                    {
+                        "category": angle_type,
+                        "starts": starts,
+                        "win_pct": win_pct,
+                        "itm_pct": itm_pct,
+                        "roi": roi,
+                    }
+                )
             except Exception:
                 continue
 
@@ -1318,7 +1413,9 @@ class GoldStandardBRISNETParser:
 
     # ============ WORKOUTS ============
 
-    def _parse_workouts_with_confidence(self, block: str) -> Tuple[int, Optional[int], Optional[str], float]:
+    def _parse_workouts_with_confidence(
+        self, block: str
+    ) -> tuple[int, int | None, str | None, float]:
         """
         Parse workout data.
         Returns: (count, days_since_work, last_speed, confidence)
@@ -1343,69 +1440,69 @@ class GoldStandardBRISNETParser:
 
         confidence = 0.8 if count > 0 else 0.2
         return count, days_since, last_speed, confidence
-    
+
     # ============ EQUIPMENT CHANGES ============
-    
-    def _parse_equipment_changes(self, block: str) -> Dict[str, Any]:
+
+    def _parse_equipment_changes(self, block: str) -> dict[str, Any]:
         """
         Parse equipment changes (blinkers, tongue tie, etc.) and medication (Lasix).
         Returns dict with 'change' (str) and 'first_lasix' (bool)
         """
-        result = {'change': None, 'first_lasix': False}
-        
+        result = {"change": None, "first_lasix": False}
+
         # Blinkers on/off patterns
-        if re.search(r'Blinkers?\s+On', block, re.IGNORECASE):
-            result['change'] = 'Blinkers On'
-        elif re.search(r'Blinkers?\s+Off', block, re.IGNORECASE):
-            result['change'] = 'Blinkers Off'
-        
+        if re.search(r"Blinkers?\s+On", block, re.IGNORECASE):
+            result["change"] = "Blinkers On"
+        elif re.search(r"Blinkers?\s+Off", block, re.IGNORECASE):
+            result["change"] = "Blinkers Off"
+
         # First-time Lasix
-        if re.search(r'First.*?Lasix|Lasix.*?First|1st.*?L', block, re.IGNORECASE):
-            result['first_lasix'] = True
-            if not result['change']:
-                result['change'] = 'First Lasix'
-        
+        if re.search(r"First.*?Lasix|Lasix.*?First|1st.*?L", block, re.IGNORECASE):
+            result["first_lasix"] = True
+            if not result["change"]:
+                result["change"] = "First Lasix"
+
         return result
-    
+
     # ============ TRIP COMMENTS ============
-    
-    def _parse_trip_comments(self, block: str) -> List[str]:
+
+    def _parse_trip_comments(self, block: str) -> list[str]:
         """
         Extract trip/running line comments from past performances.
         Returns list of comments (most recent first, up to 5).
         """
         comments = []
-        
+
         # Look for common trip comment patterns
         # Format: "Bumped start, rallied late" or "Wide trip, no excuse"
         comment_patterns = [
-            r'(?:Bumped?|Check|Steady|Blocked|Wide|Rail|Closed|Rallied|Weakened|Stopped?)[^\.]{10,80}',
-            r'(?:Bad\s+start|Good\s+trip|Troubled?|Clear\s+trip)[^\.]{10,80}',
+            r"(?:Bumped?|Check|Steady|Blocked|Wide|Rail|Closed|Rallied|Weakened|Stopped?)[^\.]{10,80}",
+            r"(?:Bad\s+start|Good\s+trip|Troubled?|Clear\s+trip)[^\.]{10,80}",
         ]
-        
+
         for pattern in comment_patterns:
             matches = re.findall(pattern, block, re.IGNORECASE)
             comments.extend(matches[:5])
-        
+
         return comments[:5]  # Most recent 5
-    
+
     # ============ SURFACE STATISTICS ============
-    
-    def _parse_surface_stats(self, block: str) -> Dict[str, Dict[str, float]]:
+
+    def _parse_surface_stats(self, block: str) -> dict[str, dict[str, float]]:
         """
         Extract surface-specific statistics (win %, ITM %, avg figs).
         Returns dict like: {"Fst": {"win_pct": 25.0, "itm_pct": 60.0, "avg_fig": 85.0}, ...}
         """
         surface_stats = {}
-        
+
         # Look for surface stats section (common BRISNET format)
         # Example: "DIRT: 5-2-1-0 (40%) $1.80 avg Beyer: 88"
         surface_patterns = {
-            'Fst': r'(?:DIRT|Fast|Fst):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)',
-            'Trf': r'(?:TURF|Grass|Trf):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)',
-            'AW': r'(?:SYNTH|All\s*Weather|AW):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)',
+            "Fst": r"(?:DIRT|Fast|Fst):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)",
+            "Trf": r"(?:TURF|Grass|Trf):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)",
+            "AW": r"(?:SYNTH|All\s*Weather|AW):\s*(\d+)-(\d+)-(\d+)-(\d+)\s*\((\d+)%\)",
         }
-        
+
         for surface_key, pattern in surface_patterns.items():
             match = re.search(pattern, block, re.IGNORECASE)
             if match:
@@ -1415,27 +1512,31 @@ class GoldStandardBRISNETParser:
                     shows = int(match.group(3))
                     starts = wins + places + shows + int(match.group(4))
                     win_pct = float(match.group(5))
-                    itm_pct = ((wins + places + shows) / starts * 100) if starts > 0 else 0.0
-                    
+                    itm_pct = (
+                        ((wins + places + shows) / starts * 100) if starts > 0 else 0.0
+                    )
+
                     # Try to find avg figure on same line
-                    line_context = block[max(0, match.start()-50):match.end()+100]
-                    fig_match = re.search(r'(?:Beyer|Fig|Speed)[:\s]+(\d+)', line_context)
+                    line_context = block[max(0, match.start() - 50) : match.end() + 100]
+                    fig_match = re.search(
+                        r"(?:Beyer|Fig|Speed)[:\s]+(\d+)", line_context
+                    )
                     avg_fig = float(fig_match.group(1)) if fig_match else 0.0
-                    
+
                     surface_stats[surface_key] = {
-                        'win_pct': win_pct,
-                        'itm_pct': itm_pct,
-                        'avg_fig': avg_fig,
-                        'starts': starts
+                        "win_pct": win_pct,
+                        "itm_pct": itm_pct,
+                        "avg_fig": avg_fig,
+                        "starts": starts,
                     }
                 except Exception:
                     pass
-        
+
         return surface_stats
-    
+
     # ============ EARLY SPEED PERCENTAGE ============
-    
-    def _calculate_early_speed_pct(self, horse: HorseData) -> Optional[float]:
+
+    def _calculate_early_speed_pct(self, horse: HorseData) -> float | None:
         """
         Calculate percentage of races where horse showed early speed (E or E/P behavior).
         Uses pace style and Quirin points as indicators.
@@ -1443,8 +1544,8 @@ class GoldStandardBRISNETParser:
         """
         # If we have comprehensive running line data, could parse that
         # For now, use style and Quirin as proxy
-        
-        if horse.pace_style == 'E':
+
+        if horse.pace_style == "E":
             # Pure speed horse
             if horse.quirin_points >= 7:
                 return 95.0  # Almost always on lead
@@ -1452,7 +1553,7 @@ class GoldStandardBRISNETParser:
                 return 80.0
             else:
                 return 65.0
-        elif horse.pace_style == 'E/P':
+        elif horse.pace_style == "E/P":
             # Press type
             if horse.quirin_points >= 6:
                 return 75.0
@@ -1460,10 +1561,10 @@ class GoldStandardBRISNETParser:
                 return 60.0
             else:
                 return 45.0
-        elif horse.pace_style == 'P':
+        elif horse.pace_style == "P":
             # Stalker/midpack
             return 35.0
-        elif horse.pace_style == 'S':
+        elif horse.pace_style == "S":
             # Closer
             return 10.0
         else:
@@ -1472,7 +1573,7 @@ class GoldStandardBRISNETParser:
 
     # ============ PRIME POWER ============
 
-    def _parse_prime_power(self, block: str) -> Tuple[Optional[float], Optional[int]]:
+    def _parse_prime_power(self, block: str) -> tuple[float | None, int | None]:
         """Parse BRISNET Prime Power rating and rank"""
         match = self.PRIME_POWER_PATTERN.search(block)
         if match:
@@ -1485,176 +1586,210 @@ class GoldStandardBRISNETParser:
         return None, None
 
     # ============ RACE RATING (RR) & CLASS RATING (CR) ============
-    
-    def _parse_rr_cr_from_running_lines(self, block: str) -> Tuple[Optional[int], Optional[int]]:
+
+    def _parse_rr_cr_from_running_lines(
+        self, block: str
+    ) -> tuple[int | None, int | None]:
         """
         Parse RR (Race Rating) and CR (Class Rating) from running lines.
-        
+
         BRISNET Encoding:
         - RR appears as ¨¨¬ followed by race type (e.g., "¨¨¬ OC50k/n1x-c")
         - CR appears as ¨¨® before E1 speed figure (e.g., "¨¨® 86 91/ 98")
-        
+
         Example line:
         27Sep25SA© 6f ft :22© :45 :57© 1:09© ¦ ¨¨¬ OC50k/n1x-c ¨¨® 86 91/ 98
                                             ^^^RR=113      ^^^CR=118
-        
+
         The special characters encode numeric values.
         Returns: (race_rating, class_rating_individual)
         """
         rr = None
         cr = None
-        
+
         # Look for RR pattern: special chars before race type
         # The ¨¨¬ pattern encodes RR value
-        rr_pattern = re.search(r'¨¨([¬­®¯°±²³´µ¶·¸¹º»])', block)
+        rr_pattern = re.search(r"¨¨([¬­®¯°±²³´µ¶·¸¹º»])", block)
         if rr_pattern:
             # Map special characters to values (¬=113, ­=114, etc.)
             char_map = {
-                '¬': 113, '­': 114, '®': 115, '¯': 116, '°': 117,
-                '±': 118, '²': 119, '³': 120, '´': 121, 'µ': 122,
-                '¶': 123, '·': 124, '¸': 125, '¹': 126, 'º': 127,
-                '»': 128, '¼': 129, '½': 130, '¾': 131, '¿': 132
+                "¬": 113,
+                "­": 114,
+                "®": 115,
+                "¯": 116,
+                "°": 117,
+                "±": 118,
+                "²": 119,
+                "³": 120,
+                "´": 121,
+                "µ": 122,
+                "¶": 123,
+                "·": 124,
+                "¸": 125,
+                "¹": 126,
+                "º": 127,
+                "»": 128,
+                "¼": 129,
+                "½": 130,
+                "¾": 131,
+                "¿": 132,
             }
             rr = char_map.get(rr_pattern.group(1))
-        
+
         # Alternative: Look for explicit RR value in format "RR 113" or "RR:113"
-        rr_explicit = re.search(r'RR[:\s]+(\d{2,3})', block, re.IGNORECASE)
+        rr_explicit = re.search(r"RR[:\s]+(\d{2,3})", block, re.IGNORECASE)
         if rr_explicit and not rr:
             try:
                 rr = int(rr_explicit.group(1))
             except Exception:
                 pass
-        
+
         # Look for CR pattern: special chars before speed figures
         # The ¨¨® pattern encodes CR value
-        cr_pattern = re.search(r'¨¨([¬­®¯°±²³´µ¶·¸¹º»])\s+\d{2,3}\s+\d{2,3}/', block)
+        cr_pattern = re.search(r"¨¨([¬­®¯°±²³´µ¶·¸¹º»])\s+\d{2,3}\s+\d{2,3}/", block)
         if cr_pattern:
             char_map = {
-                '¬': 113, '­': 114, '®': 115, '¯': 116, '°': 117,
-                '±': 118, '²': 119, '³': 120, '´': 121, 'µ': 122,
-                '¶': 123, '·': 124, '¸': 125, '¹': 126, 'º': 127,
-                '»': 128, '¼': 129, '½': 130, '¾': 131, '¿': 132
+                "¬": 113,
+                "­": 114,
+                "®": 115,
+                "¯": 116,
+                "°": 117,
+                "±": 118,
+                "²": 119,
+                "³": 120,
+                "´": 121,
+                "µ": 122,
+                "¶": 123,
+                "·": 124,
+                "¸": 125,
+                "¹": 126,
+                "º": 127,
+                "»": 128,
+                "¼": 129,
+                "½": 130,
+                "¾": 131,
+                "¿": 132,
             }
             cr = char_map.get(cr_pattern.group(1))
-        
+
         # Alternative: Look for explicit CR value
-        cr_explicit = re.search(r'CR[:\s]+(\d{2,3})', block, re.IGNORECASE)
+        cr_explicit = re.search(r"CR[:\s]+(\d{2,3})", block, re.IGNORECASE)
         if cr_explicit and not cr:
             try:
                 cr = int(cr_explicit.group(1))
             except Exception:
                 pass
-        
+
         return rr, cr
-    
+
     # ============ RACE SHAPES (Pace Scenario vs Par) ============
-    
-    def _parse_race_shapes(self, block: str) -> Tuple[Optional[float], Optional[float]]:
+
+    def _parse_race_shapes(self, block: str) -> tuple[float | None, float | None]:
         """
         Parse race shapes (1c, 2c) - beaten lengths vs par at calls.
-        
+
         Format in Race Summary:
         E1 E2/ LP 1c 2c SPD
         86 91/ 98 -5 -6 95
-        
+
         Positive values = slower than par (beaten by par)
         Negative values = faster than par (ahead of par)
-        
+
         Returns: (race_shape_1c, race_shape_2c)
         """
         shape_1c = None
         shape_2c = None
-        
+
         # Look for "1c" and "2c" column headers followed by values
         # Pattern: Look for lines with "1c" and "2c" labels, then extract numbers from next line
         race_shapes_section = re.search(
-            r'(?:E1|SPD).*?1c\s+2c.*?\n.*?(-?\d+)\s+(-?\d+)',
+            r"(?:E1|SPD).*?1c\s+2c.*?\n.*?(-?\d+)\s+(-?\d+)",
             block,
-            re.IGNORECASE | re.DOTALL
+            re.IGNORECASE | re.DOTALL,
         )
-        
+
         if race_shapes_section:
             try:
                 shape_1c = float(race_shapes_section.group(1))
                 shape_2c = float(race_shapes_section.group(2))
             except Exception:
                 pass
-        
+
         # Alternative pattern: Direct format like "1c -5 2c -6"
-        alt_pattern = re.search(r'1c\s+(-?\d+)\s+2c\s+(-?\d+)', block, re.IGNORECASE)
+        alt_pattern = re.search(r"1c\s+(-?\d+)\s+2c\s+(-?\d+)", block, re.IGNORECASE)
         if alt_pattern and (shape_1c is None or shape_2c is None):
             try:
                 shape_1c = float(alt_pattern.group(1))
                 shape_2c = float(alt_pattern.group(2))
             except Exception:
                 pass
-        
+
         return shape_1c, shape_2c
-    
+
     # ============ RELIABILITY INDICATORS ============
-    
-    def _parse_reliability_indicator(self, block: str) -> Optional[str]:
+
+    def _parse_reliability_indicator(self, block: str) -> str | None:
         """
         Parse reliability indicators from race summary ratings.
-        
+
         Indicators:
         - "*" or "*91*" = 2+ races in last 90 days (RELIABLE)
         - "." or "95." = Earned at today's distance
         - "()" or "(91)" = Race >90 days ago (LESS RELIABLE)
-        
+
         Priority: asterisk > dot > parentheses
         Returns: "asterisk", "dot", "parentheses", or None
         """
         # Look in race summary section for these patterns
         # Check for asterisked ratings (highest reliability)
-        if re.search(r'\*\d{2,3}\*|\*\s*\d{2,3}', block):
+        if re.search(r"\*\d{2,3}\*|\*\s*\d{2,3}", block):
             return "asterisk"
-        
+
         # Check for dotted ratings (today's distance)
-        if re.search(r'\d{2,3}\.', block):
+        if re.search(r"\d{2,3}\.", block):
             return "dot"
-        
+
         # Check for parenthesized ratings (stale data)
-        if re.search(r'\(\d{2,3}\)', block):
+        if re.search(r"\(\d{2,3}\)", block):
             return "parentheses"
-        
+
         return None
-    
+
     # ============ ACL and R1/R2/R3 ============
-    
-    def _parse_acl_and_recent_ratings(self, block: str) -> Tuple[Optional[float], Optional[int], Optional[int], Optional[int]]:
+
+    def _parse_acl_and_recent_ratings(
+        self, block: str
+    ) -> tuple[float | None, int | None, int | None, int | None]:
         """
         Parse ACL (Average Competitive Level) and R1/R2/R3 (last 3 race ratings).
-        
+
         Format in Race Summary:
         ACL: 115.7
         R1 R2 R3
         115 115 116
-        
+
         ACL = Average level when in-the-money (ITM)
         R1/R2/R3 = Individual race ratings for last 3 starts
-        
+
         Returns: (acl, r1, r2, r3)
         """
         acl = None
         r1 = None
         r2 = None
         r3 = None
-        
+
         # Parse ACL
-        acl_match = re.search(r'ACL[:\s]+(\d+\.?\d*)', block, re.IGNORECASE)
+        acl_match = re.search(r"ACL[:\s]+(\d+\.?\d*)", block, re.IGNORECASE)
         if acl_match:
             try:
                 acl = float(acl_match.group(1))
             except Exception:
                 pass
-        
+
         # Parse R1/R2/R3
         # Look for "R1 R2 R3" header followed by values
         r123_match = re.search(
-            r'R1\s+R2\s+R3\s+(\d{2,3})\s+(\d{2,3})\s+(\d{2,3})',
-            block,
-            re.IGNORECASE
+            r"R1\s+R2\s+R3\s+(\d{2,3})\s+(\d{2,3})\s+(\d{2,3})", block, re.IGNORECASE
         )
         if r123_match:
             try:
@@ -1663,42 +1798,44 @@ class GoldStandardBRISNETParser:
                 r3 = int(r123_match.group(3))
             except Exception:
                 pass
-        
+
         return acl, r1, r2, r3
-    
+
     # ============ BACK SPEED & BEST PACE ============
-    
-    def _parse_back_speed_best_pace(self, block: str) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+
+    def _parse_back_speed_best_pace(
+        self, block: str
+    ) -> tuple[int | None, int | None, int | None, int | None]:
         """
         Parse Back Speed and Best Pace figures from race summary.
-        
+
         Back Speed = Best speed at today's distance/surface in last year
         Best Pace = Peak E1/E2/LP at today's distance/surface
-        
+
         Format:
         Back Speed: 95
         Best Pace: E1 89 E2 95 LP 98
-        
+
         Returns: (back_speed, best_pace_e1, best_pace_e2, best_pace_lp)
         """
         back_speed = None
         best_pace_e1 = None
         best_pace_e2 = None
         best_pace_lp = None
-        
+
         # Parse Back Speed
-        bs_match = re.search(r'Back\s+Speed[:\s]+(\d{2,3})', block, re.IGNORECASE)
+        bs_match = re.search(r"Back\s+Speed[:\s]+(\d{2,3})", block, re.IGNORECASE)
         if bs_match:
             try:
                 back_speed = int(bs_match.group(1))
             except Exception:
                 pass
-        
+
         # Parse Best Pace components
         bp_match = re.search(
-            r'Best\s+Pace[:\s]+E1[:\s]+(\d{2,3})\s+E2[:\s]+(\d{2,3})\s+LP[:\s]+(\d{2,3})',
+            r"Best\s+Pace[:\s]+E1[:\s]+(\d{2,3})\s+E2[:\s]+(\d{2,3})\s+LP[:\s]+(\d{2,3})",
             block,
-            re.IGNORECASE
+            re.IGNORECASE,
         )
         if bp_match:
             try:
@@ -1707,9 +1844,11 @@ class GoldStandardBRISNETParser:
                 best_pace_lp = int(bp_match.group(3))
             except Exception:
                 pass
-        
+
         # Alternative shorter format: "BP: 89 95 98"
-        alt_bp_match = re.search(r'BP[:\s]+(\d{2,3})\s+(\d{2,3})\s+(\d{2,3})', block, re.IGNORECASE)
+        alt_bp_match = re.search(
+            r"BP[:\s]+(\d{2,3})\s+(\d{2,3})\s+(\d{2,3})", block, re.IGNORECASE
+        )
         if alt_bp_match and (best_pace_e1 is None):
             try:
                 best_pace_e1 = int(alt_bp_match.group(1))
@@ -1717,35 +1856,37 @@ class GoldStandardBRISNETParser:
                 best_pace_lp = int(alt_bp_match.group(3))
             except Exception:
                 pass
-        
+
         return back_speed, best_pace_e1, best_pace_e2, best_pace_lp
-    
+
     # ============ TRACK BIAS IMPACT VALUES ============
-    
-    def _parse_track_bias_impact_values(self, block: str, pace_style: str, post: str) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+
+    def _parse_track_bias_impact_values(
+        self, block: str, pace_style: str, post: str
+    ) -> tuple[float | None, float | None, str | None]:
         """
         Parse Track Bias Impact Values for run style and post position.
-        
+
         Format:
         Runstyle: E E/P P S
         Impact Values: 1.22 1.07 1.00 0.62
                       ^^++ (dominant marker)
-        
+
         Post: 1 2 3 4 5 6 7 8+
         Impact: 0.95 1.02 1.05 1.08 1.10 1.12 1.15 1.38
                                                     ^^+ (favorable marker)
-        
+
         Returns: (run_style_iv, post_iv, markers)
         """
         run_style_iv = None
         post_iv = None
         markers = None
-        
+
         # Parse run style Impact Values
         rs_match = re.search(
-            r'Runstyle[:\s]+E\s+E/?P\s+P\s+S\s+Impact\s+Values?[:\s]+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)',
+            r"Runstyle[:\s]+E\s+E/?P\s+P\s+S\s+Impact\s+Values?[:\s]+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)",
             block,
-            re.IGNORECASE
+            re.IGNORECASE,
         )
         if rs_match:
             try:
@@ -1753,32 +1894,34 @@ class GoldStandardBRISNETParser:
                 ep_iv = float(rs_match.group(2))
                 p_iv = float(rs_match.group(3))
                 s_iv = float(rs_match.group(4))
-                
+
                 # Map to horse's pace style
-                if pace_style == 'E':
+                if pace_style == "E":
                     run_style_iv = e_iv
-                elif pace_style == 'E/P' or pace_style == 'EP':
+                elif pace_style == "E/P" or pace_style == "EP":
                     run_style_iv = ep_iv
-                elif pace_style == 'P':
+                elif pace_style == "P":
                     run_style_iv = p_iv
-                elif pace_style == 'S':
+                elif pace_style == "S":
                     run_style_iv = s_iv
-                
+
                 # Check for ++ or + markers
-                marker_check = re.search(r'(E|E/?P|P|S)[\s=]+([\d.]+)(\+{1,2})', block, re.IGNORECASE)
+                marker_check = re.search(
+                    r"(E|E/?P|P|S)[\s=]+([\d.]+)(\+{1,2})", block, re.IGNORECASE
+                )
                 if marker_check:
                     markers = marker_check.group(3)  # "++" or "+"
             except Exception:
                 pass
-        
+
         # Parse post position Impact Values
         try:
-            post_num = int(post.rstrip('A-Z'))  # Handle posts like "1A"
-            
+            post_num = int(post.rstrip("A-Z"))  # Handle posts like "1A"
+
             post_match = re.search(
-                r'Post[:\s]+(?:\d+\s+)+Impact[:\s]+((?:[\d.]+\s+)+)',
+                r"Post[:\s]+(?:\d+\s+)+Impact[:\s]+((?:[\d.]+\s+)+)",
                 block,
-                re.IGNORECASE
+                re.IGNORECASE,
             )
             if post_match:
                 post_ivs = [float(x) for x in post_match.group(1).split()]
@@ -1790,37 +1933,39 @@ class GoldStandardBRISNETParser:
                     post_iv = post_ivs[post_num - 1]
         except Exception:
             pass
-        
+
         return run_style_iv, post_iv, markers
-    
+
     # ============ PEDIGREE RATINGS ============
-    
-    def _parse_pedigree_ratings(self, block: str) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+
+    def _parse_pedigree_ratings(
+        self, block: str
+    ) -> tuple[int | None, int | None, int | None, int | None]:
         """
         Parse pedigree breeding ratings.
-        
+
         Ratings indicate suitability for:
         - Fast track
         - Off track (muddy/sloppy)
         - Distance
         - Turf
-        
+
         Format varies, could be:
         "Pedigree: Fast 85 Off 72 Dist 90 Turf 78"
         or in separate lines/sections
-        
+
         Returns: (fast, off, distance, turf)
         """
         pedigree_fast = None
         pedigree_off = None
         pedigree_distance = None
         pedigree_turf = None
-        
+
         # Try comprehensive pattern
         ped_match = re.search(
-            r'Pedigree[:\s]+Fast[:\s]+(\d{1,3}).*?Off[:\s]+(\d{1,3}).*?Dist(?:ance)?[:\s]+(\d{1,3}).*?Turf[:\s]+(\d{1,3})',
+            r"Pedigree[:\s]+Fast[:\s]+(\d{1,3}).*?Off[:\s]+(\d{1,3}).*?Dist(?:ance)?[:\s]+(\d{1,3}).*?Turf[:\s]+(\d{1,3})",
             block,
-            re.IGNORECASE | re.DOTALL
+            re.IGNORECASE | re.DOTALL,
         )
         if ped_match:
             try:
@@ -1832,34 +1977,36 @@ class GoldStandardBRISNETParser:
                 pass
         else:
             # Try individual patterns
-            fast_match = re.search(r'Fast[:\s]+(\d{1,3})', block, re.IGNORECASE)
+            fast_match = re.search(r"Fast[:\s]+(\d{1,3})", block, re.IGNORECASE)
             if fast_match:
                 try:
                     pedigree_fast = int(fast_match.group(1))
                 except Exception:
                     pass
-            
-            off_match = re.search(r'Off[:\s]+(\d{1,3})', block, re.IGNORECASE)
+
+            off_match = re.search(r"Off[:\s]+(\d{1,3})", block, re.IGNORECASE)
             if off_match:
                 try:
                     pedigree_off = int(off_match.group(1))
                 except Exception:
                     pass
-            
-            dist_match = re.search(r'Dist(?:ance)?[:\s]+(\d{1,3})', block, re.IGNORECASE)
+
+            dist_match = re.search(
+                r"Dist(?:ance)?[:\s]+(\d{1,3})", block, re.IGNORECASE
+            )
             if dist_match:
                 try:
                     pedigree_distance = int(dist_match.group(1))
                 except Exception:
                     pass
-            
-            turf_match = re.search(r'Turf[:\s]+(\d{1,3})', block, re.IGNORECASE)
+
+            turf_match = re.search(r"Turf[:\s]+(\d{1,3})", block, re.IGNORECASE)
             if turf_match:
                 try:
                     pedigree_turf = int(turf_match.group(1))
                 except Exception:
                     pass
-        
+
         return pedigree_fast, pedigree_off, pedigree_distance, pedigree_turf
 
     # ============ CAREER EARNINGS ============
@@ -1867,45 +2014,45 @@ class GoldStandardBRISNETParser:
     def _parse_earnings(self, block: str) -> float:
         """
         Parse lifetime career earnings from BRISNET PP block.
-        
+
         Looks for patterns like:
           Life  16  2  3  0  $1,563,660
           Life:  8  2-1-0  $145,000
           Lifetime  $1,563,660
           $XXX,XXX appearing after "Life" keyword
-        
+
         Returns:
             float: Career earnings in dollars, 0.0 if not found
         """
         earnings_patterns = [
             # "Life  16  2  3  0  $1,563,660"  (BRISNET standard)
-            r'Life\s+\d+\s+\d+\s+\d+\s+\d+\s+\$([0-9,]+)',
+            r"Life\s+\d+\s+\d+\s+\d+\s+\d+\s+\$([0-9,]+)",
             # "Life: 8 2-1-0 $145,000"
-            r'Life[:\s]+\d+\s+\d+-\d+-\d+\s+\$([0-9,]+)',
+            r"Life[:\s]+\d+\s+\d+-\d+-\d+\s+\$([0-9,]+)",
             # General: "Life" followed by dollar amount on same line
-            r'Life[^\n]*\$([0-9,]+)',
+            r"Life[^\n]*\$([0-9,]+)",
             # "Lifetime" followed by dollar amount
-            r'Lifetime[^\n]*\$([0-9,]+)',
+            r"Lifetime[^\n]*\$([0-9,]+)",
             # "Life  starts  wins  places  shows  earnings" (tab-separated)
-            r'Life\s+\d+\s+\d+\s+\d+\s+\d+\s+([0-9,]+)',
+            r"Life\s+\d+\s+\d+\s+\d+\s+\d+\s+([0-9,]+)",
         ]
-        
+
         for pattern in earnings_patterns:
             match = re.search(pattern, block, re.IGNORECASE)
             if match:
                 try:
-                    earnings_str = match.group(1).replace(',', '')
+                    earnings_str = match.group(1).replace(",", "")
                     earnings = float(earnings_str)
                     if earnings > 0:
                         return earnings
                 except (ValueError, IndexError):
                     continue
-        
+
         return 0.0
 
     # ============ PRIME POWER (method) ============
 
-    def _parse_prime_power(self, block: str) -> Tuple[Optional[float], Optional[int]]:
+    def _parse_prime_power(self, block: str) -> tuple[float | None, int | None]:
         """Parse BRISNET Prime Power rating and rank"""
         match = self.PRIME_POWER_PATTERN.search(block)
         if match:
@@ -1919,7 +2066,9 @@ class GoldStandardBRISNETParser:
 
     # ============ FALLBACK DATA ============
 
-    def _create_fallback_data(self, post: str, name: str, block: str, error: str) -> HorseData:
+    def _create_fallback_data(
+        self, post: str, name: str, block: str, error: str
+    ) -> HorseData:
         """
         Create minimal HorseData when parsing fails completely.
         """
@@ -1932,12 +2081,14 @@ class GoldStandardBRISNETParser:
             style_strength="Unknown",
             raw_block=block,
             parsing_confidence=0.1,
-            errors=[f"Critical parsing failure: {error}"]
+            errors=[f"Critical parsing failure: {error}"],
         )
 
     # ============ VALIDATION ============
 
-    def validate_parsed_data(self, horses: Dict[str, HorseData], min_confidence: float = 0.5) -> Dict:
+    def validate_parsed_data(
+        self, horses: dict[str, HorseData], min_confidence: float = 0.5
+    ) -> dict:
         """
         Comprehensive validation report.
 
@@ -1952,11 +2103,11 @@ class GoldStandardBRISNETParser:
         """
         if not horses:
             return {
-                'overall_confidence': 0.0,
-                'horses_parsed': 0,
-                'issues': ['No horses parsed'],
-                'critical_issues': ['CRITICAL: Parser produced no results'],
-                'recommendations': ['Check PP text format']
+                "overall_confidence": 0.0,
+                "horses_parsed": 0,
+                "issues": ["No horses parsed"],
+                "critical_issues": ["CRITICAL: Parser produced no results"],
+                "recommendations": ["Check PP text format"],
             }
 
         issues = []
@@ -1970,7 +2121,9 @@ class GoldStandardBRISNETParser:
         # Check each horse
         for name, horse in horses.items():
             if horse.parsing_confidence < min_confidence:
-                issues.append(f"{name}: Low confidence ({horse.parsing_confidence:.1%})")
+                issues.append(
+                    f"{name}: Low confidence ({horse.parsing_confidence:.1%})"
+                )
 
             if not horse.ml_odds_decimal:
                 issues.append(f"{name}: Missing odds")
@@ -1988,23 +2141,26 @@ class GoldStandardBRISNETParser:
         if overall_confidence < 0.7:
             recommendations.append("Consider using cleaner PP text format")
         if len(issues) > len(horses) * 2:
-            recommendations.append("Many parsing issues - verify BRISNET format compatibility")
+            recommendations.append(
+                "Many parsing issues - verify BRISNET format compatibility"
+            )
 
         return {
-            'overall_confidence': overall_confidence,
-            'horses_parsed': len(horses),
-            'issues': issues,
-            'critical_issues': critical_issues,
-            'recommendations': recommendations,
-            'parsing_stats': dict(self.parsing_stats)
+            "overall_confidence": overall_confidence,
+            "horses_parsed": len(horses),
+            "issues": issues,
+            "critical_issues": critical_issues,
+            "recommendations": recommendations,
+            "parsing_stats": dict(self.parsing_stats),
         }
 
 
 # ===================== TORCH INTEGRATION =====================
 
+
 def integrate_with_torch_model(
-    parsed_horses: Dict[str, HorseData],
-    softmax_tau: float = 3.0  # pylint: disable=unused-argument
+    parsed_horses: dict[str, HorseData],
+    softmax_tau: float = 3.0,  # pylint: disable=unused-argument
 ) -> pd.DataFrame:
     """
     Convert parsed horses to DataFrame ready for unified_rating_engine.
@@ -2028,29 +2184,29 @@ def integrate_with_torch_model(
     rows = []
     for name, horse in parsed_horses.items():
         row = {
-            'horse_name': name,
-            'post': horse.post,
-            'pace_style': horse.pace_style,
-            'quirin': horse.quirin_points,
-            'ml_odds': horse.ml_odds_decimal or 5.0,  # Default 5.0 if missing
-            'jockey_win_pct': horse.jockey_win_pct,
-            'trainer_win_pct': horse.trainer_win_pct,
-            'speed_avg': horse.avg_top2,
-            'speed_last': horse.last_fig,
-            'speed_peak': horse.peak_fig,
-            'days_since_last': horse.days_since_last or 45,  # Default 45 days
-            'avg_purse': horse.avg_purse,
-            'angle_count': horse.angle_count,
-            'parsing_confidence': horse.parsing_confidence
+            "horse_name": name,
+            "post": horse.post,
+            "pace_style": horse.pace_style,
+            "quirin": horse.quirin_points,
+            "ml_odds": horse.ml_odds_decimal or 5.0,  # Default 5.0 if missing
+            "jockey_win_pct": horse.jockey_win_pct,
+            "trainer_win_pct": horse.trainer_win_pct,
+            "speed_avg": horse.avg_top2,
+            "speed_last": horse.last_fig,
+            "speed_peak": horse.peak_fig,
+            "days_since_last": horse.days_since_last or 45,  # Default 45 days
+            "avg_purse": horse.avg_purse,
+            "angle_count": horse.angle_count,
+            "parsing_confidence": horse.parsing_confidence,
         }
         rows.append(row)
 
     df = pd.DataFrame(rows)
 
     # Add placeholder columns needed by rating engine
-    df['beyer'] = df['speed_avg']
-    df['class_par'] = 80.0  # Default class par
-    df['field_avg_beyer'] = df['speed_avg'].mean()
+    df["beyer"] = df["speed_avg"]
+    df["class_par"] = 80.0  # Default class par
+    df["field_avg_beyer"] = df["speed_avg"].mean()
 
     return df
 
@@ -2098,25 +2254,29 @@ Dam: DPI 1.5 18%
     parser = GoldStandardBRISNETParser()
 
     # Parse with debug output
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("GOLD-STANDARD BRISNET PARSER - TEST RUN")
-    print("="*80)
+    print("=" * 80)
 
     horses = parser.parse_full_pp(sample_pp, debug=True)
 
     # Display results
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("PARSED HORSES:")
-    print("="*80)
+    print("=" * 80)
 
     for name, horse in horses.items():
         print(f"\n🐎 {name}")
         print(f"   Post: {horse.post}")
-        print(f"   Style: {horse.pace_style} (Q={horse.quirin_points:.0f}, {horse.style_strength})")
+        print(
+            f"   Style: {horse.pace_style} (Q={horse.quirin_points:.0f}, {horse.style_strength})"
+        )
         print(f"   ML Odds: {horse.ml_odds} → {horse.ml_odds_decimal}")
         print(f"   Jockey: {horse.jockey} ({horse.jockey_win_pct:.1%})")
         print(f"   Trainer: {horse.trainer} ({horse.trainer_win_pct:.1%})")
-        print(f"   Speed: Last={horse.last_fig}, Avg={horse.avg_top2:.1f}, Peak={horse.peak_fig}")
+        print(
+            f"   Speed: Last={horse.last_fig}, Avg={horse.avg_top2:.1f}, Peak={horse.peak_fig}"
+        )
         print(f"   Form: {horse.days_since_last} days since last")
         print(f"   Class: Avg purse ${horse.avg_purse:,.0f}")
         print(f"   Angles: {horse.angle_count}")
@@ -2130,29 +2290,40 @@ Dam: DPI 1.5 18%
 
     # Validation report
     validation = parser.validate_parsed_data(horses)
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("VALIDATION REPORT:")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"Overall Confidence: {validation['overall_confidence']:.1%}")
     print(f"Horses Parsed: {validation['horses_parsed']}")
     print(f"Issues: {len(validation['issues'])}")
     print(f"Critical Issues: {len(validation['critical_issues'])}")
 
-    if validation['critical_issues']:
+    if validation["critical_issues"]:
         print("\n🚨 CRITICAL:")
-        for issue in validation['critical_issues']:
+        for issue in validation["critical_issues"]:
             print(f"   - {issue}")
 
-    if validation['recommendations']:
+    if validation["recommendations"]:
         print("\n💡 RECOMMENDATIONS:")
-        for rec in validation['recommendations']:
+        for rec in validation["recommendations"]:
             print(f"   - {rec}")
 
     # Convert to DataFrame for model
     df = integrate_with_torch_model(horses)
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("TORCH-READY DATAFRAME:")
-    print(f"{'='*80}")
-    print(df[['horse_name', 'post', 'pace_style', 'ml_odds', 'speed_avg', 'parsing_confidence']])
+    print(f"{'=' * 80}")
+    print(
+        df[
+            [
+                "horse_name",
+                "post",
+                "pace_style",
+                "ml_odds",
+                "speed_avg",
+                "parsing_confidence",
+            ]
+        ]
+    )
 
     print("\n✅ PARSER READY FOR PRODUCTION")
