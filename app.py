@@ -840,8 +840,9 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
         text = header_line
 
         # Strip "Ultimate PP's w/ QuickPlay Comments" prefix
+        # Note: Space after Comments is optional (\s*) to handle "CommentsTampa" format
         text = re.sub(
-            r"^Ultimate PP.*?Comments\s+", "", text, flags=re.IGNORECASE
+            r"^Ultimate PP.*?Comments\s*", "", text, flags=re.IGNORECASE
         ).strip()
 
         # --- Extract Race Number (anchored at end, e.g., "Race 9") ---
@@ -1059,6 +1060,10 @@ def detect_race_type(pp_text: str) -> str:
         return "stakes"
 
     # Maiden
+    # Check for standalone "MC" followed by number (e.g., "MC 16000" or "MC16000")
+    if re.search(r"\bmc\s*\d", s):
+        return "maiden claiming"
+
     if re.search(r"\b(mdn|maiden)\b", s):
         if re.search(r"(mcl|mdn\s*clm|maiden\s*claim)", s):
             return "maiden claiming"
