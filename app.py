@@ -179,6 +179,8 @@ FTS_PARAMS = {
     "pedigree_confidence": 0.8,  # Crucial for debuts
     "ml_odds_confidence": 0.8,  # Market accuracy for elite FTS
     "live_odds_confidence": 0.9,  # Insider sentiment
+    "base_multiplier": 0.75,  # Base FTS rating multiplier (75% of normal)
+    "elite_trainer_multiplier": 1.2,  # Boost for elite connections (75% * 1.2 = 90%)
 }
 
 # Elite Trainers: Top 5% debut ROI (expand based on historical data)
@@ -189,6 +191,24 @@ ELITE_TRAINERS = {
     "Chad Brown",
     "Steve Asmussen",
 }  # Set for O(1) lookup performance
+
+# ===================== NA Running Style + QSP Parameters =====================
+# Horses with "NA" running style: BRISNET couldn't assign a style because the
+# horse lacks sufficient starts at this exact distance/surface combination.
+# NA ≠ bad — it means UNKNOWN. We use Quirin Speed Points (0-8) to infer
+# partial early-speed tendency and adjust confidence/ratings accordingly.
+NA_STYLE_PARAMS = {
+    "form_confidence": 0.0,  # No meaningful form cycle at this dist/surface
+    "speed_confidence": 0.5,  # Workouts/morning line provide some signal
+    "pedigree_boost": 0.2,  # Pedigree becomes more important for unknowns
+    "trainer_boost": 0.1,  # Trainer patterns matter more for unknowns
+    "style_penalty": -0.15,  # Gentler than -0.3 (unknown ≠ mismatch)
+    "rating_dampener": 0.85,  # 15% overall reduction for style uncertainty
+    "fts_na_dampener": 0.92,  # Mild additional dampener when FTS+NA stack
+    "qsp_speed_scaling": 0.3,  # Max speed_confidence boost from QSP: += (q/8)*0.3
+    "qsp_ep_threshold": 5,  # QSP >= 5 infers partial E/P tendency
+    "qsp_style_offset": 0.15,  # Max style penalty offset from high QSP
+}
 
 # INTELLIGENT LEARNING ENGINE: High-IQ pattern analysis from training sessions
 try:
@@ -1797,13 +1817,27 @@ def _normalize_style(tok: str) -> str:
 
 
 def calculate_style_strength(style: str, quirin: float) -> str:
+    """Calculate style strength label from running style + Quirin Speed Points.
+
+    For NA (unknown) styles, use QSP to infer strength instead of defaulting to 'Solid':
+    - QSP >= 6: 'Solid' (decent early speed signal from BRISNET)
+    - QSP 3-5: 'Slight' (some signal but inconclusive)
+    - QSP 0-2 or NaN: 'Weak' (no meaningful data to differentiate)
+    """
     s = (style or "NA").upper()
     try:
         q = float(quirin)
     except Exception:
-        return "Solid"
+        return "Weak" if s == "NA" else "Solid"
     if pd.isna(q):
-        return "Solid"
+        return "Weak" if s == "NA" else "Solid"
+    # NA style: use QSP to infer strength (Feb 11, 2026)
+    if s == "NA":
+        if q >= 6:
+            return "Solid"
+        if q >= 3:
+            return "Slight"
+        return "Weak"
     if s in ("E", "E/P"):
         if q >= 7:
             return "Strong"
@@ -4790,17 +4824,27 @@ def _style_bias_label_from_choice(choice: str) -> str:
 
 
 def style_match_score(running_style_bias: str, style: str, quirin: float) -> float:
-    # running_style_bias is already mapped to a label (speed/closer/fair)
+    """Single-bias style match score with NA QSP handling (Feb 11, 2026)."""
     bias = (running_style_bias or "").strip().lower()
     stl = (style or "NA").upper()
 
     table = MODEL_CONFIG["style_match_table"]
-    base = table.get(bias, table["fair/neutral"]).get(stl, 0.0)
 
     try:
         q = float(quirin)
     except Exception:
         q = np.nan
+
+    # NA style: use QSP for partial credit (Feb 11, 2026)
+    if stl == "NA" and pd.notna(q) and q >= NA_STYLE_PARAMS["qsp_ep_threshold"]:
+        if "favoring" in bias and "closer" not in bias:
+            base = 0.15 * (q / 8.0)
+        elif "closer" in bias:
+            base = -0.10 * (q / 8.0)
+        else:
+            base = 0.0
+    else:
+        base = table.get(bias, table["fair/neutral"]).get(stl, 0.0)
 
     if (
         stl in ("E", "E/P")
@@ -4814,7 +4858,12 @@ def style_match_score(running_style_bias: str, style: str, quirin: float) -> flo
 def style_match_score_multi(
     running_style_biases: list, style: str, quirin: float
 ) -> float:
-    """Calculate style match score from multiple selected running style biases (aggregates bonuses)"""
+    """Calculate style match score from multiple selected running style biases.
+
+    NA STYLE HANDLING (Feb 11, 2026):
+    NA horses with high QSP (>=5) get partial credit when bias favors speed,
+    since QSP indicates early-speed tendency even without a confirmed style.
+    """
     if not running_style_biases:
         return 0.0
 
@@ -4834,9 +4883,18 @@ def style_match_score_multi(
         bias_label = _style_bias_label_from_choice(bias_choice)
         bias_lower = bias_label.strip().lower()
 
-        bonus = table.get(bias_lower, table["fair/neutral"]).get(stl, 0.0)
+        # NA style: use QSP to infer partial bonus instead of flat 0.0
+        if stl == "NA" and pd.notna(q) and q >= NA_STYLE_PARAMS["qsp_ep_threshold"]:
+            if "favoring" in bias_lower and "closer" not in bias_lower:
+                bonus = 0.15 * (q / 8.0)  # Scale by QSP strength
+            elif "closer" in bias_lower:
+                bonus = -0.10 * (q / 8.0)  # High QSP = likely NOT a closer
+            else:
+                bonus = 0.0  # Fair/neutral: no adjustment
+        else:
+            bonus = table.get(bias_lower, table["fair/neutral"]).get(stl, 0.0)
 
-        # Add Quirin bonus if applicable
+        # Add Quirin bonus if applicable (E/EP only, not NA — NA handled above)
         if (
             stl in ("E", "E/P")
             and pd.notna(q)
@@ -8126,6 +8184,42 @@ def compute_bias_ratings(
             pass  # Fail gracefully if FTS detection fails
 
         # ═══════════════════════════════════════════════════════════════
+        # NA RUNNING STYLE ADJUSTMENT - TRADITIONAL PATH (Feb 11, 2026)
+        # ═══════════════════════════════════════════════════════════════
+        # NA horses have unknown running style (insufficient BRISNET data at
+        # this distance/surface). Apply dampener + QSP-based confidence scaling.
+        # FTS horses get their own multiplier; non-FTS NA horses get this one.
+        try:
+            _na_style = _style_norm(
+                row.get("Style") or row.get("OverrideStyle") or row.get("DetectedStyle")
+            )
+            _na_quirin = row.get("Quirin", np.nan)
+            _na_starts = 0
+            if "CStarts" in row:
+                _na_starts = safe_int(row.get("CStarts", 0), 0)
+            elif "Starts" in row:
+                _na_starts = safe_int(row.get("Starts", 0), 0)
+
+            if _na_style == "NA" and _na_starts > 0:
+                # Non-FTS horse with unknown style: apply dampener
+                na_dampener = NA_STYLE_PARAMS["rating_dampener"]  # 0.85
+                # Scale dampener with QSP: higher QSP = less dampening
+                try:
+                    _na_q = float(_na_quirin)
+                    if pd.notna(_na_q) and _na_q > 0:
+                        # QSP 8 -> dampener ~0.925, QSP 0 -> dampener 0.85
+                        qsp_recovery = (_na_q / 8.0) * (1.0 - na_dampener)  # up to 0.15
+                        na_dampener = na_dampener + qsp_recovery * 0.5  # half recovery
+                except Exception:
+                    pass
+                R = R * na_dampener
+            elif _na_style == "NA" and _na_starts == 0 and not is_fts:
+                # Edge case: NA + zero starts but not MSW (e.g., MCL debut)
+                R = R * NA_STYLE_PARAMS["fts_na_dampener"]  # 0.92
+        except Exception:
+            pass  # Fail gracefully
+
+        # ═══════════════════════════════════════════════════════════════
         # PACE SCENARIO BONUS: Detect speed duels favoring closers
         # ═══════════════════════════════════════════════════════════════
         # TUP R5: 7 E/EP types created speed duel, P runner won from back
@@ -9411,6 +9505,46 @@ def build_betting_strategy(
     return final_report
 
 
+def _build_na_context(primary_df: pd.DataFrame, df_field: pd.DataFrame) -> str:
+    """Build NA running style context string for Classic Report LLM prompt.
+
+    Explains which horses have unknown running styles and what their
+    Quirin Speed Points suggest about early speed tendency.
+    """
+    na_lines = []
+    if primary_df is None or primary_df.empty:
+        return "All horses have confirmed running styles."
+
+    for _, row in primary_df.iterrows():
+        style = str(row.get("Style", "")).upper()
+        if style == "NA":
+            name = row.get("Horse", "Unknown")
+            post = row.get("Post", "?")
+            qsp = int(safe_float(row.get("Quirin", 0), 0))
+            starts = int(safe_float(row.get("Starts", row.get("CStarts", 0)), 0))
+
+            if starts == 0:
+                label = "First-time starter \u2014 no racing history"
+            elif qsp >= 6:
+                label = f"QSP {qsp}/8 \u2014 likely early speed tendency, style dampened ~92%"
+            elif qsp >= 3:
+                label = f"QSP {qsp}/8 \u2014 moderate speed signal, style unknown, rating dampened"
+            else:
+                label = f"QSP {qsp}/8 \u2014 minimal speed data, high uncertainty, rating dampened"
+
+            na_lines.append(f"#{post} {name}: {label}")
+
+    if not na_lines:
+        return "All horses have confirmed running styles."
+
+    header = (
+        f"{len(na_lines)} horse(s) with NA (unknown) running style. "
+        "BRISNET assigns NA when horse lacks sufficient starts at this exact "
+        "distance/surface. Ratings are dampened and QSP used to infer pace tendency:"
+    )
+    return header + "\n" + "\n".join(na_lines)
+
+
 st.markdown("---")
 st.header("D. Classic Report")
 st.caption(
@@ -9825,6 +9959,9 @@ Top 5 Rated Horses:
 Horses Offering Potential Value (Overlays):
 {overlay_table_md}
 
+--- NA STYLE CONTEXT ---
+{_build_na_context(primary_sorted, df_final_field)}
+
 --- FULL ANALYSIS & BETTING PLAN ---
 {strategy_report_md}
 
@@ -10109,6 +10246,18 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             "is_turf": surface_type.lower() == "turf",
                             "is_synthetic": surface_type.lower()
                             in ["synthetic", "tapeta", "polytrack"],
+                            # NA STYLE FIELD COMPOSITION (Feb 11, 2026)
+                            "na_style_count": sum(
+                                1
+                                for _, r in primary_df.iterrows()
+                                if str(r.get("Style", "")).upper() == "NA"
+                            ),
+                            "na_high_qsp_count": sum(
+                                1
+                                for _, r in primary_df.iterrows()
+                                if str(r.get("Style", "")).upper() == "NA"
+                                and int(safe_float(r.get("Quirin", 0))) >= 5
+                            ),
                         }
 
                         # Prepare horses data with ALL AVAILABLE FEATURES for maximum ML intelligence
@@ -10319,6 +10468,41 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 "earnings_lifetime": safe_float(
                                     row.get("Earnings", 0.0)
                                 ),
+                                # NA STYLE + QSP CONTEXT (Feb 11, 2026)
+                                "is_na_style": 1
+                                if str(row.get("Style", "")).upper() == "NA"
+                                else 0,
+                                "na_qsp_confidence": round(
+                                    0.7
+                                    + 0.3
+                                    * (int(safe_float(row.get("Quirin", 0))) / 8.0),
+                                    3,
+                                )
+                                if str(row.get("Style", "")).upper() == "NA"
+                                else 1.0,
+                                "is_fts": 1
+                                if int(
+                                    safe_float(
+                                        row.get("Starts", row.get("CStarts", 0)), 0
+                                    )
+                                )
+                                == 0
+                                else 0,
+                                "na_dampener_applied": round(
+                                    NA_STYLE_PARAMS["rating_dampener"]
+                                    + (int(safe_float(row.get("Quirin", 0))) / 8.0)
+                                    * (1.0 - NA_STYLE_PARAMS["rating_dampener"])
+                                    * 0.5,
+                                    3,
+                                )
+                                if str(row.get("Style", "")).upper() == "NA"
+                                and int(
+                                    safe_float(
+                                        row.get("Starts", row.get("CStarts", 0)), 0
+                                    )
+                                )
+                                > 0
+                                else 1.0,
                             }
                             horses_data.append(horse_dict)
 

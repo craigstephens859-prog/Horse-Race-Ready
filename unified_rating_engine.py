@@ -391,6 +391,24 @@ class UnifiedRatingEngine:
         "elite_trainer_multiplier": 1.2,  # Boost for elite connections (75% * 1.2 = 90%)
     }
 
+    # ═════════════════════════════════════════════════════════════════════
+    # NA RUNNING STYLE PARAMETERS (Feb 11, 2026)
+    # ═════════════════════════════════════════════════════════════════════
+    # Horses with "NA" running style: BRISNET couldn't assign a style.
+    # Use Quirin Speed Points (0-8) to infer partial early-speed tendency.
+    NA_STYLE_PARAMS = {
+        "form_confidence": 0.0,  # No form cycle at this dist/surface
+        "speed_confidence": 0.5,  # Workouts/morning line signal
+        "pedigree_boost": 0.2,  # Pedigree more important for unknowns
+        "trainer_boost": 0.1,  # Trainer patterns more important
+        "style_penalty": -0.15,  # Gentler than -0.3 (unknown != mismatch)
+        "rating_dampener": 0.85,  # 15% reduction for style uncertainty
+        "fts_na_dampener": 0.92,  # Mild additional when FTS+NA stack
+        "qsp_speed_scaling": 0.3,  # Max speed_conf boost from QSP
+        "qsp_ep_threshold": 5,  # QSP >= 5 infers partial E/P tendency
+        "qsp_style_offset": 0.15,  # Max style penalty offset from high QSP
+    }
+
     # Elite trainers with proven FTS success rates (>25% MSW win rate)
     ELITE_TRAINERS = {
         "Wesley Ward",
@@ -1003,6 +1021,44 @@ class UnifiedRatingEngine:
             parsing_conf = parsing_conf * (
                 0.8 + 0.2 * avg_fts_conf
             )  # Reduce confidence
+
+        # ═════════════════════════════════════════════════════════════
+        # NA RUNNING STYLE ADJUSTMENT (Feb 11, 2026)
+        # ═════════════════════════════════════════════════════════════
+        # NA = unknown style (insufficient BRISNET data). Apply dampener
+        # scaled by QSP. FTS+NA horses get milder additional dampener
+        # (FTS multiplier already applied above).
+        if horse.pace_style == "NA":
+            qsp = getattr(horse, "quirin_points", 0) or 0
+            try:
+                qsp = int(qsp)
+            except (ValueError, TypeError):
+                qsp = 0
+
+            if is_fts:
+                # FTS already dampened at 0.75/0.90 — add only mild NA penalty
+                na_mult = self.NA_STYLE_PARAMS["fts_na_dampener"]  # 0.92
+                logger.info(
+                    f"  \u2192 NA+FTS Adjustment: {horse.name} rating \u00d7 {na_mult:.2f} "
+                    f"(QSP={qsp}, stacked with FTS)"
+                )
+            else:
+                # Non-FTS NA: apply full dampener, scaled by QSP
+                base_dampener = self.NA_STYLE_PARAMS["rating_dampener"]  # 0.85
+                # QSP 8 -> dampener ~0.925, QSP 0 -> dampener 0.85
+                qsp_recovery = (qsp / 8.0) * (1.0 - base_dampener) * 0.5
+                na_mult = base_dampener + qsp_recovery
+                logger.info(
+                    f"  \u2192 NA Style Adjustment: {horse.name} rating \u00d7 {na_mult:.2f} "
+                    f"(QSP={qsp}, dampener={base_dampener}+{qsp_recovery:.3f})"
+                )
+
+            final_rating = final_rating * na_mult
+
+            # Reduce parsing confidence for NA (less predictable)
+            # Higher QSP retains more confidence
+            conf_retention = 0.7 + 0.3 * (qsp / 8.0)  # Range: 0.7 to 1.0
+            parsing_conf = parsing_conf * conf_retention
 
         # CRITICAL FIX (Feb 10, 2026): Hard cap on final rating to prevent runaway values
         # A rating of 17.69 (TuP R3 JWB) on a 12/1 shot in $8,500 claiming is absurd.
@@ -1882,10 +1938,13 @@ class UnifiedRatingEngine:
     def _calc_style(
         self, horse: HorseData, surface_type: str, style_bias: list[str] | None
     ) -> float:
-        """Running style strength rating
+        """Running style strength rating.
 
         CRITICAL FIX: Track bias heavily influences outcomes.
         Stalker-favoring tracks (impact value 1.55) require aggressive adjustments.
+
+        NA STYLE FIX (Feb 11, 2026): NA = unknown, NOT mismatch.
+        Use QSP to infer partial style tendency. Penalty reduced from -0.3 to -0.15.
         """
         strength_values: dict[str, float] = {
             "Strong": 0.8,
@@ -1898,7 +1957,23 @@ class UnifiedRatingEngine:
 
         # ENHANCED: Track bias adjustment with aggressive penalties/rewards
         if style_bias:
-            if horse.pace_style in style_bias:
+            if horse.pace_style == "NA":
+                # NA STYLE: Unknown != mismatch. Apply gentler penalty.
+                # Use QSP to offset penalty (high QSP suggests early speed ability)
+                na_penalty = self.NA_STYLE_PARAMS["style_penalty"]  # -0.15
+                qsp = getattr(horse, "quirin_points", 0) or 0
+                try:
+                    qsp = int(qsp)
+                except (ValueError, TypeError):
+                    qsp = 0
+                # QSP offset: QSP 8 -> offset +0.15, QSP 0 -> offset 0.0
+                qsp_offset = (qsp / 8.0) * self.NA_STYLE_PARAMS["qsp_style_offset"]
+                base += na_penalty + qsp_offset
+                # If high QSP and bias favors speed, give small positive nudge
+                if qsp >= self.NA_STYLE_PARAMS["qsp_ep_threshold"] and style_bias:
+                    if "E" in style_bias or "E/P" in style_bias:
+                        base += 0.1  # Partial credit for likely early speed
+            elif horse.pace_style in style_bias:
                 # DOUBLED bonus for matching dominant track bias
                 base += 0.8 if "S" in style_bias else 0.4
             elif horse.pace_style == "E/P" and ("E" in style_bias or "P" in style_bias):
@@ -2444,6 +2519,24 @@ class UnifiedRatingEngine:
             elif horse_style == "S":
                 # S horses benefit from HIGH esp (fast pace)
                 advantage = 3.0 * esp
+            elif horse_style == "NA":
+                # NA STYLE (Feb 11, 2026): Use QSP to infer partial tendency
+                qsp = getattr(horse, "quirin_points", 0) or 0
+                try:
+                    qsp = int(qsp)
+                except (ValueError, TypeError):
+                    qsp = 0
+                if qsp >= self.NA_STYLE_PARAMS["qsp_ep_threshold"]:
+                    # High QSP -> treat as partial E/P (half advantage)
+                    optimal_esp = 0.4
+                    distance_from_optimal = abs(esp - optimal_esp)
+                    advantage = 1.5 * (1 - 2 * distance_from_optimal)
+                elif qsp >= 3:
+                    # Moderate QSP -> slight closer lean
+                    advantage = 0.5 * esp
+                else:
+                    # Low/no QSP -> no data, neutral
+                    advantage = 0.0
             else:
                 advantage = 0.0
 
@@ -2461,12 +2554,26 @@ class UnifiedRatingEngine:
             return self._calc_pace(horse, horses_in_race, distance_txt)
 
     def _get_field_composition(self, horses_in_race: list[HorseData]) -> dict[str, int]:
-        """Count horses by running style for pace analysis"""
+        """Count horses by running style for pace analysis.
+
+        NA STYLE FIX (Feb 11, 2026): NA horses with high QSP (>=5) are
+        counted as 0.5 toward E/P bucket. This prevents races with many
+        NA horses (e.g., maiden turf) from having meaningless ESP calculations.
+        """
         composition = {"E": 0, "E/P": 0, "P": 0, "S": 0}
         for horse in horses_in_race:
             style = horse.pace_style
             if style in composition:
                 composition[style] += 1
+            elif style == "NA":
+                # Use QSP to infer partial style contribution
+                qsp = getattr(horse, "quirin_points", 0) or 0
+                try:
+                    qsp = int(qsp)
+                except (ValueError, TypeError):
+                    qsp = 0
+                if qsp >= self.NA_STYLE_PARAMS["qsp_ep_threshold"]:
+                    composition["E/P"] += 0.5  # Fractional count for high QSP
         return composition
 
     def _distance_to_furlongs(self, distance_txt: str) -> float:
