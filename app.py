@@ -7759,14 +7759,14 @@ def compute_bias_ratings(
                             # Mid-tier: Standard reliability
                             base_pp, base_comp = 0.88, 0.12
                         else:  # "low" (Claiming)
-                            # CLAIMING FIX: TUP R4/R5 proved 85% PP weight produces INVERSE correlation
-                            # Winner #3 in R5 had HIGHEST Speed LR (82) and was P style (survived speed duel)
-                            # Winner in R4 had LOWEST PP (76.8) but had Smart Money + post bias
-                            # Claiming races = chaos: Speed LR, tactics, Smart Money matter MORE than PP
+                            # CLAIMING SPRINT CALIBRATION (Feb 2026)
+                            # Previous 62/38 split allowed biases to override PP too much
+                            # Claiming races have chaos, but PP still primary predictor
+                            # Components (pace, tactics, smart money) provide important nuance
                             base_pp, base_comp = (
-                                0.62,
-                                0.38,
-                            )  # Dramatically lower PP, boost components
+                                0.75,
+                                0.25,
+                            )  # PP-dominant, components as tiebreakers
 
                         # Class dropper adjustment
                         if class_spread > 1.5:
@@ -7785,9 +7785,14 @@ def compute_bias_ratings(
                         elif race_quality == "mid":
                             base_pp, base_comp = 0.78, 0.22
                         else:  # "low" (Claiming)
-                            # CLAIMING ROUTE FIX: Even lower PP weight for claiming routes
-                            # Pace stamina and tactics dominate in cheap route races
-                            base_pp, base_comp = 0.55, 0.45  # Favor components heavily
+                            # CLAIMING ROUTE CALIBRATION (TUP R7 Feb 10, 2026 - REAL RESULTS)
+                            # Winner #1 My Munnings: PP 105.7 (4th best) - System buried at -3.10 with 55/45 split
+                            # Old 55/45 split allowed biases to overwhelm solid PP horses
+                            # REAL WORLD PROOF: Even cheap claiming routes, PP matters ~80%
+                            base_pp, base_comp = (
+                                0.80,
+                                0.20,
+                            )  # PP-dominant, bonuses provide nuance
 
                         # Class dropper adjustment (routes)
                         if class_spread > 2.0:
