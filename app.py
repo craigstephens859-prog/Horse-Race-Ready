@@ -8206,14 +8206,14 @@ for i, (rbias, pbias) in enumerate(scenarios):
         ratings_df = apply_enhancements_and_figs(
             ratings_df=ratings_df,
             pp_text=pp_text,
-            processed_weights=final_weights,
-            chaos_index=0.0,
-            track_name=track_name,
-            surface_type=surface_type,
-            distance_txt=distance_txt,
-            race_type=race_type_detected,
+            _processed_weights=final_weights,
+            _chaos_index=0.0,
+            _track_name=track_name,
+            _surface_type=surface_type,
+            _distance_txt=distance_txt,
+            _race_type=race_type_detected,
             angles_per_horse=angles_per_horse,
-            pedigree_per_horse=pedigree_per_horse,
+            _pedigree_per_horse=pedigree_per_horse,
             figs_df=figs_df,  # <--- PASS THE REAL FIGS_DF
         )
         # Build ML odds dict from df_final_field for reality check
