@@ -10331,35 +10331,6 @@ else:
 
         # Tab 2: Submit Actual Top 5
         with tab_results:
-            # Show success message if just saved (persists across reruns until user starts new analysis)
-            if st.session_state.get("last_save_success"):
-                race_id_saved = st.session_state.get("last_save_race_id", "Unknown")
-                actual_winner = st.session_state.get("last_save_winner", "Unknown")
-                predicted_winner = st.session_state.get(
-                    "last_save_predicted", "Unknown"
-                )
-
-                if predicted_winner == actual_winner:
-                    st.success(f"🎯 **Prediction Correct!** Winner: {actual_winner}")
-                else:
-                    st.info(
-                        f"📊 Predicted: {predicted_winner} | Actual Winner: {actual_winner}"
-                    )
-
-                st.success(f"✅ Results successfully saved for {race_id_saved}")
-                st.info(
-                    "🚀 Go to 'Retrain Model' tab when you have 50+ completed races!"
-                )
-
-                # Provide a button to clear the success message and show the form for the next race
-                if st.button(
-                    "📝 Enter results for another race", key="clear_save_success"
-                ):
-                    st.session_state["last_save_success"] = False
-                    _safe_rerun()
-
-                st.markdown("---")
-
             st.markdown("""
             ### Submit Actual Top 4 Finishers
 
@@ -10601,20 +10572,6 @@ else:
                                             )
 
                                             if success:
-                                                # Store success info in session state
-                                                st.session_state[
-                                                    "last_save_success"
-                                                ] = True
-                                                st.session_state[
-                                                    "last_save_race_id"
-                                                ] = race_id
-                                                st.session_state["last_save_winner"] = (
-                                                    horse_names_dict.get(
-                                                        finish_order[0],
-                                                        f"Horse #{finish_order[0]}",
-                                                    )
-                                                )
-
                                                 # Mark this race as completed to remove from pending list
                                                 st.session_state[
                                                     f"race_completed_{race_id}"
@@ -10631,14 +10588,22 @@ else:
                                                     if not predicted_winner_row.empty
                                                     else "Unknown"
                                                 )
-                                                st.session_state[
-                                                    "last_save_predicted"
-                                                ] = predicted_winner
-
-                                                st.success(
-                                                    f"✅ Results saved! Winner: #{finish_order[0]} {horse_names_dict.get(finish_order[0], '')}"
+                                                actual_winner_name = horse_names_dict.get(
+                                                    finish_order[0], f"Horse #{finish_order[0]}"
                                                 )
-                                                st.balloons()
+
+                                                # Show inline success with prediction accuracy
+                                                if predicted_winner == actual_winner_name:
+                                                    st.success(
+                                                        f"🎯 **Perfect Prediction!** Winner: {actual_winner_name} | Results saved for {race_id}"
+                                                    )
+                                                else:
+                                                    st.success(
+                                                        f"✅ Results saved! Winner: #{finish_order[0]} {actual_winner_name}"
+                                                    )
+                                                    st.info(
+                                                        f"📊 Predicted: {predicted_winner} | Actual: {actual_winner_name}"
+                                                    )
 
                                                 # AUTO-CALIBRATION v2: Learn from result with persistence
                                                 try:
@@ -11435,8 +11400,6 @@ else:
                                 st.info(
                                     f"💾 Model saved: {results.get('model_path', 'N/A')}"
                                 )
-
-                                st.balloons()
 
                         except Exception as e:
                             st.error(f"Training error: {e}")
