@@ -94,6 +94,7 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     damsire_spi: float | None = None
     sire_awd: float | None = None  # Avg winning distance
     dam_dpi: float | None = None  # Dam produce index
+    sire_mud_pct: float | None = None  # Sire %Mud runners (Feb 13, 2026)
     pedigree_confidence: float = 0.3  # Often missing
 
     # === ANGLES ===
@@ -801,6 +802,7 @@ class GoldStandardBRISNETParser:
             horse.damsire_spi = pedigree_data.get("damsire_spi")
             horse.sire_awd = pedigree_data.get("sire_awd")
             horse.dam_dpi = pedigree_data.get("dam_dpi")
+            horse.sire_mud_pct = pedigree_data.get("sire_mud_pct")
             horse.pedigree_confidence = ped_conf
         except Exception as e:
             horse.errors.append(f"Pedigree parsing error: {str(e)}")
@@ -1419,6 +1421,8 @@ class GoldStandardBRISNETParser:
             try:
                 ped_data["sire_awd"] = float(sire_match.group(1))
                 ped_data["sire_spi"] = float(sire_match.group(4))
+                # Group 2 is %Mud from "AWD 6.2 17%Mud 81MudSts 0.86spi"
+                ped_data["sire_mud_pct"] = float(sire_match.group(2))
                 confidence += 0.4
             except Exception:
                 pass

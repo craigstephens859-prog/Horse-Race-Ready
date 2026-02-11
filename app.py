@@ -1954,6 +1954,7 @@ def parse_pedigree_snips(block) -> dict:
     out = {
         "sire_awd": np.nan,
         "sire_1st": np.nan,
+        "sire_mud_pct": np.nan,  # %Mud from Sire Stats (Feb 13, 2026)
         "damsire_awd": np.nan,
         "damsire_1st": np.nan,
         "dam_dpi": np.nan,
@@ -1968,7 +1969,8 @@ def parse_pedigree_snips(block) -> dict:
     )
     if s:
         out["sire_awd"] = float(s.group(1))
-        out["sire_1st"] = float(s.group(3))
+        out["sire_mud_pct"] = float(s.group(2))  # Group 2 is %Mud
+        out["sire_1st"] = float(s.group(3))  # Group 3 is %-1st
     ds = re.search(
         r"(?mi)^\s*Dam\'s Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi",
         block_str,
@@ -1979,6 +1981,19 @@ def parse_pedigree_snips(block) -> dict:
     d = re.search(r"(?mi)^\s*Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%", block_str)
     if d:
         out["dam_dpi"] = float(d.group(1))
+
+    # Parse Pedigree breeding ratings: "Pedigree: Fast 85 Off 72 Dist 90 Turf 78"
+    # (Feb 13, 2026 enhancement for surface-switch pedigree integration)
+    ped_ratings = re.search(
+        r"(?mi)Pedigree:\s*Fast\s+(\d+)\s+Off\s+(\d+)\s+Dist\s+(\d+)\s+Turf\s+(\d+)",
+        block_str,
+    )
+    if ped_ratings:
+        out["pedigree_fast"] = float(ped_ratings.group(1))
+        out["pedigree_off"] = float(ped_ratings.group(2))
+        out["pedigree_distance"] = float(ped_ratings.group(3))
+        out["pedigree_turf"] = float(ped_ratings.group(4))
+
     return out
 
 
@@ -4522,6 +4537,9 @@ for name, fig_list in figs_per_horse.items():
                 "Figures": fig_list,  # The list of parsed figs
                 "BestFig": max(fig_list),
                 "AvgTop2": round(np.mean(sorted(fig_list, reverse=True)[:2]), 1),
+                "LastFig": fig_list[0]
+                if fig_list
+                else 0,  # Most recent figure (Feb 13 fix)
             }
         )
 figs_df = pd.DataFrame(figs_data)  # <--- THIS IS THE NEW FIGS DATAFRAME
@@ -6230,13 +6248,21 @@ def apply_track_pattern_bonus(
 def detect_surface_switch(
     race_history: list[dict],
     today_surface: str,
+    pedigree_data: dict | None = None,
 ) -> dict[str, Any]:
     """
     Detect surface switches (Dirt→Turf, Turf→Dirt, etc.) and return a penalty/bonus.
 
+    ENHANCEMENT (Feb 13, 2026 — TAM R7 Post-Race Fix):
+    Now accepts optional pedigree_data dict with keys:
+      - sire_mud_pct: From "Sire Stats: XX%Mud" line
+      - pedigree_off: Off-track breeding rating (0-100)
+      - pedigree_turf: Turf breeding rating (0-100)
+    First-time surface + strong pedigree = reduced penalty / bonus.
+
     Logic:
-    - Dirt→Turf: Significant penalty (-0.15) unless horse has turf history
-    - Turf→Dirt: Moderate penalty (-0.10) unless horse has dirt history
+    - Dirt→Turf: Significant penalty (-0.15) unless horse has turf history / pedigree
+    - Turf→Dirt: Moderate penalty (-0.10) unless horse has dirt history / mud pedigree
     - Same surface: Small bonus if consistent (+0.05)
     - Mixed history: Penalize if mostly other surface (-0.08)
 
@@ -6254,6 +6280,7 @@ def detect_surface_switch(
     if not race_history or not today_surface:
         return result
 
+    ped = pedigree_data or {}
     today_surf = today_surface.strip().lower()
     today_is_turf = "turf" in today_surf
     today_is_dirt = "dirt" in today_surf or "fast" in today_surf
@@ -6277,6 +6304,12 @@ def detect_surface_switch(
         result["switch_type"] = "dirt_to_turf"
         if turf_count == 0:
             result["bonus"] = -0.20  # Never on turf = MAJOR penalty
+            # Pedigree turf rating offset (Feb 13 enhancement)
+            ped_turf = ped.get("pedigree_turf")
+            if ped_turf is not None and ped_turf >= 80:
+                result["bonus"] += 0.15  # Strong turf pedigree offsets penalty
+            elif ped_turf is not None and ped_turf >= 65:
+                result["bonus"] += 0.08
         elif turf_count <= 1:
             result["bonus"] = -0.12  # Minimal turf experience
         else:
@@ -6285,8 +6318,21 @@ def detect_surface_switch(
     elif today_is_dirt and last_surface == "Turf":
         result["switch_type"] = "turf_to_dirt"
         if dirt_count == 0:
-            # FIRST TIME ON DIRT after racing on turf = positive angle
-            result["bonus"] = 0.15  # Turf-to-dirt first-timer bonus
+            # First time on dirt — check mud pedigree for bonus (Feb 13 enhancement)
+            mud_pct = ped.get("sire_mud_pct")
+            ped_off = ped.get("pedigree_off")
+
+            if mud_pct is not None and mud_pct >= 25:
+                # Strong mud sire — first time on dirt is a positive angle
+                result["bonus"] = 0.20
+            elif mud_pct is not None and mud_pct >= 15:
+                result["bonus"] = 0.10  # Average mud pedigree
+            elif ped_off is not None and ped_off >= 75:
+                result["bonus"] = 0.15  # Strong off-track breeding
+            elif ped_off is not None and ped_off >= 60:
+                result["bonus"] = 0.05  # Decent off-track breeding
+            else:
+                result["bonus"] = 0.15  # Turf-to-dirt first-timer angle (baseline)
         elif dirt_count >= 1:
             result["bonus"] = 0.05  # Has dirt experience, smaller bonus
 
@@ -6308,7 +6354,7 @@ def detect_surface_switch(
     if today_is_turf and total > 0 and (dirt_count / total) >= 0.80:
         result["bonus"] -= 0.08  # 80%+ dirt horse trying turf
 
-    result["bonus"] = float(np.clip(result["bonus"], -0.25, 0.15))
+    result["bonus"] = float(np.clip(result["bonus"], -0.25, 0.20))
     return result
 
 
@@ -7162,13 +7208,38 @@ def compute_bias_ratings(
     speed_map = {}
     if figs_df is not None and not figs_df.empty and "AvgTop2" in figs_df.columns:
         race_avg_fig = figs_df["AvgTop2"].mean()
+        # Pre-compute field last-race average for recency floor check
+        _field_last_avg = None
+        if "LastFig" in figs_df.columns:
+            _last_figs_valid = figs_df.loc[figs_df["LastFig"] > 0, "LastFig"]
+            if not _last_figs_valid.empty:
+                _field_last_avg = _last_figs_valid.mean()
+
         for _, fig_row in figs_df.iterrows():
             horse_name = fig_row["Horse"]
             horse_fig = fig_row["AvgTop2"]
             # Normalize to race average: positive means faster than average
-            speed_map[horse_name] = (horse_fig - race_avg_fig) * MODEL_CONFIG[
-                "speed_fig_weight"
-            ]
+            raw_speed = (horse_fig - race_avg_fig) * MODEL_CONFIG["speed_fig_weight"]
+
+            # ═══════════════════════════════════════════════════════════
+            # SPEED RECENCY FLOOR (Feb 13, 2026 — TAM R7 Post-Race Fix)
+            # If a horse's last figure is >25 below the field's last-race
+            # average, its speed component is hard-capped. Prevents stale
+            # avg_top2 from propping up severely declining horses.
+            # Example: Island Spirit avg_top2=75 but last_fig=48 → cap.
+            # ═══════════════════════════════════════════════════════════
+            if _field_last_avg is not None and "LastFig" in fig_row:
+                _horse_last = fig_row.get("LastFig", 0)
+                if _horse_last > 0:
+                    _recency_deficit = _field_last_avg - _horse_last
+                    if _recency_deficit > 25:
+                        # Severe recent collapse → hard cap at -1.5
+                        raw_speed = min(raw_speed, -1.5)
+                    elif _recency_deficit > 18:
+                        # Significant decline → moderate cap at -0.8
+                        raw_speed = min(raw_speed, -0.8)
+
+            speed_map[horse_name] = raw_speed
 
     rows = []
     _race_class_shown = False  # BUG 7 FIX: show Race Classification expander only once
@@ -7373,11 +7444,28 @@ def compute_bias_ratings(
         # JWB BUG: Last 2 races on DIRT (6.5f, 5f), today's race TURF 1 mile
         # System gave 69.1% win prob — should have been heavily penalized for
         # Dirt→Turf switch with zero turf experience.
+        # ENHANCED (Feb 13, 2026): Now passes pedigree data for mud/turf pedigree integration
         try:
             if not horse_race_history:
                 horse_race_history = parse_race_history_from_block(_horse_block)
             if horse_race_history:
-                surface_result = detect_surface_switch(horse_race_history, surface_type)
+                # Build pedigree data dict for surface switch evaluation
+                _ped = pedigree_per_horse.get(name, {}) if pedigree_per_horse else {}
+                _ped_data = {}
+                if _ped:
+                    _mud = _ped.get("sire_mud_pct", np.nan)
+                    if pd.notna(_mud):
+                        _ped_data["sire_mud_pct"] = float(_mud)
+                    _off = _ped.get("pedigree_off", np.nan)
+                    if pd.notna(_off):
+                        _ped_data["pedigree_off"] = float(_off)
+                    _turf = _ped.get("pedigree_turf", np.nan)
+                    if pd.notna(_turf):
+                        _ped_data["pedigree_turf"] = float(_turf)
+
+                surface_result = detect_surface_switch(
+                    horse_race_history, surface_type, _ped_data or None
+                )
                 surface_bonus = surface_result.get("bonus", 0.0)
                 tier2_bonus += surface_bonus
         except BaseException:

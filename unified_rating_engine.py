@@ -204,6 +204,11 @@ class UnifiedRatingEngine:
         "use_cform_speed_override": True,  # Override low C-Form when recent speed is hot
         "use_lone_presser_adjustment": True,  # Lone P in hot pace = value
         "use_track_bias_post_alignment": True,  # Align post bias with actual track data
+        # NEW: Feb 13, 2026 Post-Race Improvements (TAM R7)
+        "use_speed_recency_floor": True,  # Cap speed for severe recent decline
+        "use_surface_switch_pedigree": True,  # Pedigree-integrated surface switch
+        "use_prime_power_crosscheck": True,  # PP as rating validation layer
+        "use_extreme_bias_amplifier": True,  # Amplify extreme track bias IVs
     }
 
     # Form decay constant (0.01 = 69-day half-life)
@@ -1060,6 +1065,57 @@ class UnifiedRatingEngine:
             conf_retention = 0.7 + 0.3 * (qsp / 8.0)  # Range: 0.7 to 1.0
             parsing_conf = parsing_conf * conf_retention
 
+        # ═══════════════════════════════════════════════════════════════
+        # PRIME POWER CROSSCHECK (Feb 13, 2026 — TAM R7 Post-Race Fix)
+        # ═══════════════════════════════════════════════════════════════
+        # Double Echo won TAM R7 with highest Prime Power (112.5) by 3 pts
+        # but unified engine ranked him 4th because PP was completely ignored.
+        # Prime Power is a BRISNET proprietary composite metric — not a
+        # replacement for our model, but a powerful crosscheck.
+        #
+        # Strategy: Use PP as a blended factor (like app.py does) on Dirt,
+        # DISABLED for Turf (PP unreliable on turf). The PP crosscheck works
+        # differently from app.py — it adjusts the existing rating rather
+        # than replacing weighted components.
+        #
+        # Weight: 15% PP influence on Dirt sprints, 10% Dirt routes, 0% Turf
+        if (
+            self.FEATURE_FLAGS.get("use_prime_power_crosscheck", True)
+            and hasattr(horse, "prime_power")
+            and horse.prime_power
+            and horse.prime_power > 0
+        ):
+            pp_raw = horse.prime_power
+            # Normalize Prime Power (typical range: 110-130)
+            pp_normalized = float(np.clip((pp_raw - 110) / 20, -0.5, 2.0))
+            pp_score = pp_normalized * 10  # Scale to match rating range
+
+            # Determine PP weight based on surface
+            surface_lower = surface_type.lower() if surface_type else "dirt"
+            if "turf" in surface_lower:
+                pp_weight = 0.0  # PP unreliable on turf
+            else:
+                # Dirt: check sprint vs route
+                try:
+                    dist_val = self._parse_distance(distance_txt)
+                except Exception:
+                    dist_val = 6.0
+                if dist_val <= 7.0:
+                    pp_weight = 0.15  # Dirt sprints: 15% PP influence
+                else:
+                    pp_weight = 0.10  # Dirt routes: 10% PP influence
+
+            if pp_weight > 0:
+                # Blend: (1 - pp_weight) × model_rating + pp_weight × pp_score
+                pre_pp_rating = final_rating
+                final_rating = (1 - pp_weight) * final_rating + pp_weight * pp_score
+                if abs(final_rating - pre_pp_rating) > 0.3:
+                    logger.info(
+                        f"  → Prime Power Crosscheck: {horse.name} PP={pp_raw:.1f} "
+                        f"(norm={pp_normalized:.2f}), weight={pp_weight:.0%}, "
+                        f"rating {pre_pp_rating:.2f}→{final_rating:.2f}"
+                    )
+
         # CRITICAL FIX (Feb 10, 2026): Hard cap on final rating to prevent runaway values
         # A rating of 17.69 (TuP R3 JWB) on a 12/1 shot in $8,500 claiming is absurd.
         # Typical valid range: -3 to 15. Anything beyond suggests bonus stacking.
@@ -1208,6 +1264,12 @@ class UnifiedRatingEngine:
         # creating an IV² effect (e.g., P with IV=1.44 got 2.07x vs E/P with IV=0.63
         # getting 0.40x = 5.2x ratio). Now apply IV to value only, use sqrt(IV) for weight
         # to create a balanced IV^1.5 total effect instead of IV².
+        #
+        # ENHANCEMENT (Feb 13, 2026): When meet bias signal is extreme (IV>1.30
+        # or IV<0.70), apply additional bonus/penalty to better differentiate horses.
+        # TAM R7 lesson: Breath Deeply (P-type) had IV=1.33 at meet = dominant
+        # bias signal, but model only rated him 5th because the IV effect was
+        # insufficient to differentiate from horses with IV near 1.0.
         if horse.track_bias_run_style_iv is not None:
             iv = horse.track_bias_run_style_iv
             # IV acts as a multiplier on the style component
@@ -1216,6 +1278,29 @@ class UnifiedRatingEngine:
             # Weight adjustment uses sqrt(IV) to avoid double-dip
             # Total effect: value*IV × weight*sqrt(IV) = IV^1.5 (reasonable amplification)
             adjusted_weights["style"] = weights["style"] * np.sqrt(iv)
+
+            # EXTREME BIAS AMPLIFIER (Feb 13, 2026)
+            # When the meet bias strongly favors or disfavors this style,
+            # add an additional flat bonus/penalty to the style value.
+            # This ensures the ranking properly separates horses that benefit
+            # from a strong bias from those that don't.
+            if self.FEATURE_FLAGS.get("use_extreme_bias_amplifier", True):
+                if iv >= 1.30:
+                    # Dominant bias in horse's favor — extra bonus
+                    extreme_bonus = (iv - 1.0) * 0.5  # e.g., IV=1.33 → +0.165
+                    adjusted_cstyle += extreme_bonus
+                    logger.info(
+                        f"  → EXTREME BIAS BOOST: {horse.name} IV={iv:.2f} "
+                        f"→ style extra +{extreme_bonus:.2f}"
+                    )
+                elif iv <= 0.70:
+                    # Dominant bias against horse's style — extra penalty
+                    extreme_penalty = (1.0 - iv) * 0.5  # e.g., IV=0.62 → -0.19
+                    adjusted_cstyle -= extreme_penalty
+                    logger.info(
+                        f"  → EXTREME BIAS PENALTY: {horse.name} IV={iv:.2f} "
+                        f"→ style extra -{extreme_penalty:.2f}"
+                    )
 
             logger.debug(
                 f"  → Track Bias Run Style IV={iv:.2f}: style {cstyle:.2f}→{adjusted_cstyle:.2f}, weight {weights['style']:.2f}→{adjusted_weights['style']:.2f}"
@@ -1813,6 +1898,13 @@ class UnifiedRatingEngine:
         CALIBRATION FIX (Feb 7, 2026): Increased multiplier from 0.05 to 0.08
         to better differentiate horses with significant speed advantages.
         Also added last_fig consideration alongside avg_top2.
+
+        SPEED RECENCY FLOOR (Feb 13, 2026 — TAM R7 Post-Race Fix):
+        Island Spirit had avg_top2 of ~75 (stale) but last_fig of 48 (dead last).
+        The old code only computed a differential; it never hard-capped horses
+        whose most recent speed is catastrophically below the field.
+        Now: if last_fig is >25 below the field last-race average, apply a
+        hard ceiling of -1.5 on the speed component regardless of avg_top2.
         """
         if not horse.speed_figures or horse.avg_top2 == 0:
             return 0.0  # Neutral for first-timers
@@ -1834,6 +1926,43 @@ class UnifiedRatingEngine:
             last_avg = np.mean(last_race_figs) if last_race_figs else race_avg
             last_diff = (horse.last_fig - last_avg) * 0.08  # Equal weight to avg_top2
             differential += last_diff
+
+        # ═══════════════════════════════════════════════════════════════
+        # SPEED RECENCY FLOOR (Feb 13, 2026)
+        # TAM R7 lesson: Island Spirit avg_top2 ~75 but last_fig 48 (33 below avg).
+        # Model ranked him #1, he finished last.  If a horse's most recent
+        # figure is >25 below the field's last-race average, the horse is in
+        # severe recent decline and the speed score must be hard-capped.
+        # ═══════════════════════════════════════════════════════════════
+        if (
+            self.FEATURE_FLAGS.get("use_speed_recency_floor", True)
+            and horse.last_fig
+            and horse.last_fig > 0
+        ):
+            last_race_figs_all = [
+                h.last_fig for h in horses_in_race if h.last_fig and h.last_fig > 0
+            ]
+            field_last_avg = (
+                np.mean(last_race_figs_all) if last_race_figs_all else race_avg
+            )
+            recency_deficit = field_last_avg - horse.last_fig
+
+            if recency_deficit > 25:
+                # Severe recent form collapse — hard cap speed component
+                differential = min(differential, -1.5)
+                logger.warning(
+                    f"  ⚠ SPEED RECENCY FLOOR: {horse.name} last_fig={horse.last_fig} "
+                    f"vs field_avg={field_last_avg:.0f} (deficit={recency_deficit:.0f}). "
+                    f"Speed capped at -1.5"
+                )
+            elif recency_deficit > 18:
+                # Significant decline — moderate cap
+                differential = min(differential, -0.8)
+                logger.debug(
+                    f"  → Speed recency warning: {horse.name} last_fig={horse.last_fig} "
+                    f"vs field_avg={field_last_avg:.0f} (deficit={recency_deficit:.0f}). "
+                    f"Speed capped at -0.8"
+                )
 
         return float(np.clip(differential, -2.0, 2.0))
 
@@ -2031,7 +2160,14 @@ class UnifiedRatingEngine:
     def _calc_tier2_bonus(
         self, horse: HorseData, surface_type: str, distance_txt: str
     ) -> float:
-        """Advanced bonuses: Using ALL comprehensive parser data"""
+        """Advanced bonuses: Using ALL comprehensive parser data
+
+        ENHANCEMENT (Feb 13, 2026 — TAM R7 Post-Race Fix):
+        Added surface-switch detection with pedigree-integrated scoring.
+        Koctel War had 0 dirt sprint starts but finished 3rd — his sire had
+        17%Mud from 81 MudSts. Surface switch logic now uses sire_mud_pct
+        and pedigree_off to differentiate first-time surface switches.
+        """
         bonus: float = 0.0
 
         # SPI bonus
@@ -2058,6 +2194,16 @@ class UnifiedRatingEngine:
         # FIRST-TIME LASIX (using comprehensive data)
         if hasattr(horse, "first_lasix") and horse.first_lasix:
             bonus += 0.20  # First-time Lasix often positive
+
+        # ═══════════════════════════════════════════════════════════════
+        # SURFACE SWITCH DETECTION WITH PEDIGREE (Feb 13, 2026)
+        # Detect if horse is switching surfaces and adjust bonus using
+        # pedigree data (sire_mud_pct, pedigree_off) to differentiate
+        # between good and bad surface-switch candidates.
+        # ═══════════════════════════════════════════════════════════════
+        if self.FEATURE_FLAGS.get("use_surface_switch_pedigree", True):
+            surface_switch_bonus = self._calc_surface_switch_bonus(horse, surface_type)
+            bonus += surface_switch_bonus
 
         # SURFACE STATISTICS (using comprehensive data)
         if hasattr(horse, "surface_stats") and horse.surface_stats:
@@ -2096,6 +2242,98 @@ class UnifiedRatingEngine:
                 bonus += 0.10
 
         return round(bonus, 2)
+
+    def _calc_surface_switch_bonus(self, horse: HorseData, surface_type: str) -> float:
+        """
+        SURFACE SWITCH DETECTION WITH PEDIGREE INTEGRATION (Feb 13, 2026)
+
+        TAM R7 lesson: Koctel War had 0 dirt sprint starts but finished 3rd.
+        His sire had 17%Mud from 81 MudSts — the old code gave all zeros for
+        surface switch because it didn't check pedigree mud stats.
+
+        Logic:
+        1. Detect if horse is switching surfaces using race history
+        2. Base bonus/penalty for the switch type
+        3. Modify using pedigree data:
+           - sire_mud_pct: From "Sire Stats: XX%Mud" line
+           - pedigree_off: Off-track breeding rating (0-100)
+           - pedigree_turf: Turf breeding rating (0-100)
+        4. First-time surface + strong pedigree = reduced penalty / bonus
+
+        Returns: bonus ∈ [-0.25, +0.25]
+        """
+        if not horse.race_history:
+            return 0.0
+
+        today_is_dirt = surface_type.lower() in ["dirt", "fast", "muddy", "sloppy"]
+        today_is_turf = "turf" in surface_type.lower()
+
+        # Count surface experience from race history
+        dirt_count = sum(1 for r in horse.race_history if r.get("surface") == "Dirt")
+        turf_count = sum(1 for r in horse.race_history if r.get("surface") == "Turf")
+        last_surface = (
+            horse.race_history[0].get("surface", "Unknown")
+            if horse.race_history
+            else "Unknown"
+        )
+
+        switch_bonus = 0.0
+
+        # DIRT→TURF switch
+        if today_is_turf and last_surface == "Dirt":
+            if turf_count == 0:
+                switch_bonus = -0.20  # Never on turf = penalty
+                # Pedigree turf rating offset
+                if hasattr(horse, "pedigree_turf") and horse.pedigree_turf is not None:
+                    if horse.pedigree_turf >= 80:
+                        switch_bonus += 0.15  # Strong turf pedigree offsets
+                    elif horse.pedigree_turf >= 65:
+                        switch_bonus += 0.08
+            elif turf_count <= 1:
+                switch_bonus = -0.10
+            else:
+                switch_bonus = -0.05  # Has turf experience
+
+        # TURF→DIRT switch
+        elif today_is_dirt and last_surface == "Turf":
+            if dirt_count == 0:
+                # First time on dirt — check mud pedigree for bonus
+                switch_bonus = -0.05  # Base mild penalty for unknown
+                # Mud pedigree boost: strong mud sire = actually a positive angle
+                mud_pct = getattr(horse, "sire_mud_pct", None)
+                ped_off = getattr(horse, "pedigree_off", None)
+
+                if mud_pct is not None and mud_pct >= 25:
+                    # Strong mud sire — first time on dirt is a positive angle
+                    switch_bonus = 0.15
+                    logger.debug(
+                        f"  → Surface switch BOOST: {horse.name} Turf→Dirt first time, "
+                        f"sire_mud_pct={mud_pct:.0f}% → +0.15"
+                    )
+                elif mud_pct is not None and mud_pct >= 15:
+                    switch_bonus = 0.05  # Average mud pedigree
+                elif ped_off is not None and ped_off >= 75:
+                    switch_bonus = 0.10  # Strong off-track breeding
+                elif ped_off is not None and ped_off >= 60:
+                    switch_bonus = 0.03  # Decent off-track breeding
+            elif dirt_count >= 3:
+                switch_bonus = 0.05  # Dirt specialist returning
+
+        # SAME SURFACE consistency bonus
+        elif today_is_dirt and last_surface == "Dirt":
+            if dirt_count >= 5:
+                switch_bonus = 0.05  # Consistent dirt runner
+        elif today_is_turf and last_surface == "Turf":
+            if turf_count >= 5:
+                switch_bonus = 0.08  # Turf specialist reward
+
+        if switch_bonus != 0:
+            logger.debug(
+                f"  → Surface switch: {horse.name} {last_surface}→{surface_type} "
+                f"(dirt_exp={dirt_count}, turf_exp={turf_count}) bonus={switch_bonus:+.2f}"
+            )
+
+        return float(np.clip(switch_bonus, -0.25, 0.25))
 
     # ========================================================================
     # FEB 5, 2026 TRAINING SESSION IMPROVEMENTS
@@ -2634,12 +2872,15 @@ class UnifiedRatingEngine:
             adjustment = 4.0 × ((mud_pct - 50) / 50)
 
         Where:
-            mud_pct ∈ [0, 100] = percentage of mud runners in pedigree
+            mud_pct ∈ [0, 100] = percentage of mud runners in sire's progeny
             50 = neutral baseline
 
         Returns adjustment ∈ [-2.0, +2.0]
 
-        Complexity: O(1)
+        ENHANCEMENT (Feb 13, 2026 — TAM R7 Post-Race Fix):
+        Now uses horse.sire_mud_pct (parsed from "Sire Stats: AWD X.X XX%Mud")
+        and horse.pedigree_off (Off breeding rating) as data sources.
+        Previously defaulted to 50.0 (neutral no-op) for every horse.
         """
         if condition.lower() not in [
             "muddy",
@@ -2651,20 +2892,44 @@ class UnifiedRatingEngine:
         ]:
             return 0.0  # Fast track - no adjustment
 
-        # Get mud pedigree percentage (would come from comprehensive parser)
-        mud_pct = 50.0  # Default neutral (would extract from horse.pedigree data)
+        # Get mud pedigree percentage — try multiple sources
+        mud_pct = 50.0  # Default neutral
 
-        # Check if pedigree data available
-        if hasattr(horse, "pedigree") and isinstance(horse.pedigree, dict):
+        # Source 1: Directly parsed sire_mud_pct (from "Sire Stats: AWD X.X XX%Mud")
+        if hasattr(horse, "sire_mud_pct") and horse.sire_mud_pct is not None:
+            mud_pct = horse.sire_mud_pct
+        # Source 2: pedigree dict (legacy path)
+        elif hasattr(horse, "pedigree") and isinstance(horse.pedigree, dict):
             mud_pct = horse.pedigree.get("mud_pct", 50.0)
-        elif hasattr(horse, "mud_pct"):
+        elif hasattr(horse, "mud_pct") and horse.mud_pct is not None:
             mud_pct = horse.mud_pct
+
+        # Source 3: If mud_pct is still neutral, use pedigree_off rating as proxy
+        # pedigree_off is the Off-track breeding rating (0-100 scale)
+        # Convert to approximate mud_pct: Off rating 80+ => strong mud, 40- => weak
+        if (
+            mud_pct == 50.0
+            and hasattr(horse, "pedigree_off")
+            and horse.pedigree_off is not None
+        ):
+            # pedigree_off is typically 0-100; center at 60 (average)
+            mud_pct = float(np.clip(horse.pedigree_off, 0, 100))
+            # Scale so 60 (average off rating) maps to ~50% (neutral)
+            mud_pct = 50.0 + (mud_pct - 60.0) * 1.25  # 60→50, 80→75, 40→25
 
         if pd.isna(mud_pct):
             mud_pct = 50.0
 
+        mud_pct = float(np.clip(mud_pct, 0, 100))
+
         # Convert to adjustment [-2.0, +2.0]
         adjustment = 4.0 * ((mud_pct - 50.0) / 50.0)
+
+        if abs(adjustment) > 0.1:
+            logger.debug(
+                f"  → Off-track adjustment for {horse.name}: mud_pct={mud_pct:.0f}%, "
+                f"adj={adjustment:+.2f} (condition={condition})"
+            )
 
         return float(np.clip(adjustment, -2.0, 2.0))
 
