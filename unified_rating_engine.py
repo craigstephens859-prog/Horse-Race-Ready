@@ -445,7 +445,7 @@ class UnifiedRatingEngine:
         validation = self.parser.validate_parsed_data(horses)
         self.last_validation = validation
 
-        if validation["overall_confidence"] < 0.7:
+        if validation["overall_confidence"] < 0.50:
             logger.warning(
                 f"Low parsing confidence: {validation['overall_confidence']:.1%}"
             )
