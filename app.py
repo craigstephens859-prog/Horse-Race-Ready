@@ -11486,11 +11486,11 @@ else:
                             race_id,
                             horse_name,
                             actual_finish_position,
-                            predicted_rank,
+                            predicted_finish_position,
                             prediction_error,
-                            result_entered_timestamp
+                            timestamp
                         FROM gold_high_iq
-                        ORDER BY result_entered_timestamp DESC
+                        ORDER BY timestamp DESC
                         LIMIT 10
                     """)
 
