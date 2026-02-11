@@ -57,7 +57,7 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     # === ODDS ===
     ml_odds: str | None = None  # Raw string (e.g., "5/2", "3-1")
     ml_odds_decimal: float | None = None  # Decimal format (e.g., 3.5)
-    odds_confidence: float = 1.0
+    odds_confidence: float = 0.6
 
     # === CONNECTIONS ===
     jockey: str = "Unknown"
@@ -73,19 +73,19 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
     avg_top2: float = 0.0  # Average of best 2 figures
     peak_fig: int = 0  # Best figure
     last_fig: int = 0  # Most recent figure
-    speed_confidence: float = 0.5
+    speed_confidence: float = 0.8
 
     # === FORM CYCLE ===
     days_since_last: int | None = None
     last_race_date: str | None = None
     recent_finishes: list[int] = field(default_factory=list)  # Last 3-5 finishes
-    form_confidence: float = 0.5
+    form_confidence: float = 0.8
 
     # === CLASS ===
     recent_purses: list[int] = field(default_factory=list)
     race_types: list[str] = field(default_factory=list)  # Clm, Mdn, Alw, Stk, etc.
     avg_purse: float = 0.0
-    class_confidence: float = 0.5
+    class_confidence: float = 0.7
 
     # === PEDIGREE ===
     sire: str = "Unknown"
