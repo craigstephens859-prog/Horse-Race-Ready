@@ -9385,8 +9385,8 @@ def build_betting_strategy(
         contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
 
     # --- 5. Build Simplified Blueprint Section ---
-    blueprint_report = "### Betting Strategy Blueprints (Scale Base Bets to Budget: Max ~$100 Recommended)\n"
-    blueprint_report += "_Costs are examples using minimum base bets ($0.50 Tri, $0.10 Super/SH5). Adjust base amount ($0.10, $0.50, $1.00+) per ticket to fit your total budget for this race._\n"
+    blueprint_report = "### Betting Strategy Blueprints (Scale Base Bets to Budget: Max ~$50 Recommended)\n"
+    blueprint_report += "_Costs are examples using minimum base bets ($1.00 Exacta, $0.50 Tri, $0.10 Super, $1.00 SH5). Adjust base amount to fit your total budget for this race._\n"
 
     # --- Field Size Logic ---
     if field_size <= 6:
@@ -9429,7 +9429,7 @@ def build_betting_strategy(
         blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B / C` ({nA}x{nB}x{nC}) - {get_min_cost_str(0.50, nA, nB, nC)}\n"
         blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B / C / D` ({nA}x{nB}x{nC}x{nD}) - {get_min_cost_str(0.10, nA, nB, nC, nD)}\n"
         if field_size >= 7:  # Only suggest SH5 if 7+ runners
-            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B / C / D / ALL` ({nA}x{nB}x{nC}x{nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB, nC, nD, nAll)}\n"
+            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B / C / D / ALL` ({nA}x{nB}x{nC}x{nD}x{nAll}) - {get_min_cost_str(1.00, nA, nB, nC, nD, nAll)}\n"
 
         # --- Value-Hunter Blueprint ---
         blueprint_report += "\n#### Value-Hunter Profile Plan\n"
@@ -9442,7 +9442,7 @@ def build_betting_strategy(
         blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B,C / B,C,D` ({nA}x{nB + nC}x{nB + nC + nD}) - {get_min_cost_str(0.50, nA, nB + nC, nB + nC + nD)}\n"
         blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B,C / B,C,D / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll)}\n"
         if field_size >= 7:  # Only suggest SH5 if 7+ runners
-            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll, nAll)}\n"
+            blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}x{nAll}) - {get_min_cost_str(1.00, nA, nB + nC, nB + nC + nD, nAll, nAll)}\n"
 
     detailed_breakdown = build_component_breakdown(
         primary_df, name_to_post, name_to_odds, pp_text=pp_text
@@ -9584,8 +9584,8 @@ def build_betting_strategy(
 {blueprint_report}
 ---
 ### Bankroll & Strategy Notes
-* **Budget:** Decide your total wager amount for this race (e.g., $20, $50, up to ~$100 recommended max).
-* **Scale Base Bets:** Adjust the base bet amount ($0.10, $0.50, $1.00+) on the blueprint tickets to match your budget. Use an online wager calculator or your betting platform's tools to confirm costs.
+* **Budget:** Decide your total wager amount for this race (e.g., $20, $50 recommended max per bet type).
+* **Scale Base Bets:** Exacta $1.00, Trifecta $0.50–$1.00, Superfecta $0.10–$0.20, Super High-5 $1.00. Adjust to match your budget.
 * **Confidence:** Bet more confidently when A/B groups look strong. Reduce base bets or narrow the C/D groups in tickets if less confident.
 * **Small Fields (<=6):** Focus on Win/Exacta/Trifecta as complex exotics pay less.
 * **Play SH5** mainly on mandatory payout days or when you have a very strong opinion & budget allows.
