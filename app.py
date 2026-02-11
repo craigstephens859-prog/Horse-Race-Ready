@@ -10588,12 +10588,18 @@ else:
                                                     if not predicted_winner_row.empty
                                                     else "Unknown"
                                                 )
-                                                actual_winner_name = horse_names_dict.get(
-                                                    finish_order[0], f"Horse #{finish_order[0]}"
+                                                actual_winner_name = (
+                                                    horse_names_dict.get(
+                                                        finish_order[0],
+                                                        f"Horse #{finish_order[0]}",
+                                                    )
                                                 )
 
                                                 # Show inline success with prediction accuracy
-                                                if predicted_winner == actual_winner_name:
+                                                if (
+                                                    predicted_winner
+                                                    == actual_winner_name
+                                                ):
                                                     st.success(
                                                         f"🎯 **Perfect Prediction!** Winner: {actual_winner_name} | Results saved for {race_id}"
                                                     )
