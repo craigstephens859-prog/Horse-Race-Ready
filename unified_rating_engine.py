@@ -373,6 +373,91 @@ class UnifiedRatingEngine:
         },
     }
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # FTS (FIRST-TIME STARTER) PARAMETERS
+    # ═══════════════════════════════════════════════════════════════════════
+    # When a horse has zero previous racing history (MSW debut), adjust
+    # confidence in each rating component. Elite trainers get bonus multiplier.
+    FTS_PARAMS = {
+        "jockey_confidence": 0.7,  # Jockey stats less predictive for debuts
+        "trainer_confidence": 0.9,  # Trainer patterns are highly predictive
+        "speed_confidence": 0.4,  # No race history = minimal speed confidence
+        "form_confidence": 0.0,  # No form cycle exists yet
+        "class_confidence": 0.6,  # Purse/race type still somewhat predictive
+        "pedigree_confidence": 0.8,  # Pedigree is key predictor for FTS
+        "ml_odds_confidence": 0.8,  # Morning line reflects trainer/pedigree knowledge
+        "live_odds_confidence": 0.9,  # Live odds capture sharp money on connections
+        "base_multiplier": 0.75,  # Base FTS rating multiplier (75% of normal)
+        "elite_trainer_multiplier": 1.2,  # Boost for elite connections (75% * 1.2 = 90%)
+    }
+
+    # Elite trainers with proven FTS success rates (>25% MSW win rate)
+    ELITE_TRAINERS = {
+        "Wesley Ward",
+        "Todd Pletcher",
+        "Bob Baffert",
+        "Chad Brown",
+        "Steve Asmussen",
+        "Brad Cox",
+        "Mark Casse",
+        "Bill Mott",
+        "Graham Motion",
+        "Christophe Clement",
+    }
+
+    @staticmethod
+    def is_fts_in_msw(horse: HorseData, race_type: str) -> bool:
+        """
+        Detect if horse is a first-time starter in a maiden special weight race.
+
+        Args:
+            horse: Parsed horse data object
+            race_type: Race type string (e.g., 'MSW', 'MCL', 'ALW')
+
+        Returns:
+            True if horse has zero starts AND race is MSW
+        """
+        # Check career starts (various field names from different parsers)
+        starts = getattr(horse, "starts", None)
+        if starts is None:
+            starts = getattr(horse, "career_starts", None)
+        if starts is None:
+            # Check past_performances length
+            past_perfs = getattr(horse, "past_performances", [])
+            starts = len(past_perfs) if past_perfs else 0
+
+        # Convert to int safely
+        try:
+            starts = int(starts) if starts is not None else 0
+        except (ValueError, TypeError):
+            starts = 0
+
+        # Check if race is MSW
+        race_type_upper = str(race_type).upper()
+        is_msw = any(
+            pattern in race_type_upper
+            for pattern in ["MSW", "MAIDEN SPECIAL WEIGHT", "MD SP WT", "MDN SP WT"]
+        )
+
+        return starts == 0 and is_msw
+
+    @staticmethod
+    def is_elite_trainer(trainer_name: str) -> bool:
+        """
+        Check if trainer is in elite FTS success list (O(1) lookup).
+
+        Args:
+            trainer_name: Trainer name string
+
+        Returns:
+            True if trainer is in ELITE_TRAINERS set
+        """
+        if not trainer_name:
+            return False
+        # Normalize for comparison (handle extra spaces, case variations)
+        normalized = " ".join(str(trainer_name).strip().split())
+        return normalized in UnifiedRatingEngine.ELITE_TRAINERS
+
     def __init__(
         self, softmax_tau: float = 3.0, learned_weights: dict[str, float] | None = None
     ):
@@ -466,6 +551,26 @@ class UnifiedRatingEngine:
 
         # STEP 4: CALCULATE COMPREHENSIVE RATINGS
         logger.debug("STEP 4: Calculating comprehensive ratings")
+
+        # ═══════════════════════════════════════════════════════════════
+        # FTS DETECTION: Identify first-time starters in MSW races
+        # ═══════════════════════════════════════════════════════════════
+        fts_horses = set()  # Track FTS horses by name
+        elite_trainer_horses = set()  # Track horses with elite trainers
+
+        for name, horse in horses.items():
+            is_fts = self.is_fts_in_msw(horse, today_race_type)
+            is_elite = self.is_elite_trainer(horse.trainer)
+
+            if is_fts:
+                fts_horses.add(name)
+                logger.info(f"  → FTS detected: {name} (Trainer: {horse.trainer})")
+
+            if is_elite:
+                elite_trainer_horses.add(name)
+                if is_fts:
+                    logger.info(f"  → Elite trainer FTS: {name} with {horse.trainer}")
+
         rows = []
 
         for name, horse in horses.items():
@@ -478,6 +583,10 @@ class UnifiedRatingEngine:
                 )
             else:
                 angles_total = 0.0
+
+            # Check FTS status
+            is_fts = name in fts_horses
+            is_elite_trainer = name in elite_trainer_horses
 
             # Calculate all rating components
             components = self._calculate_rating_components(
@@ -492,6 +601,8 @@ class UnifiedRatingEngine:
                 angles_total=angles_total,
                 style_bias=style_bias,
                 post_bias=post_bias,
+                is_fts=is_fts,
+                is_elite_trainer=is_elite_trainer,
             )
 
             rows.append(
@@ -661,6 +772,8 @@ class UnifiedRatingEngine:
         angles_total: float,
         style_bias: list[str] | None,
         post_bias: list[str] | None,
+        is_fts: bool = False,
+        is_elite_trainer: bool = False,
     ) -> RatingComponents:
         """
         COMPREHENSIVE RATING CALCULATION WITH BAYESIAN UNCERTAINTY
@@ -858,6 +971,38 @@ class UnifiedRatingEngine:
         total_bonus = float(np.clip(total_bonus, -3.0, 3.5))
 
         final_rating = final_mean + total_bonus
+
+        # ═══════════════════════════════════════════════════════════════
+        # FTS (FIRST-TIME STARTER) ADJUSTMENT
+        # ═══════════════════════════════════════════════════════════════
+        # Apply conservative multiplier for debut horses in MSW races.
+        # Elite trainers get bonus multiplier (their FTS are more reliable).
+        if is_fts:
+            base_mult = self.FTS_PARAMS["base_multiplier"]  # 0.75
+            elite_mult = self.FTS_PARAMS["elite_trainer_multiplier"]  # 1.2
+
+            if is_elite_trainer:
+                fts_multiplier = base_mult * elite_mult  # 0.75 * 1.2 = 0.90
+                logger.info(
+                    f"  → FTS Elite Trainer Adjustment: {horse.name} "
+                    f"(Trainer: {horse.trainer}) rating × {fts_multiplier:.2f}"
+                )
+            else:
+                fts_multiplier = base_mult  # 0.75
+                logger.info(
+                    f"  → FTS Standard Adjustment: {horse.name} rating × {fts_multiplier:.2f}"
+                )
+
+            # Apply multiplier to final rating
+            final_rating = final_rating * fts_multiplier
+
+            # Also reduce confidence for FTS (less predictable)
+            speed_conf = self.FTS_PARAMS["speed_confidence"]  # 0.4
+            form_conf = self.FTS_PARAMS["form_confidence"]  # 0.0
+            avg_fts_conf = (speed_conf + form_conf) / 2  # 0.2
+            parsing_conf = parsing_conf * (
+                0.8 + 0.2 * avg_fts_conf
+            )  # Reduce confidence
 
         # CRITICAL FIX (Feb 10, 2026): Hard cap on final rating to prevent runaway values
         # A rating of 17.69 (TuP R3 JWB) on a 12/1 shot in $8,500 claiming is absurd.

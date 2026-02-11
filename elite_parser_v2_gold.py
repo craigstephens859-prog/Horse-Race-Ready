@@ -812,6 +812,18 @@ class GoldStandardBRISNETParser:
             horse.angles = angles
             horse.angle_count = len(angles)
             horse.angle_confidence = angle_conf
+
+            # Extract jockey/trainer ROI from angles
+            jt_roi_sum = 0.0
+            jt_roi_count = 0
+            for angle in angles:
+                cat = angle.get("category", "").lower()
+                if "jky" in cat or "trainer" in cat or "trn" in cat:
+                    jt_roi_sum += angle.get("roi", 0.0)
+                    jt_roi_count += 1
+            horse.jockey_trainer_roi = (
+                round(jt_roi_sum / max(1, jt_roi_count), 2) if jt_roi_count > 0 else 0.0
+            )
         except Exception as e:
             horse.errors.append(f"Angles parsing error: {str(e)}")
             logger.warning(f"Angles parsing failed for {name}: {e}")
@@ -825,6 +837,16 @@ class GoldStandardBRISNETParser:
             horse.days_since_work = days_since_work
             horse.last_work_speed = last_speed
             horse.workout_confidence = work_conf
+
+            # Check for bullet workouts in recent 60 days
+            if hasattr(horse, "workouts") and horse.workouts:
+                for workout in horse.workouts[:3]:  # Check last 3 workouts
+                    if (
+                        workout.get("bullet", False)
+                        and workout.get("days_ago", 999) <= 60
+                    ):
+                        horse.has_bullet_workout = True
+                        break
         except Exception as e:
             horse.errors.append(f"Workout parsing error: {str(e)}")
             logger.warning(f"Workout parsing failed for {name}: {e}")
@@ -958,6 +980,12 @@ class GoldStandardBRISNETParser:
                     horse.workout_pattern = "Steady"
         except Exception as e:
             horse.errors.append(f"Workout details parsing error: {str(e)}")
+
+        # FORM COMMENTS (\u00f1 bullet points from Brisnet)
+        try:
+            horse.form_comments = self._parse_form_comments(block)
+        except Exception as e:
+            horse.errors.append(f"Form comments parsing error: {str(e)}")
 
         # Calculate overall confidence
         horse.calculate_overall_confidence()
@@ -1479,6 +1507,26 @@ class GoldStandardBRISNETParser:
 
         confidence = 0.8 if count > 0 else 0.2
         return count, days_since, last_speed, confidence
+
+    def _parse_form_comments(self, block: str) -> list[str]:
+        """
+        Extract form comment bullets (ñ markers) from Brisnet PPs.
+
+        Example from "Mom Says":
+        ñ Finished 3rd vs similar in last race
+        ñ Early speed running style helps chances
+        ñ May improve at the shorter distance
+
+        Returns: List of comment strings (without ñ prefix)
+        """
+        comments = []
+        # Match lines starting with ñ (UTF-8 \xf1 or &#241;)
+        pattern = r"^[ñ\xf1]\s*(.+)$"
+        for line in block.split("\n"):
+            match = re.match(pattern, line.strip(), re.MULTILINE)
+            if match:
+                comments.append(match.group(1).strip())
+        return comments
 
     # ============ STRUCTURED RACE HISTORY (Feb 10, 2026) ============
 
