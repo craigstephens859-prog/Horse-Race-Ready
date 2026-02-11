@@ -3,7 +3,10 @@ services:
     name: horse-race-ready
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
+    # Health check — give the app more time to load (heavy ML deps)
+    healthCheckPath: /_stcore/health
+    initialDeployHook: ""
     # Persistent disk — keeps database across redeploys ($0.25/GB/month)
     # Remove this block if on free tier and using GitHub backup instead
     disk:
