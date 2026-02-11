@@ -10956,25 +10956,47 @@ else:
                         # ========== SIMPLIFIED TOP 4 ENTRY FLOW ==========
                         st.markdown("#### 🏆 Enter Actual Top 4 Finishers")
                         st.caption(
-                            "Enter program numbers separated by commas and press ENTER to save"
+                            "Enter program numbers separated by commas, then click Save Results"
                         )
 
-                        # Use st.form so pressing ENTER submits (saves) in one
-                        # step without Streamlit re-running and losing tab focus.
-                        form_key = f"results_form_{race_id}"
-                        with st.form(key=form_key):
-                            finish_input = st.text_input(
-                                "Finishing order (1st through 4th) - Press ENTER to save",
-                                placeholder="Example: 8,5,6,9",
-                                help="Type the program numbers in order from 1st to 4th, separated by commas",
+                        # --- widget keys scoped to this race ---
+                        _input_key = f"finish_input_{race_id}"
+                        _save_flag = f"pending_save_{race_id}"
+
+                        def _queue_save():
+                            """on_click callback: stash the raw input before the re-run."""
+                            raw = st.session_state.get(_input_key, "").strip()
+                            if raw:
+                                st.session_state[_save_flag] = raw
+                            else:
+                                st.session_state[_save_flag] = "__EMPTY__"
+
+                        st.text_input(
+                            "Finishing order (1st through 4th)",
+                            placeholder="Example: 8,5,6,9",
+                            help="Type the program numbers in order from 1st to 4th, separated by commas",
+                            key=_input_key,
+                        )
+
+                        st.button(
+                            "💾 Save Results",
+                            type="primary",
+                            key=f"save_btn_{race_id}",
+                            on_click=_queue_save,
+                        )
+
+                        # --- process pending save (set by the callback BEFORE this re-run) ---
+                        _pending_raw = st.session_state.pop(_save_flag, None)
+
+                        if _pending_raw == "__EMPTY__":
+                            st.warning(
+                                "⚠️ Please enter 4 program numbers separated by commas (e.g., 5,8,11,12)"
                             )
 
-                            submitted = st.form_submit_button(
-                                "💾 Save Results", type="primary"
-                            )
-
-                        # Process the input AFTER form submission
-                        if submitted and finish_input and finish_input.strip():
+                        elif _pending_raw and not st.session_state.get(
+                            f"race_completed_{race_id}"
+                        ):
+                            finish_input = _pending_raw
                             finish_order = []
 
                             try:
@@ -11336,10 +11358,6 @@ else:
                                 st.error(
                                     "❌ Invalid format - use numbers separated by commas (e.g., 8,5,6,9)"
                                 )
-                        elif submitted:
-                            st.warning(
-                                "⚠️ Please enter 4 program numbers separated by commas (e.g., 5,8,11,12)"
-                            )
 
                         st.markdown("---")
 
