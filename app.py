@@ -11553,6 +11553,12 @@ else:
                                                             f"GitHub backup note: {bk_err}"
                                                         )
 
+                                                    # Force immediate rerun so the form is
+                                                    # replaced by the confirmation message.
+                                                    # Without this, both form + success show
+                                                    # on the same render cycle.
+                                                    st.rerun()
+
                                                 else:
                                                     st.error(
                                                         "❌ Failed to save to database"
