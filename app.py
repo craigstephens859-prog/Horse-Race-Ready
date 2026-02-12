@@ -154,6 +154,7 @@ try:
     from auto_calibration_engine_v2 import (
         AutoCalibrationEngine,
         auto_calibrate_on_result_submission,
+        get_all_track_calibrations_summary,
         get_live_learned_weights,
     )
 
@@ -166,6 +167,10 @@ except ImportError as e:
     ADAPTIVE_LEARNING_AVAILABLE = False
     LEARNED_WEIGHTS = {}
     print(f"Adaptive learning not available: {e}")
+
+    def get_all_track_calibrations_summary(db_path=""):
+        return []
+
 
 # ===================== First-Time Starter (FTS) Parameters =====================
 # Maiden Special Weight (MSW) - Define FTS Parameters Dictionary
@@ -6812,8 +6817,19 @@ def compute_bias_ratings(
 
             if avg_confidence >= 0.15 and validation.get("horses_parsed", 0) > 0:
                 # High quality parse - use unified engine
+                # Load track-specific weights if available (falls back to global)
+                _track_weights = LEARNED_WEIGHTS
+                if ADAPTIVE_LEARNING_AVAILABLE and track_name:
+                    try:
+                        _track_weights = get_live_learned_weights(
+                            PERSISTENT_DB_PATH,
+                            track_code=track_name.upper(),
+                        )
+                    except Exception:
+                        pass  # Fall back to global weights
+
                 engine = UnifiedRatingEngine(
-                    softmax_tau=3.0, learned_weights=LEARNED_WEIGHTS
+                    softmax_tau=3.0, learned_weights=_track_weights
                 )
 
                 # Extract race metadata using elite parser's race header (most accurate)
@@ -11209,6 +11225,10 @@ else:
                                                             "running_style": h.get(
                                                                 "running_style", ""
                                                             ),
+                                                            "quirin_speed_pts": h.get(
+                                                                "quirin_speed_pts",
+                                                                h.get("quirin", 0),
+                                                            ),
                                                             "field_size": field_size,
                                                         }
                                                     )
@@ -11267,10 +11287,18 @@ else:
                                                         )
 
                                                     # AUTO-CALIBRATION v2: Learn from result with persistence
+                                                    # Includes TRACK-SPECIFIC calibration
                                                     try:
                                                         if ADAPTIVE_LEARNING_AVAILABLE:
+                                                            # Extract track code for per-track calibration
+                                                            _cal_track = (
+                                                                race_id.split("_")[0]
+                                                                if "_" in race_id
+                                                                else ""
+                                                            )
                                                             calibration_result = auto_calibrate_on_result_submission(
-                                                                gold_db.db_path
+                                                                gold_db.db_path,
+                                                                track_code=_cal_track,
                                                             )
                                                             if (
                                                                 calibration_result.get(
@@ -11292,9 +11320,52 @@ else:
                                                                     )
                                                                     * 100
                                                                 )
-                                                                st.info(
-                                                                    f"🧠 Model learned! Winner: {accuracy:.0f}% | Top-3: {top3_acc:.0f}%"
+                                                                # Track calibration info
+                                                                _tc = calibration_result.get(
+                                                                    "track_calibration",
+                                                                    {},
                                                                 )
+                                                                _tc_status = _tc.get(
+                                                                    "status", ""
+                                                                )
+                                                                if (
+                                                                    _tc_status
+                                                                    == "success"
+                                                                ):
+                                                                    _tc_w = (
+                                                                        _tc.get(
+                                                                            "winner_accuracy",
+                                                                            0,
+                                                                        )
+                                                                        * 100
+                                                                    )
+                                                                    _tc_t3 = (
+                                                                        _tc.get(
+                                                                            "top3_accuracy",
+                                                                            0,
+                                                                        )
+                                                                        * 100
+                                                                    )
+                                                                    _tc_races = _tc.get(
+                                                                        "races_analyzed",
+                                                                        0,
+                                                                    )
+                                                                    st.info(
+                                                                        f"🧠 Global: W={accuracy:.0f}% T3={top3_acc:.0f}% | "
+                                                                        f"🏇 {_cal_track}: W={_tc_w:.0f}% T3={_tc_t3:.0f}% ({_tc_races} races)"
+                                                                    )
+                                                                elif (
+                                                                    _tc_status
+                                                                    == "insufficient_data"
+                                                                ):
+                                                                    st.info(
+                                                                        f"🧠 Global: W={accuracy:.0f}% T3={top3_acc:.0f}% | "
+                                                                        f"⏳ {_cal_track}: building profile ({_tc.get('races_available', 0)}/2 races)"
+                                                                    )
+                                                                else:
+                                                                    st.info(
+                                                                        f"🧠 Model learned! Winner: {accuracy:.0f}% | Top-3: {top3_acc:.0f}%"
+                                                                    )
                                                                 # Refresh learned weights so next prediction uses updated values
                                                                 globals()[
                                                                     "LEARNED_WEIGHTS"
@@ -11822,6 +11893,114 @@ else:
 
                     except Exception as db_err:
                         st.warning(f"Could not load calibration history: {db_err}")
+
+                    # ═══════════════════════════════════════════════════════
+                    #  TRACK-SPECIFIC CALIBRATION PROFILES
+                    # ═══════════════════════════════════════════════════════
+                    st.markdown("---")
+                    st.markdown("#### 🏇 Track-Specific Calibration Profiles")
+                    st.caption(
+                        "Each track across America develops its own calibrated weights "
+                        "based on actual race results. As you save more results, each "
+                        "track profile becomes more accurate and intelligent."
+                    )
+
+                    try:
+                        track_cals = get_all_track_calibrations_summary(
+                            PERSISTENT_DB_PATH
+                        )
+
+                        if track_cals:
+                            # Show each track as an expander
+                            for tcal in track_cals:
+                                tc = tcal.get("track_code", "???")
+                                tc_races = tcal.get("races_trained_on", 0)
+                                tc_conf = tcal.get("avg_confidence", 0)
+                                tc_updated = tcal.get("last_updated", "")
+                                tc_weights = tcal.get("weights", {})
+
+                                # Confidence indicator
+                                if tc_conf >= 0.7:
+                                    conf_icon = "🟢"
+                                elif tc_conf >= 0.4:
+                                    conf_icon = "🟡"
+                                else:
+                                    conf_icon = "🔴"
+
+                                with st.expander(
+                                    f"{conf_icon} {tc} — {tc_races} races | "
+                                    f"Confidence: {tc_conf:.0%}",
+                                    expanded=False,
+                                ):
+                                    # Show track weights vs global
+                                    wt_cols = st.columns(6)
+                                    wt_names = [
+                                        "class",
+                                        "speed",
+                                        "form",
+                                        "pace",
+                                        "style",
+                                        "post",
+                                    ]
+                                    for wi, wn in enumerate(wt_names):
+                                        with wt_cols[wi]:
+                                            tw = tc_weights.get(wn, 0)
+                                            gw = db_learned_weights.get(wn, 0)
+                                            delta = round(tw - gw, 2)
+                                            st.metric(
+                                                wn.capitalize(),
+                                                f"{tw:.2f}",
+                                                delta=f"{delta:+.2f}"
+                                                if delta != 0
+                                                else None,
+                                                delta_color="normal",
+                                                help=f"Track weight vs global ({gw:.2f})",
+                                            )
+
+                                    # Show track pattern stats if available
+                                    if gold_db and hasattr(
+                                        gold_db, "get_all_track_summaries"
+                                    ):
+                                        try:
+                                            summaries = (
+                                                gold_db.get_all_track_summaries()
+                                            )
+                                            tc_summaries = [
+                                                s
+                                                for s in summaries
+                                                if s.get("track_code", "").upper() == tc
+                                            ]
+                                            if tc_summaries:
+                                                st.caption("📊 Track Pattern Data:")
+                                                for ts in tc_summaries:
+                                                    st.text(
+                                                        f"  {ts['surface']} {ts['distance_category']}: "
+                                                        f"{ts['races_analyzed']} races analyzed"
+                                                    )
+                                        except Exception:
+                                            pass
+
+                                    if tc_updated:
+                                        try:
+                                            from datetime import datetime as _dt
+
+                                            _upd = _dt.fromisoformat(tc_updated)
+                                            st.caption(
+                                                f"Last updated: {_upd.strftime('%m/%d/%Y %I:%M %p')}"
+                                            )
+                                        except Exception:
+                                            st.caption(f"Last updated: {tc_updated}")
+                        else:
+                            st.info(
+                                "📋 No track-specific calibrations yet. "
+                                "Submit results from multiple tracks to start building track profiles! "
+                                "Each track needs at least 2 completed races."
+                            )
+
+                    except Exception as track_cal_err:
+                        st.warning(
+                            f"Could not load track calibrations: {track_cal_err}"
+                        )
 
                 else:
                     # Fallback to v1 system

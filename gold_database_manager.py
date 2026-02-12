@@ -149,8 +149,10 @@ class GoldHighIQDatabase:
                     distance TEXT NOT NULL,
                     distance_furlongs REAL,
                     race_type TEXT,
+                    purse_amount REAL DEFAULT 0,
                     post_position INTEGER,
                     running_style TEXT,
+                    quirin_speed_pts INTEGER,
                     class_rating REAL,
                     best_beyer INTEGER,
                     last_beyer INTEGER,
@@ -189,6 +191,19 @@ class GoldHighIQDatabase:
                 cursor.execute(ddl)
             except Exception as tbl_err:
                 logger.debug(f"Track pattern table {tbl_name} skipped: {tbl_err}")
+
+        # ---------- migrate existing track_pattern_winners if needed -----
+        # Add columns that may not exist in older databases
+        for col_def in [
+            ("purse_amount", "REAL DEFAULT 0"),
+            ("quirin_speed_pts", "INTEGER"),
+        ]:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE track_pattern_winners ADD COLUMN {col_def[0]} {col_def[1]}"
+                )
+            except Exception:
+                pass  # Column already exists
 
         # ---------- guarantee the v_pending_races view -------------------
         try:
@@ -926,7 +941,8 @@ class GoldHighIQDatabase:
 
             # Get race metadata
             cursor.execute(
-                "SELECT track_code, surface, distance, race_type, race_date, field_size "
+                "SELECT track_code, surface, distance, race_type, race_date, "
+                "field_size, purse "
                 "FROM races_analyzed WHERE race_id = ?",
                 (race_id,),
             )
@@ -938,7 +954,15 @@ class GoldHighIQDatabase:
                 conn.close()
                 return False
 
-            track_code, surface, distance, race_type, race_date, field_size = race_row
+            (
+                track_code,
+                surface,
+                distance,
+                race_type,
+                race_date,
+                field_size,
+                purse_amount,
+            ) = race_row
             furlongs = self._distance_to_furlongs(distance)
 
             # Load horse data from horses_analyzed
@@ -983,14 +1007,15 @@ class GoldHighIQDatabase:
                     """
                     INSERT INTO track_pattern_winners
                     (race_id, track_code, surface, distance, distance_furlongs,
-                     race_type, post_position, running_style, class_rating,
+                     race_type, purse_amount, post_position, running_style,
+                     quirin_speed_pts, class_rating,
                      best_beyer, last_beyer, avg_beyer_3, days_since_last,
                      prime_power, morning_line_odds, predicted_rank,
                      actual_finish, horse_name, field_size, workout_pattern,
                      form_decay_score, pace_esp_score, jockey, trainer,
                      race_date, timestamp)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         race_id,
@@ -999,8 +1024,10 @@ class GoldHighIQDatabase:
                         distance or "6F",
                         furlongs,
                         race_type or "UNK",
+                        float(purse_amount or 0),
                         int(_val(2, "post_position", 0) or 0),
                         _val(3, "running_style", "P"),
+                        int(ui_h.get("quirin_speed_pts", 0) or 0),
                         float(_val(4, "class_rating", 0) or 0),
                         int(_val(5, "best_beyer", 0) or 0),
                         int(_val(6, "last_beyer", 0) or 0),
