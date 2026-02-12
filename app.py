@@ -7967,10 +7967,8 @@ def compute_bias_ratings(
                 purse_amount = race_metadata.get("purse_amount", 0)
 
                 # Map to quality tier
-                if (
-                    race_type_clean == "stakes_graded"
-                    or (race_type_clean == "stakes"
-                    and purse_amount >= 200000)
+                if race_type_clean == "stakes_graded" or (
+                    race_type_clean == "stakes" and purse_amount >= 200000
                 ):
                     race_quality = "elite"
                 elif race_type_clean in ["allowance", "allowance_optional"]:
