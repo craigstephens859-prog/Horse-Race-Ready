@@ -6799,6 +6799,7 @@ def compute_bias_ratings(
         return pd.DataFrame(columns=cols)
 
     # ===== ULTRATHINK V2: Try unified engine first if available =====
+    _ml_odds_lookup = {}  # Preserved for ML Odds Reality Guard
     use_unified_engine = False
     if (
         UNIFIED_ENGINE_AVAILABLE
@@ -7000,13 +7001,23 @@ def compute_bias_ratings(
                                 )
                             )
                             if is_bad_rating:
-                                # Fallback: Use ML odds to generate a baseline rating
-                                # Lower odds = better horse = higher rating
+                                # ═══════════════════════════════════════════════════════
+                                # PP-ENHANCED FALLBACK (CT R5 Fix — Feb 11, 2026)
+                                # Old: Pure ML fallback gave Wiley Willard (PP 113.1,
+                                # 2/1 fav) a rating of 1.81 → ranked DEAD LAST.
+                                # New: When Prime Power is available, use it as the
+                                # primary rating signal (70% PP, 30% ML) to produce
+                                # competitive ratings that reflect actual ability.
+                                # ═══════════════════════════════════════════════════════
                                 horse_name = row.get("Horse", "")
                                 ml_val = None
+                                pp_val = 0.0
                                 for _, ff_row in df_styles.iterrows():
                                     if ff_row.get("Horse") == horse_name:
                                         ml_val = ff_row.get("ML", "")
+                                        pp_val = safe_float(
+                                            ff_row.get("Prime Power", 0.0), 0.0
+                                        )
                                         break
                                 try:
                                     ml_dec = (
@@ -7014,10 +7025,16 @@ def compute_bias_ratings(
                                     )
                                 except Exception:
                                     ml_dec = 20.0
-                                # Convert: 5/2 (3.5 decimal) → rating ~2.5, 30/1 (31.0) → rating ~-1.0
-                                fallback_rating = round(
-                                    3.0 - np.log(max(ml_dec, 1.1)), 2
-                                )
+                                ml_base = 3.0 - np.log(max(ml_dec, 1.1))
+                                if pp_val > 0:
+                                    # PP-enhanced: maps PP to competitive rating range
+                                    # PP 100→0, 105→2.75, 110→5.5, 115→8.25
+                                    pp_base = max(0, (pp_val - 100)) * 0.55
+                                    fallback_rating = round(
+                                        0.70 * pp_base + 0.30 * ml_base, 2
+                                    )
+                                else:
+                                    fallback_rating = round(ml_base, 2)
                                 unified_ratings.at[idx, "R"] = fallback_rating
                                 unified_ratings.at[idx, "Arace"] = fallback_rating
                                 # Zero out component columns so they display as 0.00 not None
@@ -7036,7 +7053,8 @@ def compute_bias_ratings(
                                     ):
                                         unified_ratings.at[idx, col] = 0.0
                                 logger.info(
-                                    f"  → Fallback rating for {horse_name}: {fallback_rating} (ML={ml_val})"
+                                    f"  → Fallback rating for {horse_name}: {fallback_rating} "
+                                    f"(PP={pp_val}, ML={ml_val})"
                                 )
 
                         # ═══════════════════════════════════════════════════════
@@ -7068,6 +7086,7 @@ def compute_bias_ratings(
                                 post_val = ""
                                 style_val = "NA"
                                 quirin_val = 0.0
+                                pp_val = 0.0
                                 for _, ff_row in df_styles.iterrows():
                                     if ff_row.get("Horse") == mh:
                                         ml_val = ff_row.get("ML", "")
@@ -7078,6 +7097,9 @@ def compute_bias_ratings(
                                             )
                                         )
                                         quirin_val = ff_row.get("Quirin", 0.0)
+                                        pp_val = safe_float(
+                                            ff_row.get("Prime Power", 0.0), 0.0
+                                        )
                                         break
                                 try:
                                     ml_dec = (
@@ -7085,9 +7107,14 @@ def compute_bias_ratings(
                                     )
                                 except Exception:
                                     ml_dec = 20.0
-                                fallback_rating = round(
-                                    3.0 - np.log(max(ml_dec, 1.1)), 2
-                                )
+                                ml_base = 3.0 - np.log(max(ml_dec, 1.1))
+                                if pp_val > 0:
+                                    pp_base = max(0, (pp_val - 100)) * 0.55
+                                    fallback_rating = round(
+                                        0.70 * pp_base + 0.30 * ml_base, 2
+                                    )
+                                else:
+                                    fallback_rating = round(ml_base, 2)
                                 a_track = _get_track_bias_delta(
                                     track_name,
                                     surface_type,
@@ -7129,6 +7156,15 @@ def compute_bias_ratings(
                             st.caption(
                                 f"ℹ️ {len(missing_horses)} horse(s) added via ML-odds fallback (not in PP text)"
                             )
+
+                        # ═══════════════════════════════════════════════════════
+                        # Preserve ML odds for Reality Guard (before overwriting)
+                        # ═══════════════════════════════════════════════════════
+                        if "ML" in df_styles.columns:
+                            for _, _ml_row in df_styles.iterrows():
+                                _ml_odds_lookup[str(_ml_row.get("Horse", ""))] = (
+                                    _ml_row.get("ML", "")
+                                )
 
                         # Continue to apply enhancements instead of returning early
                         df_styles = unified_ratings.copy()
@@ -7182,6 +7218,54 @@ def compute_bias_ratings(
                         old_r = float(row.get("R", 0.0))
                         df_styles.at[idx, "R"] = round(old_r + pace_bonus, 2)
                         df_styles.at[idx, "Arace"] = df_styles.at[idx, "R"]
+
+        # ═══════════════════════════════════════════════════════════════
+        # ML ODDS REALITY GUARD (CT R5 Fix — Feb 11, 2026)
+        # ═══════════════════════════════════════════════════════════════
+        # CT R5 failures: Noballstwostrikes (29/1) rated #2 at 8.19,
+        # Cedar Runs Fiber (30/1) rated #3 at 8.14 — both missed top 4.
+        # Meanwhile Wiley Willard (2/1 FAVORITE) was ranked LAST.
+        #
+        # Rules:
+        #   Longshot (ML > 12/1): Rating capped at field median
+        #   Favorite (ML ≤ 5/2): Rating floored at field_avg - 1.5
+        # ═══════════════════════════════════════════════════════════════
+        if _ml_odds_lookup and "R" in df_styles.columns:
+            all_r_vals = [
+                float(row.get("R", 0.0))
+                for _, row in df_styles.iterrows()
+                if pd.notna(row.get("R"))
+            ]
+            if len(all_r_vals) >= 3:
+                field_median = float(np.median(all_r_vals))
+                field_avg = float(np.mean(all_r_vals))
+                for idx, row in df_styles.iterrows():
+                    horse_name = str(row.get("Horse", ""))
+                    ml_str = _ml_odds_lookup.get(horse_name, "")
+                    try:
+                        ml_dec = odds_to_decimal(str(ml_str)) if ml_str else 6.0
+                    except Exception:
+                        ml_dec = 6.0
+                    r_val = float(row.get("R", 0.0))
+
+                    # LONGSHOT CAP: >12/1 horses can't rate above field median
+                    if ml_dec > 13.0 and r_val > field_median:
+                        capped = round(field_median, 2)
+                        df_styles.at[idx, "R"] = capped
+                        df_styles.at[idx, "Arace"] = capped
+                        logger.info(
+                            f"  → ML Guard: {horse_name} (ML={ml_str}) "
+                            f"capped {r_val:.2f}→{capped:.2f}"
+                        )
+                    # FAVORITE FLOOR: ≤5/2 horses can't rate below avg - 1.5
+                    elif ml_dec <= 3.5 and r_val < field_avg - 1.5:
+                        floored = round(field_avg - 1.5, 2)
+                        df_styles.at[idx, "R"] = floored
+                        df_styles.at[idx, "Arace"] = floored
+                        logger.info(
+                            f"  → ML Guard: {horse_name} (ML={ml_str}) "
+                            f"floored {r_val:.2f}→{floored:.2f}"
+                        )
 
         return df_styles
 
