@@ -4195,6 +4195,8 @@ if reset_clicked:
     # Clear Classic Report from previous race
     st.session_state.pop("classic_report_generated", None)
     st.session_state.pop("classic_report", None)
+    # FIX (Feb 11, 2026): Clear stale race_num so next parse detects fresh value
+    st.session_state.pop("race_num", None)
     _safe_rerun()
 
 if parse_clicked:
@@ -4222,6 +4224,13 @@ if parse_clicked:
             # Clear Classic Report from previous race
             st.session_state.pop("classic_report_generated", None)
             st.session_state.pop("classic_report", None)
+            # FIX (Feb 11, 2026): Detect race number from fresh PP text and
+            # force-set session state so the widget picks up the correct value
+            _fresh_race_num = parse_brisnet_race_header(text_now).get(
+                "race_number"
+            ) or detect_race_number(text_now)
+            if _fresh_race_num:
+                st.session_state["race_num"] = int(_fresh_race_num)
         _safe_rerun()
 
 if not st.session_state["parsed"]:
@@ -4287,6 +4296,9 @@ if "race_num" not in st.session_state:
     st.session_state["race_num"] = 1
 auto_race_num = header_info.get("race_number") or detect_race_number(pp_text)
 default_race_num = int(auto_race_num) if auto_race_num else st.session_state["race_num"]
+# FIX (Feb 11, 2026): Force-set session state BEFORE widget render so Streamlit
+# uses the freshly detected race number instead of stale widget state from a prior race.
+st.session_state["race_num"] = default_race_num
 # CRITICAL FIX: Increase max_value to 20 (some tracks have 16+ races)
 race_num = st.number_input(
     "Race Number:", min_value=1, max_value=20, step=1, value=default_race_num
