@@ -341,11 +341,13 @@ class GoldStandardBRISNETParser:
 
     # PEDIGREE
     PEDIGREE_PATTERNS = {
+        # FIXED (Feb 11, 2026): BRISNET format is "AWD 7.0 15%Mud 563MudSts 1.08spi"
+        # Old pattern expected TWO %values but there's only ONE. Fixed to match actual format.
         "sire_stats": re.compile(
-            r"(?mi)Sire\s*Stats?:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi"
+            r"(?mi)Sire\s*Stats?:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%Mud\s+(\d+)MudSts\s+(\d+(?:\.\d+)?)\s*spi"
         ),
         "damsire_stats": re.compile(
-            r"(?mi)Dam\'?s?\s*Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+.*?(\d+(?:\.\d+)?)\s*spi"
+            r"(?mi)Dam'?s?\s*Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%Mud\s+(\d+)MudSts\s+(\d+(?:\.\d+)?)\s*spi"
         ),
         "dam_stats": re.compile(r"(?mi)Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%"),
         "sire_name": re.compile(r"(?mi)Sire\s*:\s*([^\(]+)"),
@@ -1191,6 +1193,102 @@ class GoldStandardBRISNETParser:
 
         return "Unknown", 0.0, 0.0
 
+    # ============ BRISNET RUNNING LINE COLUMN EXTRACTION (Feb 11, 2026) ============
+
+    def _extract_speed_and_finish_from_line(
+        self, line: str
+    ) -> tuple[int | None, int | None]:
+        """
+        PERMANENT FIX: Extract SPD and FIN from a BRISNET running line using the
+        '/' separator as an anchor.
+
+        BRISNET column layout after '/':
+            LP [1c 2c] SPD PP ST 1C 2C STR FIN JOCKEY ODDS ...
+
+        The '/' divides E2 from LP and only appears once per race line.
+        After LP, pace comparisons (signed or 0) may appear, then SPD.
+        FIN is always 6 positions after SPD in the token sequence.
+
+        Returns: (speed_figure, finish_position) — either can be None
+        """
+        slash_pos = line.find("/")
+        if slash_pos < 0:
+            return None, None
+
+        after = line[slash_pos + 1 :].strip()
+        tokens = after.split()
+
+        if len(tokens) < 4:
+            return None, None
+
+        idx = 0
+
+        # Token 0 should be LP (positive 2-3 digit number)
+        # If it's negative or not a number, LP may be missing — start at 0
+        try:
+            lp_val = int(tokens[0])
+            if 20 <= lp_val <= 130:
+                idx = 1  # Skip LP
+        except ValueError:
+            pass
+
+        # Skip pace comparison values (signed numbers: +N, -N, or bare 0)
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if tok.startswith("+") or tok.startswith("-"):
+                idx += 1
+            elif tok == "0":
+                # '0' could be a pace comp or the start of post-SPD data
+                # Check: if next token is also signed/zero or a 2-3 digit number
+                # (which would be SPD), then this 0 is a pace comp
+                next_tok = tokens[idx + 1] if idx + 1 < len(tokens) else None
+                if next_tok and (
+                    next_tok.startswith("+")
+                    or next_tok.startswith("-")
+                    or next_tok == "0"
+                ):
+                    idx += 1
+                elif next_tok:
+                    try:
+                        nv = int(next_tok)
+                        if 20 <= nv <= 130:
+                            idx += 1  # This 0 is a pace comp, next is SPD
+                        else:
+                            break
+                    except ValueError:
+                        break
+                else:
+                    break
+            else:
+                break
+
+        # idx should now be at SPD
+        spd = None
+        if idx < len(tokens):
+            try:
+                candidate = int(tokens[idx])
+                if 20 <= candidate <= 130:
+                    spd = candidate
+            except ValueError:
+                pass
+
+        # FIN is 6 positions after SPD: PP(+1) ST(+2) 1C(+3) 2C(+4) STR(+5) FIN(+6)
+        fin = None
+        if spd is not None:
+            fin_idx = idx + 6
+            if fin_idx < len(tokens):
+                tok = tokens[fin_idx]
+                try:
+                    fin_val = int(tok)
+                    if 1 <= fin_val <= 30:
+                        fin = fin_val
+                except ValueError:
+                    # 2C might be '-' for short sprints; FIN is still at idx+6
+                    # because '-' counts as a token
+                    pass
+
+        return spd, fin
+
     # ============ SPEED FIGURES ============
 
     def _parse_speed_figures_with_confidence(
@@ -1198,26 +1296,38 @@ class GoldStandardBRISNETParser:
     ) -> tuple[list[int], float, int, int, float]:
         """
         Extract speed figures from race lines.
+        CRITICAL FIX (Feb 11, 2026): Uses positional '/' anchor instead of
+        regex race-type matching. The old primary pattern expected literal
+        race type names (Clm, Mdn, etc.) but BRISNET uses abbreviated codes
+        (C10000n2x, A32800n3x). The old fallback grabbed time fractions (:23, :24)
+        as false speed figures.
         Returns: (figures_list, avg_top2, peak, last, confidence)
         """
         figures = []
 
-        for pattern in self.SPEED_FIG_PATTERNS:
-            matches = pattern.findall(block)
-            for match in matches:
-                try:
-                    # Extract figure (last captured group)
-                    fig = int(match[-1])
-                    # Validate range (Beyer typically 20-120)
-                    if 20 <= fig <= 130:
-                        figures.append(fig)
-                except Exception:
-                    continue
+        # PRIMARY: Use slash-anchor extraction (most reliable)
+        lines = block.split("\n")
+        for line in lines:
+            date_match = re.search(r"\d{2}[A-Za-z]{3}\d{2}", line)
+            if date_match and "/" in line:
+                spd, _ = self._extract_speed_and_finish_from_line(line)
+                if spd is not None:
+                    figures.append(spd)
+
+        # FALLBACK: Old regex patterns (only if primary found nothing)
+        if not figures:
+            for pattern in self.SPEED_FIG_PATTERNS:
+                matches = pattern.findall(block)
+                for match in matches:
+                    try:
+                        fig = int(match[-1])
+                        if 20 <= fig <= 130:
+                            figures.append(fig)
+                    except Exception:
+                        continue
 
         # CRITICAL FIX (Feb 10, 2026): Preserve insertion order for last_fig
         # before dedup/sort. The FIRST figure extracted is from the MOST RECENT race.
-        # Previously, sorting descending made last_fig = peak_fig (highest career),
-        # which is wrong — last_fig should be the most recent race figure.
         last_fig_by_recency = (
             figures[0] if figures else 0
         )  # First extracted = most recent race
@@ -1249,15 +1359,13 @@ class GoldStandardBRISNETParser:
     ) -> tuple[int | None, str | None, list[int], float]:
         """
         Parse days since last race and recent finishes.
-        CRITICAL FIX: Updated to match actual BRISNET format for finish positions.
+        CRITICAL FIX (Feb 11, 2026): Uses positional '/' anchor to extract FIN column
+        instead of relying on Unicode decorator patterns that fail with clean text.
         Returns: (days_since_last, last_race_date, recent_finishes, confidence)
         """
         finishes = []
         dates = []
 
-        # Updated pattern to match actual BRISNET format
-        # Example: "11Jan26SAª 6½ ft :21ª :44¨1:09« 1:16© ¡ ¨¨¨ Clm25000n2L ¨¨© 86 88/ 83 +1 0 81 1 7 7ª‚ 4© 4© 2³"
-        # The finish position appears in the FIN column or at end of race line
         lines = block.split("\n")
 
         for line in lines:
@@ -1273,8 +1381,14 @@ class GoldStandardBRISNETParser:
                 except Exception:
                     pass
 
-                # Extract finish position - multiple patterns
-                # Pattern 1: FIN column with position (most reliable)
+                # PRIMARY: Use slash-anchor extraction (most reliable)
+                if "/" in line:
+                    _, fin = self._extract_speed_and_finish_from_line(line)
+                    if fin is not None:
+                        finishes.append(fin)
+                        continue
+
+                # FALLBACK 1: FIN column with Unicode decorators
                 finish_match = re.search(r"FIN\s+(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]", line)
                 if finish_match:
                     try:
@@ -1285,8 +1399,7 @@ class GoldStandardBRISNETParser:
                     except Exception:
                         pass
 
-                # Pattern 2: Look for finish near end of line after jockey/odds
-                # Matches patterns like "2³", "4©", "5«‚", "7¨©"
+                # FALLBACK 2: Unicode-decorated finish near jockey/odds
                 finish_match = re.search(
                     r"\s(\d{1,2})[ƒ®«ª³©¨°¬²‚±]+\s+\w+\s+[\d.]+\s*$", line
                 )
@@ -1299,7 +1412,7 @@ class GoldStandardBRISNETParser:
                     except Exception:
                         pass
 
-                # Pattern 3: Simple digit near end (last resort)
+                # FALLBACK 3: Simple digit with ordinal suffix
                 finish_match = re.search(
                     r"\s(\d{1,2})(?:st|nd|rd|th|[ƒ®«ª³©¨°¬²‚±])\s+\w+\s+", line
                 )
@@ -1330,9 +1443,13 @@ class GoldStandardBRISNETParser:
         """
         CRITICAL: Infer purse from race type names like 'Clm25000n2L' or 'MC50000'.
         BRISNET embeds purse values in race type strings.
+        FIXED (Feb 11, 2026): Added handling for C10000n2x, A32800n3x, C5000/4.5n2x
 
         Examples:
         - 'Clm25000n2L' → $25,000
+        - 'C10000n2x' → $10,000  (BRISNET short form for Claiming)
+        - 'C5000/4.5n2x' → $5,000 (with price alternatives)
+        - 'A32800n3x' → $32,800  (BRISNET short form for Allowance)
         - 'MC50000' → $50,000
         - 'OC20k' → $20,000
         - 'Alw28000' → $28,000
@@ -1340,24 +1457,28 @@ class GoldStandardBRISNETParser:
         if not race_type:
             return None
 
-        # Pattern 1: Direct numbers (Clm25000, MC50000, Alw28000)
+        # Pattern 1: Direct numbers (Clm25000, MC50000, Alw28000, C10000, A32800)
         match = re.search(r"(\d{4,6})", race_type)
         if match:
             return int(match.group(1))
 
-        # Pattern 2: With 'k' suffix (OC20k, Alw50k)
+        # Pattern 2: With 'k' suffix (OC20k, Alw50k, Mdn 32k)
         match = re.search(r"(\d+)k", race_type, re.IGNORECASE)
         if match:
             return int(match.group(1)) * 1000
 
         # Pattern 3: Common defaults by type
         race_lower = race_type.lower()
-        if "maiden" in race_lower or "mdn" in race_lower:
+        if "maiden" in race_lower or "mdn" in race_lower or "md sp wt" in race_lower:
             return 50000  # Typical maiden special weight
         elif "claiming" in race_lower or "clm" in race_lower or "mc" in race_lower:
             return 25000  # Typical claiming level
+        elif race_lower.startswith("c") and re.search(r"\d", race_lower):
+            return 5000  # Short-form claiming with number (e.g., C5000b)
         elif "allowance" in race_lower or "alw" in race_lower:
             return 50000  # Typical allowance
+        elif race_lower.startswith("a") and re.search(r"\d", race_lower):
+            return 30000  # Short-form allowance (e.g., A28800n1x)
         elif (
             "stake" in race_lower
             or "stk" in race_lower
@@ -1374,17 +1495,30 @@ class GoldStandardBRISNETParser:
     ) -> tuple[list[int], list[str], float, float]:
         """
         Parse purses and race types.
-        CRITICAL FIX: Infers purses from race type names since BRISNET doesn't show explicit purse in past performances.
+        CRITICAL FIX (Feb 11, 2026): Handles BRISNET abbreviated race types:
+        C10000n2x (Claiming $10k), A32800n3x (Allowance $32.8k),
+        MC7500 (Maiden Claiming), Clm5000n3L, OC10k-N, Mdn 32k, etc.
         Returns: (purses, race_types, avg_purse, confidence)
         """
         purses = []
         race_types = []
 
-        # Updated pattern to match actual BRISNET format
-        # Example: "11Jan26SAª 6½ ft :21ª :44¨1:09« 1:16© ¡ ¨¨¨ Clm25000n2L ¨¨©"
+        # Pattern matches date+track then finds race type in the running line
+        # Handles ALL BRISNET abbreviations:
+        #   C10000n2x, C5000/4.5n2x, A32800n3x, A28800n1x,
+        #   Clm5000n3L, Clm10000n3L, MC7500, MC12500,
+        #   OC10k-N, Mdn 32k, Stk, G1, G2, G3
         race_line_pattern = re.compile(
-            r"(\d{2}[A-Za-z]{3}\d{2})\w+\s+[\d½]+[f]?\s+.*?"
-            r"([A-Z][a-z]{2,}\d+[a-zA-Z0-9\-]*|MC\d+|OC\d+|Alw\d+|Stk|G[123])"
+            r"(\d{2}[A-Za-z]{3}\d{2})\w*\s+[\d½]+[f]?\s+.*?"
+            r"(C\d{3,6}[/\d.]*[a-zA-Z0-9\-]*"  # C10000n2x, C5000/4.5n2x
+            r"|A\d{4,6}[a-zA-Z0-9\-]*"  # A32800n3x, A28800n1x
+            r"|Clm\d+[a-zA-Z0-9\-]*"  # Clm5000n3L
+            r"|MC\d+[a-zA-Z0-9/\-]*"  # MC7500, MC12500
+            r"|OC\d+[a-zA-Z0-9\-]*"  # OC10k-N
+            r"|Alw\d+[a-zA-Z0-9\-]*"  # Alw28000
+            r"|Mdn\s*\d*[a-zA-Z0-9\-]*"  # Mdn, Mdn 32k
+            r"|Md\s*Sp\s*Wt"  # Md Sp Wt
+            r"|Stk|G[123]|Hcp)"  # Stakes, Graded, Handicap
         )
 
         race_matches = race_line_pattern.findall(block)
@@ -1410,20 +1544,34 @@ class GoldStandardBRISNETParser:
     def _parse_pedigree_with_confidence(self, block: str) -> tuple[dict, float]:
         """
         Parse sire/dam data.
+        FIXED (Feb 11, 2026): sire_stats now matches actual BRISNET format
+        "AWD 7.0 15%Mud 563MudSts 1.08spi". Added damsire_stats extraction
+        (pattern existed but was never called).
         Returns: (pedigree_dict, confidence)
         """
         ped_data = {}
         confidence = 0.0
 
-        # Sire stats
+        # Sire stats — FIXED: pattern now matches "AWD 7.0 15%Mud 563MudSts 1.08spi"
         sire_match = self.PEDIGREE_PATTERNS["sire_stats"].search(block)
         if sire_match:
             try:
                 ped_data["sire_awd"] = float(sire_match.group(1))
-                ped_data["sire_spi"] = float(sire_match.group(4))
-                # Group 2 is %Mud from "AWD 6.2 17%Mud 81MudSts 0.86spi"
                 ped_data["sire_mud_pct"] = float(sire_match.group(2))
-                confidence += 0.4
+                # group(3) is MudSts count, group(4) is SPI
+                ped_data["sire_spi"] = float(sire_match.group(4))
+                confidence += 0.3
+            except Exception:
+                pass
+
+        # Dam's Sire stats — NEW: was defined but never called before
+        damsire_match = self.PEDIGREE_PATTERNS["damsire_stats"].search(block)
+        if damsire_match:
+            try:
+                ped_data["damsire_awd"] = float(damsire_match.group(1))
+                ped_data["damsire_mud_pct"] = float(damsire_match.group(2))
+                ped_data["damsire_spi"] = float(damsire_match.group(4))
+                confidence += 0.2
             except Exception:
                 pass
 
@@ -1438,7 +1586,7 @@ class GoldStandardBRISNETParser:
         if dam_match:
             try:
                 ped_data["dam_dpi"] = float(dam_match.group(1))
-                confidence += 0.2
+                confidence += 0.1
             except Exception:
                 pass
 
