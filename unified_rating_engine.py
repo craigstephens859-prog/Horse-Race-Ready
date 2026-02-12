@@ -1686,9 +1686,17 @@ class UnifiedRatingEngine:
                 elif 0.8 <= purse_ratio <= 1.2:  # Same class
                     rating += 0.8
                 elif purse_ratio >= 0.6:  # Class drop
-                    rating += 0.8 if was_competitive else 0.2
+                    # CALIBRATION FIX (Feb 11, 2026 - CT R4):
+                    # Skippy Town dropped from ALW$26.9k→CLM$5k (massive purse drop)
+                    # but wasn't ITM at higher level → got only +0.2.
+                    # A horse DROPS class precisely because it wasn't competitive
+                    # at the higher level. Penalizing that is circular logic.
+                    # Competitive horses still get a bigger bonus.
+                    rating += 0.8 if was_competitive else 0.5
                 else:  # Major drop
-                    rating += 1.0 if was_competitive else -0.3
+                    # Same logic: major droppers who weren't competitive should
+                    # still get credit — they're dropping to find their level.
+                    rating += 1.0 if was_competitive else 0.6
 
         # Race type progression (CALIBRATED: Scale by race level)
         if horse.race_types:
@@ -2410,17 +2418,22 @@ class UnifiedRatingEngine:
                 purse_ratio = today_purse / avg_recent
 
                 if purse_ratio <= 0.5:  # Dropping 50%+ in purse (MASSIVE drop)
-                    has_decent_speed = horse.last_fig and horse.last_fig >= 75
+                    # CALIBRATION FIX (Feb 11, 2026 - CT R4):
+                    # Skippy Town had 68 speed from ALW$26.9k level — that's
+                    # competitive at CLM$5k even though it fails the old >= 75 gate.
+                    # Scale threshold: massive drops accept lower figs because
+                    # the horse ran those figs against MUCH better competition.
+                    has_decent_speed = horse.last_fig and horse.last_fig >= 60
                     if has_decent_speed:
-                        bonus += 0.8  # CALIBRATED: was 0.5
+                        bonus += 0.9  # CALIBRATED: was 0.8 (gate was >= 75)
                     else:
-                        bonus += 0.5  # CALIBRATED: was 0.3
+                        bonus += 0.6  # CALIBRATED: was 0.5
                 elif purse_ratio <= 0.7:  # Dropping 30%+ in purse
-                    has_decent_speed = horse.last_fig and horse.last_fig >= 75
+                    has_decent_speed = horse.last_fig and horse.last_fig >= 65
                     if has_decent_speed:
-                        bonus += 0.5  # Major class drop with speed
+                        bonus += 0.6  # CALIBRATED: was 0.5 (gate was >= 75)
                     else:
-                        bonus += 0.3  # Class drop without proven speed
+                        bonus += 0.35  # CALIBRATED: was 0.3
                 elif purse_ratio <= 0.85:  # Moderate drop
                     bonus += 0.2
 
@@ -2457,6 +2470,59 @@ class UnifiedRatingEngine:
                 best_roi = max(a.get("roi", 0) for a in class_drop_angles)
                 if best_roi > 1.0:
                     bonus *= 1.3  # Amplify bonus by 30%
+
+        # ═══════════════════════════════════════════════════════════════
+        # FIX #3 (Feb 11, 2026 - CT R4): DECLINING FORM DAMPENER
+        # Vehemently: 88→55→58 (30-point decline) got FULL class drop credit
+        # despite clearly declining. The class drop signal "this horse is
+        # too good for this level" is false when speed figs prove otherwise.
+        # Dampen bonus when best-of-3 is the oldest fig (declining trend)
+        # AND the drop from peak is significant (>= 15 points).
+        # ═══════════════════════════════════════════════════════════════
+        if bonus > 0 and horse.speed_figures and len(horse.speed_figures) >= 3:
+            figs = [
+                f
+                for f in horse.speed_figures[:3]
+                if f and isinstance(f, (int, float)) and f > 0
+            ]
+            if len(figs) >= 3:
+                peak_fig = max(figs)
+                recent_fig = figs[0]  # Most recent
+                decline = peak_fig - recent_fig
+                # Check if peak is NOT the most recent (declining form)
+                if figs.index(peak_fig) > 0 and decline >= 15:
+                    if decline >= 30:  # Severe decline (e.g., 88→58)
+                        bonus *= 0.3
+                        logger.debug(
+                            f"  → Declining form dampener: {peak_fig}→{recent_fig} (-{decline}), bonus ×0.3"
+                        )
+                    else:  # Moderate decline (15-29 pts)
+                        bonus *= 0.5
+                        logger.debug(
+                            f"  → Declining form dampener: {peak_fig}→{recent_fig} (-{decline}), bonus ×0.5"
+                        )
+
+        # ═══════════════════════════════════════════════════════════════
+        # FIX #4 (Feb 11, 2026 - CT R4): HOT TRAINER + CLASS DROP SYNERGY
+        # Skippy Town: Reynolds trainer (50% wins, 4 starts) with massive
+        # class drop from ALW→CLM. A new high-% trainer choosing to drop
+        # a horse dramatically signals confidence in the spot.
+        # ═══════════════════════════════════════════════════════════════
+        if bonus > 0 and horse.angles:
+            trainer_angles = [
+                a
+                for a in horse.angles
+                if "trainer" in a.get("category", "").lower()
+                or "trn" in a.get("category", "").lower()
+            ]
+            for angle in trainer_angles:
+                win_pct = angle.get("win_pct", 0) or 0
+                if win_pct >= 25:
+                    bonus *= 1.2  # Hot trainer amplifier (+20%)
+                    logger.debug(
+                        f"  → Hot trainer synergy: {win_pct}% wins, bonus ×1.2"
+                    )
+                    break  # Only apply once
 
         return round(bonus, 2)
 
