@@ -250,6 +250,21 @@ except ImportError as e:
 st.set_page_config(
     page_title="Horse Race Ready — IQ Mode", page_icon="🏇", layout="wide"
 )
+
+# ===================== ACCESS KEY GATE =====================
+# Prevents direct access to the Render URL without going through Squarespace.
+# Set ACCESS_KEY env var on Render, then embed with ?key=YOUR_SECRET in the URL.
+# Local development: no ACCESS_KEY env var = no gate (open access).
+_ACCESS_KEY = os.getenv("ACCESS_KEY", "")
+if _ACCESS_KEY:
+    _provided_key = st.query_params.get("key", "")
+    if _provided_key != _ACCESS_KEY:
+        st.error(
+            "🔒 Access Denied — Please visit [HandicappingHorseRaces.org](https://www.handicappinghorseraces.org) to access this app."
+        )
+        st.stop()
+# ===================== END ACCESS KEY GATE =====================
+
 st.title("🏇  Horse Race Ready — IQ Mode")
 
 # ============ COMMUNITY DATABASE STATS BANNER ============
