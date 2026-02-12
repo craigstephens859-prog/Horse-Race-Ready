@@ -2290,7 +2290,7 @@ def parse_speed_figures_for_block(block) -> list[int]:
             raw = parts[j]
             cleaned = raw.lstrip("+-")
             # Strip Unicode superscripts/special chars that BRISNET uses for margins
-            cleaned = re.sub(r'[^\d]', '', cleaned)
+            cleaned = re.sub(r"[^\d]", "", cleaned)
             if not cleaned:
                 break
             try:
@@ -2354,6 +2354,33 @@ def safe_float(value, default=0.0):
             if value.startswith("+"):
                 value = value[1:]
         return float(value)
+    except (ValueError, TypeError, AttributeError):
+        return default
+
+
+def safe_int(value, default=0):
+    """
+    Convert value to int safely, handling strings, floats, None, NaN.
+
+    CRITICAL FIX (Feb 14, 2026): This function was called 4 times in the
+    FTS and NA Running Style adjustment sections but was never defined,
+    causing both sections to silently crash on every horse. This meant:
+    - FTS debut multiplier (0.75x) was NEVER applied
+    - NA style dampener (0.85x) was NEVER applied
+
+    Args:
+        value: Value to convert (string, int, float, None, NaN, etc.)
+        default: Default value if conversion fails
+
+    Returns:
+        int: Converted value or default
+    """
+    try:
+        if value is None:
+            return default
+        if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
+            return default
+        return int(float(value))
     except (ValueError, TypeError, AttributeError):
         return default
 
@@ -7942,8 +7969,8 @@ def compute_bias_ratings(
                 # Map to quality tier
                 if (
                     race_type_clean == "stakes_graded"
-                    or race_type_clean == "stakes"
-                    and purse_amount >= 200000
+                    or (race_type_clean == "stakes"
+                    and purse_amount >= 200000)
                 ):
                     race_quality = "elite"
                 elif race_type_clean in ["allowance", "allowance_optional"]:
@@ -8355,6 +8382,9 @@ def compute_bias_ratings(
         # ═══════════════════════════════════════════════════════════════
         # Apply conservative multiplier for debut horses in MSW races.
         # This mirrors the FTS logic in unified_rating_engine.py for consistency.
+        # CRITICAL FIX (Feb 14, 2026): Initialize is_fts BEFORE try block so
+        # the NA Running Style section can always reference it safely.
+        is_fts = False
         try:
             # Detect FTS: zero starts AND MSW race
             horse_starts = 0
