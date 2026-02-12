@@ -2289,9 +2289,14 @@ def parse_speed_figures_for_block(block) -> list[int]:
         while j < len(parts):
             raw = parts[j]
             cleaned = raw.lstrip("+-")
-            if not cleaned.isdigit():
+            # Strip Unicode superscripts/special chars that BRISNET uses for margins
+            cleaned = re.sub(r'[^\d]', '', cleaned)
+            if not cleaned:
                 break
-            val = int(cleaned)
+            try:
+                val = int(cleaned)
+            except ValueError:
+                break
             has_sign = raw[0] in "+-" if raw else False
             # Call changes are small (typically 0-25) and often signed
             # Speed figures are large (40-130) and unsigned
