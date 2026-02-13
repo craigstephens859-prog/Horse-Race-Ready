@@ -5005,27 +5005,58 @@ def style_match_score_multi(
 
 
 def parse_track_bias_impact_values(pp_text: str) -> dict[str, float]:
-    """Extract Track Bias Impact Values from '9b. Track Bias (Numerical)' section"""
+    """Extract Track Bias Impact Values from '9b. Track Bias (Numerical)' section
+    OR from raw BRISNET 'Week Totals' / 'MEET Totals' format."""
     impact_values = {}
 
-    # Find the Track Bias section
+    # METHOD 1: Formatted '9b. Track Bias' section
     bias_match = re.search(
         r"9b\.\s*Track Bias.*?\n(.*?)(?=\n\d+[a-z]?\.|$)",
         pp_text,
         re.DOTALL | re.IGNORECASE,
     )
-    if not bias_match:
+    if bias_match:
+        bias_text = bias_match.group(1)
+        for match in re.finditer(
+            r"-\s*([A-Z/]+)\s*\([^)]+\):\s*Impact Value\s*=\s*([\d.]+)", bias_text
+        ):
+            style_code = match.group(1).strip()
+            impact_val = float(match.group(2))
+            impact_values[style_code] = impact_val
+        if impact_values:
+            return impact_values
+
+    # METHOD 2: Raw BRISNET 'Week Totals' format (preferred — most recent)
+    # Runstyle: E E/P P S
+    # ...
+    # Impact Values: 1.17 1.14 1.18 0.32
+    week_match = re.search(
+        r"\*\s*Week\s+Totals\s*\*.*?"
+        r"Runstyle:\s*E\s+E/P\s+P\s+S.*?"
+        r"Impact Values:\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)",
+        pp_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if week_match:
+        impact_values["E"] = float(week_match.group(1))
+        impact_values["E/P"] = float(week_match.group(2))
+        impact_values["P"] = float(week_match.group(3))
+        impact_values["S"] = float(week_match.group(4))
         return impact_values
 
-    bias_text = bias_match.group(1)
-
-    # Parse Impact Value lines (e.g., "- E (Early Speed): Impact Value = 1.8")
-    for match in re.finditer(
-        r"-\s*([A-Z/]+)\s*\([^)]+\):\s*Impact Value\s*=\s*([\d.]+)", bias_text
-    ):
-        style_code = match.group(1).strip()
-        impact_val = float(match.group(2))
-        impact_values[style_code] = impact_val
+    # METHOD 3: Meet Totals fallback
+    meet_match = re.search(
+        r"\*\s*MEET\s+Totals\s*\*.*?"
+        r"Runstyle:\s*E\s+E/P\s+P\s+S.*?"
+        r"Impact Values:\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)",
+        pp_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if meet_match:
+        impact_values["E"] = float(meet_match.group(1))
+        impact_values["E/P"] = float(meet_match.group(2))
+        impact_values["P"] = float(meet_match.group(3))
+        impact_values["S"] = float(meet_match.group(4))
 
     return impact_values
 
@@ -5038,42 +5069,95 @@ def parse_track_bias_impact_values(pp_text: str) -> dict[str, float]:
 
 def parse_weekly_post_bias(pp_text: str) -> dict[str, float]:
     """
-    Extract weekly post-position Impact Values from BRISNET PP '9b' section.
+    Extract weekly post-position Impact Values from BRISNET PP '9b' section
+    OR from raw BRISNET Track Bias Stats format.
 
-    Looks for patterns like:
-      - Posts 1-3 (Rail): Impact Value = 2.59
-      - Posts 4-6 (Inner): Impact Value = 0.85
-      - Posts 7+ (Outside): Impact Value = 0.50
-
-    Returns dict mapping post bucket labels to their impact values.
+    Returns dict mapping individual post numbers (as strings) to their impact values.
     """
     post_impacts: dict[str, float] = {}
+
+    # METHOD 1: Formatted '9b. Track Bias' section
     bias_match = re.search(
         r"9b\.\s*Track Bias.*?\n(.*?)(?=\n\d+[a-z]?\.|$)",
         pp_text,
         re.DOTALL | re.IGNORECASE,
     )
-    if not bias_match:
+    if bias_match:
+        bias_text = bias_match.group(1)
+        for match in re.finditer(
+            r"-\s*Posts?\s*(\d+)[-–](\d+)\s*\([^)]*\):\s*Impact Value\s*=\s*([\d.]+)",
+            bias_text,
+        ):
+            low_post = int(match.group(1))
+            high_post = int(match.group(2))
+            impact_val = float(match.group(3))
+            for p in range(low_post, high_post + 1):
+                post_impacts[str(p)] = impact_val
+        for match in re.finditer(
+            r"-\s*Post\s*(\d+)\s*\([^)]*\):\s*Impact Value\s*=\s*([\d.]+)", bias_text
+        ):
+            post_impacts[match.group(1)] = float(match.group(2))
+        if post_impacts:
+            return post_impacts
+
+    # METHOD 2: Raw BRISNET 'Week Totals' format (preferred — most recent)
+    # Post Bias: RAIL 1-3 4-7 8+
+    # ...
+    # Impact Values: 2.59 1.72 0.68 0.70
+    week_post_match = re.search(
+        r"\*\s*Week\s+Totals\s*\*.*?"
+        r"Post Bias:\s*RAIL\s+(\d+)-(\d+)\s+(\d+)-(\d+)\s+(\d+)\+.*?"
+        r"Impact Values:\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)",
+        pp_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if week_post_match:
+        inner_low = int(week_post_match.group(1))
+        inner_high = int(week_post_match.group(2))
+        mid_low = int(week_post_match.group(3))
+        mid_high = int(week_post_match.group(4))
+        outer_start = int(week_post_match.group(5))
+        rail_impact = float(week_post_match.group(6))
+        inner_impact = float(week_post_match.group(7))
+        mid_impact = float(week_post_match.group(8))
+        outer_impact = float(week_post_match.group(9))
+        # RAIL = post 1 (separate from the inner range)
+        post_impacts["1"] = rail_impact
+        for p in range(inner_low, inner_high + 1):
+            if str(p) not in post_impacts:
+                post_impacts[str(p)] = inner_impact
+        for p in range(mid_low, mid_high + 1):
+            post_impacts[str(p)] = mid_impact
+        for p in range(outer_start, outer_start + 6):
+            post_impacts[str(p)] = outer_impact
         return post_impacts
 
-    bias_text = bias_match.group(1)
-
-    # Parse post-position impact lines
-    for match in re.finditer(
-        r"-\s*Posts?\s*(\d+)[-–](\d+)\s*\([^)]*\):\s*Impact Value\s*=\s*([\d.]+)",
-        bias_text,
-    ):
-        low_post = int(match.group(1))
-        high_post = int(match.group(2))
-        impact_val = float(match.group(3))
-        for p in range(low_post, high_post + 1):
-            post_impacts[str(p)] = impact_val
-
-    # Also match single-post patterns like "Post 1: Impact Value = 2.59"
-    for match in re.finditer(
-        r"-\s*Post\s*(\d+)\s*\([^)]*\):\s*Impact Value\s*=\s*([\d.]+)", bias_text
-    ):
-        post_impacts[match.group(1)] = float(match.group(2))
+    # METHOD 3: Meet Totals fallback
+    meet_post_match = re.search(
+        r"\*\s*MEET\s+Totals\s*\*.*?"
+        r"Post Bias:\s*RAIL\s+(\d+)-(\d+)\s+(\d+)-(\d+)\s+(\d+)\+.*?"
+        r"Impact Values:\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)",
+        pp_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if meet_post_match:
+        inner_low = int(meet_post_match.group(1))
+        inner_high = int(meet_post_match.group(2))
+        mid_low = int(meet_post_match.group(3))
+        mid_high = int(meet_post_match.group(4))
+        outer_start = int(meet_post_match.group(5))
+        rail_impact = float(meet_post_match.group(6))
+        inner_impact = float(meet_post_match.group(7))
+        mid_impact = float(meet_post_match.group(8))
+        outer_impact = float(meet_post_match.group(9))
+        post_impacts["1"] = rail_impact
+        for p in range(inner_low, inner_high + 1):
+            if str(p) not in post_impacts:
+                post_impacts[str(p)] = inner_impact
+        for p in range(mid_low, mid_high + 1):
+            post_impacts[str(p)] = mid_impact
+        for p in range(outer_start, outer_start + 6):
+            post_impacts[str(p)] = outer_impact
 
     return post_impacts
 
@@ -5115,48 +5199,62 @@ def calculate_style_vs_weekly_bias_bonus(
 
     Oaklawn R1 Audit: Stalker impact was 0.32 (heavily suppressed) but model
     ranked S-type Tiffany Twist #1. E-type Tell Me When (impact 2.05) was #7.
+    Oaklawn R9 Audit: E/P She's Storming (impact 1.14-1.17) in dead zone getting 0.
 
     This function rewards styles favored by weekly bias and penalizes suppressed ones.
+    FIXED: E/P now checks both E and E/P keys and uses better one.
+    FIXED: Eliminated dead zone between 0.80-1.30 — now graduated scale.
 
     Returns: Bonus/penalty to add directly to tier2_bonus.
     """
     if not impact_values or not style:
         return 0.0
 
-    # Map running style letters to impact keys
+    # Map running style to the relevant impact value(s)
     style_upper = str(style).upper().strip()
-    style_key = None
+    impact = None
 
-    if style_upper in ("E", "E/P"):
-        style_key = "E"
-    elif style_upper in ("P", "E/P", "P/S"):
-        # For dual-style, check both; primary style_key is P
-        style_key = "P"
+    if style_upper == "E/P":
+        # E/P horses benefit from BOTH E and E/P bias — use the better one
+        e_impact = impact_values.get("E", 0.0)
+        ep_impact = impact_values.get("E/P", 0.0)
+        impact = max(e_impact, ep_impact) if (e_impact or ep_impact) else None
+    elif style_upper == "E":
+        impact = impact_values.get("E")
+    elif style_upper in ("P", "P/S"):
+        impact = impact_values.get("P")
     elif style_upper in ("S", "S/P"):
-        style_key = "S"
+        impact = impact_values.get("S")
     elif style_upper == "C":
-        style_key = "C"
+        impact = impact_values.get("C")
 
-    if style_key is None or style_key not in impact_values:
+    if impact is None:
         return 0.0
 
-    impact = impact_values[style_key]
-
-    # PENALTY for suppressed styles (impact < 0.70 = below average)
+    # GRADUATED SCALE — no dead zones
+    # PENALTY for suppressed styles
     if impact < 0.40:
         return -1.5  # Severe suppression (Oaklawn S at 0.32)
     elif impact < 0.60:
         return -1.0  # Strong suppression
     elif impact < 0.80:
         return -0.5  # Moderate suppression
+    elif impact < 1.00:
+        return -0.2  # Slight below-average
 
-    # BONUS for favored styles (impact > 1.30 = well above average)
+    # BONUS for favored styles (graduated — no dead zone)
     if impact >= 2.0:
         return 1.5  # Extreme bias favorite (Tell Me When E at 2.05)
     elif impact >= 1.5:
         return 1.0  # Strong bias favorite
     elif impact >= 1.3:
-        return 0.5  # Moderate bias favorite
+        return 0.7  # Moderate-strong bias favorite
+    elif impact >= 1.15:
+        return 0.5  # Moderate bias favorite (She's Storming E/P 1.17)
+    elif impact >= 1.05:
+        return 0.3  # Slight bias favorite
+    elif impact >= 1.00:
+        return 0.1  # At parity
 
     return 0.0
 
@@ -5200,6 +5298,72 @@ def calculate_post_position_bias_bonus(
         return -0.5  # Moderate post disadvantage
 
     return 0.0
+
+
+def calculate_pace_supremacy_bonus(
+    horse_name: str,
+    horse_block: str,
+    field_e1_values: dict[str, float],
+    impact_values: dict[str, float],
+) -> float:
+    """
+    ENHANCEMENT 6: E1/E2 Pace Supremacy Bonus
+
+    Oaklawn R9 Audit: She's Storming had the BEST E1 (91) in the field, matching
+    the race E1 par (91), at a speed-biased track. She was 24/1 and won.
+    The model gave her almost no credit for being the fastest horse early in the field.
+
+    When a horse has the fastest (or top-2) E1 in the field AND the track bias
+    favors speed, this is a massive tactical advantage — they can control the pace.
+
+    Returns: Bonus to add to tier2_bonus.
+    """
+    if not field_e1_values or horse_name not in field_e1_values:
+        return 0.0
+
+    horse_e1 = field_e1_values.get(horse_name, 0.0)
+    if horse_e1 <= 0:
+        return 0.0
+
+    # Rank this horse's E1 among all field E1s
+    all_e1 = sorted(field_e1_values.values(), reverse=True)
+    try:
+        e1_rank = all_e1.index(horse_e1) + 1
+    except ValueError:
+        return 0.0
+
+    # Check if track currently favors early speed (E or E/P impact >= 1.0)
+    speed_favored = False
+    if impact_values:
+        e_impact = impact_values.get("E", 1.0)
+        ep_impact = impact_values.get("E/P", 1.0)
+        s_impact = impact_values.get("S", 1.0)
+        # Speed is favored when E or E/P impact > 1.0, or S is suppressed
+        if max(e_impact, ep_impact) >= 1.10 or s_impact < 0.50:
+            speed_favored = True
+
+    bonus = 0.0
+
+    # Top E1 in the field
+    if e1_rank == 1:
+        bonus = 0.8 if speed_favored else 0.4
+    elif e1_rank == 2:
+        bonus = 0.5 if speed_favored else 0.2
+    elif e1_rank == 3:
+        bonus = 0.3 if speed_favored else 0.1
+
+    # Also parse the horse's E2 from their block to check if they sustain speed
+    try:
+        pace_data = parse_e1_e2_lp_values(horse_block)
+        if pace_data["e2"] and len(pace_data["e2"]) >= 1:
+            best_e2 = max(pace_data["e2"][:3])
+            # If horse has both strong E1 AND E2 (>= 80), extra bonus for sustained speed
+            if horse_e1 >= 85 and best_e2 >= 80 and e1_rank <= 2:
+                bonus += 0.4  # Sustained speed premium
+    except BaseException:
+        pass
+
+    return round(bonus, 2)
 
 
 def calculate_first_after_claim_bonus(horse_block: str) -> float:
@@ -7667,6 +7831,18 @@ def compute_bias_ratings(
         post_bias_pick if isinstance(post_bias_pick, list) else [post_bias_pick]
     )
 
+    # ENHANCEMENT 6 PRE-COMPUTE: Build field-wide E1 lookup for pace supremacy bonus
+    # Each horse's best E1 (from up to 3 most recent races) is stored so the tier-2
+    # loop can compare any horse's E1 to the entire field.
+    _field_e1_values: dict[str, float] = {}
+    for _fe_name, _fe_block in _horse_pp_blocks.items():
+        try:
+            _fe_pace = parse_e1_e2_lp_values(_fe_block)
+            if _fe_pace and _fe_pace.get("e1"):
+                _field_e1_values[_fe_name] = max(_fe_pace["e1"][:3])
+        except BaseException:
+            pass
+
     for _, row in df_styles.iterrows():
         post = str(row.get("Post", row.get("#", "")))
         name = str(row.get("Horse"))
@@ -8145,15 +8321,27 @@ def compute_bias_ratings(
         except BaseException:
             pass
 
+        # 12. RACE AUDIT ENHANCEMENT 6: E1/E2 Pace Supremacy Bonus
+        # Oaklawn R9: She's Storming had best E1 (91) matching par (91) but got no credit.
+        # At speed-biased tracks, the horse with the fastest E1 in the field has a tactical
+        # advantage. Combined with E/P style + inside post, this is a MAJOR signal.
+        try:
+            tier2_bonus += calculate_pace_supremacy_bonus(
+                name, _horse_block, _field_e1_values, impact_values
+            )
+        except BaseException:
+            pass
+
         # ======================== End Tier 2 Bonuses ========================
 
         # CAP tier2_bonus: Bonuses should supplement, not dominate, core ratings
         # Race 4 Oaklawn validation: Track Phantom got +7.30 in bonuses on 3.67 core (2:1 ratio!)
         # UPDATED Feb 2026 Race Audit: Widened cap from [-2.0, 2.5] to [-3.5, 4.0]
-        # to accommodate new weekly bias, style-vs-bias, post, and claim angle bonuses.
-        # Combined audit enhancements can contribute up to ~4.2, so cap at 4.0 preserves
+        # then to [-4.0, 5.0] after adding pace supremacy bonus (Enhancement 6).
+        # Combined audit enhancements can contribute up to ~5.0 for horses with
+        # multiple strong signals (speed + bias + style + post). Cap at 5.0 preserves
         # the protective ceiling while allowing legitimate edge signals to register.
-        tier2_bonus = np.clip(tier2_bonus, -3.5, 4.0)
+        tier2_bonus = np.clip(tier2_bonus, -4.0, 5.0)
 
         # HYBRID MODEL: Surface-Adaptive + Maiden-Aware PP Weight (SA R8 + GP R1 + GP R2 - Feb 2026)
         #
