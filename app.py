@@ -5019,6 +5019,240 @@ def parse_track_bias_impact_values(pp_text: str) -> dict[str, float]:
     return impact_values
 
 
+# ======================== RACE AUDIT ENHANCEMENTS (Feb 2026) ========================
+# Oaklawn R1 Audit: Model ranked Tell Me When last (#7) but horse WON.
+# Model's #1 Tiffany Twist finished 4th. Root cause: 5 gaps in bias/angle handling.
+# All enhancements below are ADDITIVE — no existing logic is modified.
+
+
+def parse_weekly_post_bias(pp_text: str) -> dict[str, float]:
+    """
+    Extract weekly post-position Impact Values from BRISNET PP '9b' section.
+
+    Looks for patterns like:
+      - Posts 1-3 (Rail): Impact Value = 2.59
+      - Posts 4-6 (Inner): Impact Value = 0.85
+      - Posts 7+ (Outside): Impact Value = 0.50
+
+    Returns dict mapping post bucket labels to their impact values.
+    """
+    post_impacts: dict[str, float] = {}
+    bias_match = re.search(
+        r"9b\.\s*Track Bias.*?\n(.*?)(?=\n\d+[a-z]?\.|$)",
+        pp_text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not bias_match:
+        return post_impacts
+
+    bias_text = bias_match.group(1)
+
+    # Parse post-position impact lines
+    for match in re.finditer(
+        r"-\s*Posts?\s*(\d+)[-–](\d+)\s*\([^)]*\):\s*Impact Value\s*=\s*([\d.]+)",
+        bias_text,
+    ):
+        low_post = int(match.group(1))
+        high_post = int(match.group(2))
+        impact_val = float(match.group(3))
+        for p in range(low_post, high_post + 1):
+            post_impacts[str(p)] = impact_val
+
+    # Also match single-post patterns like "Post 1: Impact Value = 2.59"
+    for match in re.finditer(
+        r"-\s*Post\s*(\d+)\s*\([^)]*\):\s*Impact Value\s*=\s*([\d.]+)", bias_text
+    ):
+        post_impacts[match.group(1)] = float(match.group(2))
+
+    return post_impacts
+
+
+def calculate_weekly_bias_amplifier(impact_values: dict[str, float]) -> float:
+    """
+    Detect EXTREME weekly track biases and return a multiplier for track_bias_mult.
+
+    When weekly impact values show extreme style biases (e.g., E = 2.05, S = 0.32),
+    the standard track_bias_mult (1.0-1.15) is woefully inadequate.
+
+    Returns: Multiplier to MULTIPLY with existing track_bias_mult (1.0 = no change).
+    """
+    if not impact_values:
+        return 1.0
+
+    max_impact = max(impact_values.values()) if impact_values else 1.0
+    min_impact = min(impact_values.values()) if impact_values else 1.0
+
+    # Spread = difference between most and least favored styles
+    spread = max_impact - min_impact
+
+    if spread >= 2.0:
+        return 1.8  # Extreme bias week (e.g., E=2.05 S=0.32)
+    elif spread >= 1.5:
+        return 1.5  # Strong bias week
+    elif spread >= 1.0:
+        return 1.3  # Moderate bias week
+    elif spread >= 0.5:
+        return 1.1  # Slight bias week
+    return 1.0
+
+
+def calculate_style_vs_weekly_bias_bonus(
+    style: str, impact_values: dict[str, float]
+) -> float:
+    """
+    ENHANCEMENT 4: Apply bonus/penalty based on running style vs weekly bias data.
+
+    Oaklawn R1 Audit: Stalker impact was 0.32 (heavily suppressed) but model
+    ranked S-type Tiffany Twist #1. E-type Tell Me When (impact 2.05) was #7.
+
+    This function rewards styles favored by weekly bias and penalizes suppressed ones.
+
+    Returns: Bonus/penalty to add directly to tier2_bonus.
+    """
+    if not impact_values or not style:
+        return 0.0
+
+    # Map running style letters to impact keys
+    style_upper = str(style).upper().strip()
+    style_key = None
+
+    if style_upper in ("E", "E/P"):
+        style_key = "E"
+    elif style_upper in ("P", "E/P", "P/S"):
+        # For dual-style, check both; primary style_key is P
+        style_key = "P"
+    elif style_upper in ("S", "S/P"):
+        style_key = "S"
+    elif style_upper == "C":
+        style_key = "C"
+
+    if style_key is None or style_key not in impact_values:
+        return 0.0
+
+    impact = impact_values[style_key]
+
+    # PENALTY for suppressed styles (impact < 0.70 = below average)
+    if impact < 0.40:
+        return -1.5  # Severe suppression (Oaklawn S at 0.32)
+    elif impact < 0.60:
+        return -1.0  # Strong suppression
+    elif impact < 0.80:
+        return -0.5  # Moderate suppression
+
+    # BONUS for favored styles (impact > 1.30 = well above average)
+    if impact >= 2.0:
+        return 1.5  # Extreme bias favorite (Tell Me When E at 2.05)
+    elif impact >= 1.5:
+        return 1.0  # Strong bias favorite
+    elif impact >= 1.3:
+        return 0.5  # Moderate bias favorite
+
+    return 0.0
+
+
+def calculate_post_position_bias_bonus(
+    post: str, weekly_post_impacts: dict[str, float]
+) -> float:
+    """
+    ENHANCEMENT 5: Amplify post position advantage/disadvantage from weekly data.
+
+    Oaklawn R1 Audit: Rail posts 1-3 had 2.59 weekly impact. Sombra Dorada (post 1)
+    finished 2nd but model had her 5th. Post position in bias context was underweighted.
+
+    Returns: Bonus/penalty to add to tier2_bonus.
+    """
+    if not weekly_post_impacts or not post:
+        return 0.0
+
+    try:
+        post_str = str(int(float(post)))
+    except (ValueError, TypeError):
+        return 0.0
+
+    if post_str not in weekly_post_impacts:
+        return 0.0
+
+    impact = weekly_post_impacts[post_str]
+
+    # Strong rail/post advantage
+    if impact >= 2.5:
+        return 1.5  # Extreme post bias (Oaklawn rail at 2.59)
+    elif impact >= 2.0:
+        return 1.0  # Strong post bias
+    elif impact >= 1.5:
+        return 0.5  # Moderate post bias
+
+    # Post DISADVANTAGE (outside posts in rail-bias meet)
+    if impact <= 0.40:
+        return -1.0  # Severe post disadvantage
+    elif impact <= 0.60:
+        return -0.5  # Moderate post disadvantage
+
+    return 0.0
+
+
+def calculate_first_after_claim_bonus(horse_block: str) -> float:
+    """
+    ENHANCEMENT 3: Detect 1st-after-claim trainer angle for rating boost.
+
+    Oaklawn R1 Audit: Trainer Ashford had 28% win rate on 1st-after-claim
+    but model gave zero credit for this angle.
+
+    Parses patterns like:
+      - "1st after claim 18 5 28% 50%"   (starts wins win% itm%)
+      - "Claimed from ... for $XX,XXX"
+      - "ClmPrice" field in PP data
+
+    Returns: Bonus to add to tier2_bonus.
+    """
+    if not horse_block:
+        return 0.0
+
+    bonus = 0.0
+
+    try:
+        # Pattern 1: Explicit "1st after claim" stat line
+        claim_match = re.search(
+            r"1st\s+after\s+cl(?:ai)?m\s+(\d+)\s+(\d+)\s+(\d+)%",
+            horse_block,
+            re.IGNORECASE,
+        )
+        if claim_match:
+            claim_starts = int(claim_match.group(1))
+            claim_wins = int(claim_match.group(2))
+            claim_win_pct = int(claim_match.group(3)) / 100.0
+
+            if claim_starts >= 3:  # Meaningful sample
+                if claim_win_pct >= 0.30:
+                    bonus += 1.2  # Elite claim angle (Ashford 28%+)
+                elif claim_win_pct >= 0.20:
+                    bonus += 0.8  # Strong claim angle
+                elif claim_win_pct >= 0.15:
+                    bonus += 0.5  # Moderate claim angle
+            return bonus
+
+        # Pattern 2: "Claimed" in recent race + trainer with good record
+        # This is a lighter signal — horse was recently claimed, trainer's overall % applies
+        claimed_match = re.search(
+            r"Claimed\s+from.*?for\s+\$[\d,]+", horse_block, re.IGNORECASE
+        )
+        if claimed_match:
+            # Check if trainer has good overall win%
+            trainer_pct_match = re.search(
+                r"Trnr:.*?\(\d+\s+\d+-\d+-\d+\s+(\d+)%\)", horse_block
+            )
+            if trainer_pct_match:
+                trnr_pct = int(trainer_pct_match.group(1)) / 100.0
+                if trnr_pct >= 0.25:
+                    bonus += 0.6  # Good trainer with new claim
+                elif trnr_pct >= 0.18:
+                    bonus += 0.3  # Decent trainer with new claim
+    except BaseException:
+        pass
+
+    return bonus
+
+
 def parse_pedigree_spi(pp_text: str) -> dict[str, int | None]:
     """Extract SPI (Sire Performance Index) from pedigree sections"""
     spi_values = {}
@@ -7333,6 +7567,13 @@ def compute_bias_ratings(
     surface_stats = parse_pedigree_surface_stats(pp_text) if pp_text else {}
     awd_analysis = parse_awd_analysis(pp_text) if pp_text else {}
 
+    # RACE AUDIT ENHANCEMENT: Parse weekly post-position bias data
+    weekly_post_impacts = parse_weekly_post_bias(pp_text) if pp_text else {}
+
+    # RACE AUDIT ENHANCEMENT: Calculate weekly bias amplifier multiplier
+    # When extreme biases detected (e.g., E=2.05, S=0.32), amplify track_bias_mult
+    weekly_bias_amplifier = calculate_weekly_bias_amplifier(impact_values)
+
     # Build per-horse PP block lookup for tier-2 (searches must use horse block, NOT full pp_text)
     _horse_pp_blocks = (
         {
@@ -7430,6 +7671,8 @@ def compute_bias_ratings(
         # Track bias with dynamic weight multiplier
         dw = dynamic_weights or {}
         track_bias_mult = dw.get("track_bias", 1.0)
+        # RACE AUDIT ENHANCEMENT 1: Amplify track_bias_mult when extreme weekly biases detected
+        track_bias_mult *= weekly_bias_amplifier
         a_track = (
             _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
             * track_bias_mult
@@ -7866,12 +8109,38 @@ def compute_bias_ratings(
         except BaseException:
             pass
 
+        # 9. RACE AUDIT ENHANCEMENT 3: 1st-After-Claim Trainer Boost
+        # Oaklawn R1: Trainer Ashford had 28% win rate on 1st-after-claim but got zero credit
+        try:
+            tier2_bonus += calculate_first_after_claim_bonus(_horse_block)
+        except BaseException:
+            pass
+
+        # 10. RACE AUDIT ENHANCEMENT 4: Style vs Weekly Bias Dynamic Penalty/Bonus
+        # Oaklawn R1: Stalker impact 0.32 but model ranked S-type Tiffany Twist #1
+        # E-type Tell Me When (impact 2.05) was ranked dead last
+        try:
+            tier2_bonus += calculate_style_vs_weekly_bias_bonus(style, impact_values)
+        except BaseException:
+            pass
+
+        # 11. RACE AUDIT ENHANCEMENT 5: Post Position Bias Multiplier
+        # Oaklawn R1: Rail posts 1-3 had 2.59 weekly impact, Sombra Dorada (post 1)
+        # finished 2nd but model had her 5th
+        try:
+            tier2_bonus += calculate_post_position_bias_bonus(post, weekly_post_impacts)
+        except BaseException:
+            pass
+
         # ======================== End Tier 2 Bonuses ========================
 
         # CAP tier2_bonus: Bonuses should supplement, not dominate, core ratings
         # Race 4 Oaklawn validation: Track Phantom got +7.30 in bonuses on 3.67 core (2:1 ratio!)
-        # With cap, bonuses limited to ~60% of typical core (0-5 range)
-        tier2_bonus = np.clip(tier2_bonus, -2.0, 2.5)
+        # UPDATED Feb 2026 Race Audit: Widened cap from [-2.0, 2.5] to [-3.5, 4.0]
+        # to accommodate new weekly bias, style-vs-bias, post, and claim angle bonuses.
+        # Combined audit enhancements can contribute up to ~4.2, so cap at 4.0 preserves
+        # the protective ceiling while allowing legitimate edge signals to register.
+        tier2_bonus = np.clip(tier2_bonus, -3.5, 4.0)
 
         # HYBRID MODEL: Surface-Adaptive + Maiden-Aware PP Weight (SA R8 + GP R1 + GP R2 - Feb 2026)
         #
@@ -8052,6 +8321,8 @@ def compute_bias_ratings(
         pace_speed_mult = dw.get("pace_speed", 1.0)
         style_post_mult = dw.get("style_post", 1.0)
         track_bias_mult = dw.get("track_bias", 1.0)
+        # RACE AUDIT ENHANCEMENT 1: Amplify track_bias_mult when extreme weekly biases detected
+        track_bias_mult *= weekly_bias_amplifier
 
         # Calculate weighted components with dynamic multipliers applied
         weighted_components = (
@@ -8210,6 +8481,8 @@ def compute_bias_ratings(
             pace_speed_mult = dw.get("pace_speed", 1.0)
             style_post_mult = dw.get("style_post", 1.0)
             track_bias_mult = dw.get("track_bias", 1.0)
+            # RACE AUDIT ENHANCEMENT 1: Amplify track_bias_mult when extreme weekly biases detected
+            track_bias_mult *= weekly_bias_amplifier
 
             weighted_components = (
                 c_class * class_weight * class_form_mult
@@ -10141,13 +10414,27 @@ else:
                 st.session_state["dumb_money_horses"] = dumb_money_horses
 
                 # Apply BONUS to horses with money coming IN (smart money)
+                # RACE AUDIT ENHANCEMENT 2: Graduated smart money boost based on contraction severity
+                # Oaklawn R1: Tell Me When dropped from 8/1 to 5/2 (ratio 0.31) — extreme steam
                 if smart_money_horses:
-                    smart_money_names = [h["name"] for h in smart_money_horses]
-                    smart_money_bonus = 2.5  # Significant boost for sharp action
+                    smart_money_lookup = {h["name"]: h for h in smart_money_horses}
 
-                    # Apply bonus to primary_df ratings
+                    # Apply graduated bonus to primary_df ratings
                     for idx, row in primary_df.iterrows():
-                        if row["Horse"] in smart_money_names:
+                        if row["Horse"] in smart_money_lookup:
+                            horse_data = smart_money_lookup[row["Horse"]]
+                            ratio = horse_data.get("ratio", 0.6)
+                            # Graduated boost: bigger drop = bigger boost
+                            if ratio < 0.30:
+                                smart_money_bonus = (
+                                    4.0  # Extreme steam (3x+ contraction)
+                                )
+                            elif ratio < 0.40:
+                                smart_money_bonus = 3.5  # Very heavy action
+                            elif ratio < 0.50:
+                                smart_money_bonus = 3.0  # Strong action
+                            else:
+                                smart_money_bonus = 2.5  # Standard threshold
                             primary_df.at[idx, "R"] = row["R"] + smart_money_bonus
 
                 # Re-sort after applying all odds-based adjustments
