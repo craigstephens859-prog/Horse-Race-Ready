@@ -545,6 +545,8 @@ DISTANCE_OPTIONS = [
     "6 1/2 Furlongs",
     "6.5 Furlongs",
     "7 Furlongs",
+    "7 1/2 Furlongs",
+    "7.5 Furlongs",
     # Routes & variants
     "1 Mile",
     "1 Mile 70 Yards",
@@ -1063,6 +1065,7 @@ base_class_bias = {
     "allowance": 0.99,
     "starter handicap": 1.02,
     "starter allowance": 1.03,
+    "starter optional claiming": 1.00,
     "waiver claiming": 1.07,
     "claiming": 1.12,
     "maiden claiming": 1.15,
@@ -1110,6 +1113,10 @@ def detect_race_type(pp_text: str) -> str:
         if re.search(r"(msw|maiden\s*special|maiden\s*sp\s*wt)", s):
             return "maiden special weight"
         return "maiden special weight"
+
+    # Starter Optional Claiming (check before general OC/AOC)
+    if re.search(r"\b(soc|starter\s*optional\s*claim\w*)\b", s):
+        return "starter optional claiming"
 
     # AOC
     if re.search(r"\b(oc|aoc|optional\s*claim)\b", s):
@@ -1810,14 +1817,15 @@ HORSE_HDR_RE = re.compile(
     (?:POST\s+)?          # optional "POST " prefix
     (\d+)                 # post/program number
     [:\s]+                # colon or whitespace separator
-    ([A-Za-z0-9'.\-\s&]+?)   # horse name
-    \s*\(\s*
+    ([A-Za-z0-9'.\-\s&]+)    # horse name (greedy to capture full name)
+    [^\w(]*               # skip any special chars/icons between name and parentheses
+    \(\s*
     (E\/P|EP|E|P|S|NA)   # running style
     (?:\s+(\d+))?         # optional quirin
     \s*\)                 # closing paren
     (?:\s*-\s*ML\s+\S+)?  # optional "- ML odds" suffix
     (?:\s*\*+\s*.+)?       # optional "*** ACTUAL WINNER ***" annotation
-    \s*$
+    .*$                   # allow trailing special chars/icons (BRISNET symbols like ì)
     """,
     re.VERBOSE,
 )
@@ -3729,8 +3737,10 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
         (r"\bMSW\b", "maiden_special_weight", 0.9),
         (r"Maiden", "maiden", 0.85),
         # Starter
+        (r"Starter\s+Optional\s+Claiming", "starter_optional_claiming", 0.9),
         (r"Starter\s+Allowance", "starter_allowance", 0.9),
         (r"Starter\s+Handicap", "starter_handicap", 0.9),
+        (r"\bSOC\b", "starter_optional_claiming", 0.85),
         # Waiver
         (r"Waiver", "waiver_claiming", 0.85),
     ]
@@ -3958,6 +3968,7 @@ def calculate_comprehensive_class_rating(
         # Starter Allowance (Level 3)
         "sta": 3,
         "starter allowance": 3,
+        "starter optional claiming": 4,
         "str": 3,
         "starter": 3,
         "shp": 3,
@@ -5815,8 +5826,10 @@ def parse_race_info(race_data):
         "trl": "TRL",
         # Starter races
         "starter allowance": "STR",
+        "starter optional claiming": "SOC",
         "starter": "STR",
         "str": "STR",
+        "soc": "SOC",
     }
 
     # Maiden race types (for is_maiden_race detection)
