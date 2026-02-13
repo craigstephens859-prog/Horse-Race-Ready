@@ -10577,12 +10577,18 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             if "Horse" in primary_df.columns
                             else None
                         )
+                        post_positions = (
+                            primary_df["Post"].values.astype(int).tolist()
+                            if "Post" in primary_df.columns
+                            else None
+                        )
 
                         # Run Phase 3 analysis
                         phase3_engine = Phase3ProbabilityEngine(bankroll=50.0)
                         phase3_results = phase3_engine.analyze_race_comprehensive(
                             win_probs=win_probs,
                             horse_names=horse_names,
+                            post_positions=post_positions,
                             confidence_level=0.95,
                         )
 
