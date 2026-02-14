@@ -5642,10 +5642,10 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     ACTUAL BRISNET Format:
     - Trainer: "Trnr: LastName FirstName (starts wins-places-shows win%)"
       Example: "Trnr: Eikleberry Kevin (50 11-7-4 22%)"
-    - Jockey: Similar format in "Jky:" lines or angle section
+    - Jockey: "Jky: LastName FirstName (starts wins-places-shows win%)"
+    - Combo: "w/TrnrLastName: starts win% place% combo%"
 
-    FIXED Feb 13, 2026: Was searching for "Jockey:" and "Trainer:" which don't exist.
-    Now searches for actual "Trnr:" format. Jockey data extraction TBD.
+    PHASE 1 RESTORATION (Feb 13, 2026): Integrated calculate_hot_combo_bonus for tiered combo analysis.
     """
     if not pp_text or not horse_name:
         return 0.0
@@ -5653,13 +5653,14 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     bonus = 0.0
     jockey_win_rate = 0.0
     trainer_win_rate = 0.0
+    combo_win_rate = 0.0
 
     # Find horse section
     horse_section_start = pp_text.find(horse_name)
     if horse_section_start == -1:
         return 0.0
 
-    # Search next 800 chars for trainer stats
+    # Search next 800 chars for trainer/jockey stats
     section = pp_text[horse_section_start : horse_section_start + 800]
 
     # TRAINER: "Trnr: LastName FirstName (starts wins-places-shows win%)"
@@ -5681,18 +5682,21 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
             elif trainer_win_rate >= 0.18:
                 bonus += 0.05
 
-    # JOCKEY: Try to extract from angle lines or Jky: patterns
-    # Angle format: "JKYw/ Sprints 50 22% 18% +1.2" (starts, win%, place%, ROI)
-    # For now, skip jockey bonus until format is confirmed
-    # TODO: Add jockey parsing when format is verified
+    # JOCKEY & COMBO: Parse jockey stats and combo percentage
+    jockey_win_rate, combo_win_rate = parse_jockey_combo_stats(section)
+    
+    # Add individual jockey bonus
+    if jockey_win_rate >= 0.25:
+        bonus += 0.10
+    elif jockey_win_rate >= 0.18:
+        bonus += 0.06
+    elif jockey_win_rate >= 0.12:
+        bonus += 0.03
 
-    # ELITE CONNECTIONS COMBO BONUS (SA R8 enhancement)
-    # Since jockey data is not yet parsed, combo bonus is temporarily disabled
-    # When both jockey AND trainer are elite, add significant combo bonus
-    if jockey_win_rate >= 0.18 and trainer_win_rate >= 0.15:
-        bonus += 0.25  # Elite combo bonus
-    elif jockey_win_rate >= 0.15 and trainer_win_rate >= 0.12:
-        bonus += 0.15  # Good combo bonus
+    # ELITE CONNECTIONS COMBO BONUS - Use restored calculate_hot_combo_bonus function
+    # This provides tiered analysis: 40%+ L60 combo was KEY to Litigation 24/1 win!
+    combo_bonus = calculate_hot_combo_bonus(trainer_win_rate, jockey_win_rate, combo_win_rate)
+    bonus += combo_bonus
 
     return float(np.clip(bonus, 0, 0.50))
 
@@ -7952,6 +7956,51 @@ def compute_bias_ratings(
 
         # ELITE: Jockey/Trainer Performance Impact
         tier2_bonus += calculate_jockey_trainer_impact(name, pp_text)
+
+
+        # PHASES 2 & 3: Class Movement & Form Cycle Analysis (Feb 13, 2026)
+        # Class dropper bonus: +3-5% accuracy on class drop patterns
+        try:
+            if pp_text and claiming_price:
+                claiming_pattern = r"(\d+)(?:clm|CLM|Clm)"
+                claiming_matches = re.findall(claiming_pattern, pp_text[:2000])
+                if claiming_matches and len(claiming_matches) >= 2:
+                    past_prices = [int(p) for p in claiming_matches[:5]]
+                    avg_past = sum(past_prices) / len(past_prices)
+                    if claiming_price < avg_past * 0.70:
+                        tier2_bonus += 0.12  # Significant class drop
+                    elif claiming_price < avg_past * 0.85:
+                        tier2_bonus += 0.08  # Moderate class drop
+                    elif claiming_price > avg_past * 1.30:
+                        tier2_bonus -= 0.08  # Significant class rise
+                    elif claiming_price > avg_past * 1.15:
+                        tier2_bonus -= 0.04  # Moderate class rise
+        except:
+            pass
+        
+        # Form cycle bonus: +2-4% accuracy on improving/declining form
+        try:
+            if pp_text:
+                finish_pattern = r"(?:^|\s)(\d+)(?:st|nd|rd|th)(?:\s|$)"
+                finishes = [int(f) for f in re.findall(finish_pattern, pp_text[:2000])[:5]]
+                if len(finishes) >= 3:
+                    if finishes[0] < finishes[1] < finishes[2]:
+                        tier2_bonus += 0.10  # Strong improving form
+                    elif finishes[0] < finishes[1]:
+                        tier2_bonus += 0.06  # Moderate improving form
+                    elif finishes[0] > finishes[1] > finishes[2]:
+                        tier2_bonus -= 0.08  # Declining form
+                
+                figure_pattern = r"(?:BSF|Spd:?)\s*(\d+)"
+                figs = [int(f) for f in re.findall(figure_pattern, pp_text[:2000])[:5]]
+                if len(figs) >= 3:
+                    if figs[0] > figs[1] > figs[2]:
+                        tier2_bonus += 0.08  # Improving speed
+                    elif figs[0] < figs[1] < figs[2]:
+                        tier2_bonus -= 0.06  # Declining speed
+        except:
+            pass
+
 
         # ELITE: Track Condition Granularity
         track_info = st.session_state.get("track_condition_detail", None)
