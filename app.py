@@ -5639,89 +5639,62 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     """
     ELITE: Calculate impact of jockey/trainer performance based on BRISNET PP stats.
 
-    BRISNET Format: "Jockey: J. Castellano (15-3-2-2)" = 15 starts, 3 wins, 2 places, 2 shows
+    ACTUAL BRISNET Format:
+    - Trainer: "Trnr: LastName FirstName (starts wins-places-shows win%)"
+      Example: "Trnr: Eikleberry Kevin (50 11-7-4 22%)"
+    - Jockey: Similar format in "Jky:" lines or angle section
+
+    FIXED Feb 13, 2026: Was searching for "Jockey:" and "Trainer:" which don't exist.
+    Now searches for actual "Trnr:" format. Jockey data extraction TBD.
     """
     if not pp_text or not horse_name:
         return 0.0
 
     bonus = 0.0
+    jockey_win_rate = 0.0
+    trainer_win_rate = 0.0
 
-    # Extract jockey stats from PP text for this horse
-    # Pattern: Horse section followed by "Jockey:" then stats
-    import re
-
-    # Find horse section and extract jockey/trainer stats
-    # Case-insensitive pattern that handles multi-word names with apostrophes/periods
-    jockey_pattern = r"Jockey:?\s*([A-Za-z][A-Za-z\s\.\']+?)\s*\((\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\)"
-    trainer_pattern = r"Trainer:?\s*([A-Za-z][A-Za-z\s\.\']+?)\s*\((\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\)"
-
-    # Search within reasonable window after horse name
+    # Find horse section
     horse_section_start = pp_text.find(horse_name)
-    if horse_section_start != -1:
-        # Search next 500 chars for jockey/trainer stats
-        section = pp_text[horse_section_start : horse_section_start + 500]
+    if horse_section_start == -1:
+        return 0.0
 
-        jockey_match = re.search(jockey_pattern, section)
-        if jockey_match:
-            # groups() returns (name, starts, wins, places, shows) — skip name group
-            starts, wins, places, shows = map(int, jockey_match.groups()[1:])
+    # Search next 800 chars for trainer stats
+    section = pp_text[horse_section_start : horse_section_start + 800]
 
-            if starts >= 10:  # Minimum sample size
-                win_pct = wins / starts
-                itm_pct = (wins + places + shows) / starts  # In-the-money %
+    # TRAINER: "Trnr: LastName FirstName (starts wins-places-shows win%)"
+    trainer_pattern = r"Trnr:.*?\((\d+)\s+(\d+)-(\d+)-(\d+)\s+(\d+)%\)"
+    trainer_match = re.search(trainer_pattern, section)
+    if trainer_match:
+        t_starts = int(trainer_match.group(1))
+        t_wins = int(trainer_match.group(2))
+        t_win_pct_reported = int(trainer_match.group(5)) / 100.0
 
-                # OPTIMIZED: Elite jockey bonuses tripled (SA R8: 20% jockey won but only got +0.10)
-                # Elite jockey (>25% win rate) = +0.35 bonus (was +0.15)
-                if win_pct >= 0.25:
-                    bonus += 0.35
-                # Strong jockey (>20% win rate) = +0.25 bonus (was +0.10)
-                elif win_pct >= 0.20:
-                    bonus += 0.25
-                # Good jockey (>15% win rate) = +0.15 bonus (NEW)
-                elif win_pct >= 0.15:
-                    bonus += 0.15
+        if t_starts >= 20:
+            trainer_win_rate = t_win_pct_reported
 
-                # Hot jockey (>60% ITM) = additional +0.10 (was +0.05)
-                if itm_pct >= 0.60:
-                    bonus += 0.10
-                # Solid ITM (>50%) = +0.05 (NEW)
-                elif itm_pct >= 0.50:
-                    bonus += 0.05
+            # Elite trainer (>28% win rate) = +0.12 bonus
+            if trainer_win_rate >= 0.28:
+                bonus += 0.12
+            elif trainer_win_rate >= 0.22:
+                bonus += 0.08
+            elif trainer_win_rate >= 0.18:
+                bonus += 0.05
 
-                # Store jockey win% for combo bonus check
-                jockey_win_rate = win_pct
-            else:
-                jockey_win_rate = 0.0
-        else:
-            jockey_win_rate = 0.0
+    # JOCKEY: Try to extract from angle lines or Jky: patterns
+    # Angle format: "JKYw/ Sprints 50 22% 18% +1.2" (starts, win%, place%, ROI)
+    # For now, skip jockey bonus until format is confirmed
+    # TODO: Add jockey parsing when format is verified
 
-        trainer_match = re.search(trainer_pattern, section)
-        trainer_win_rate = 0.0
-        if trainer_match:
-            # groups() returns (name, starts, wins, places, shows) — skip name group
-            t_starts, t_wins, t_places, t_shows = map(int, trainer_match.groups()[1:])
+    # ELITE CONNECTIONS COMBO BONUS (SA R8 enhancement)
+    # Since jockey data is not yet parsed, combo bonus is temporarily disabled
+    # When both jockey AND trainer are elite, add significant combo bonus
+    if jockey_win_rate >= 0.18 and trainer_win_rate >= 0.15:
+        bonus += 0.25  # Elite combo bonus
+    elif jockey_win_rate >= 0.15 and trainer_win_rate >= 0.12:
+        bonus += 0.15  # Good combo bonus
 
-            if t_starts >= 20:
-                t_win_pct = t_wins / t_starts
-                trainer_win_rate = t_win_pct
-
-                # Elite trainer (>28% win rate) = +0.12 bonus
-                if t_win_pct >= 0.28:
-                    bonus += 0.12
-                elif t_win_pct >= 0.22:
-                    bonus += 0.08
-
-        # ELITE CONNECTIONS COMBO BONUS (SA R8 enhancement)
-        # When both jockey AND trainer are elite, add significant combo bonus
-        # SA R8 winner: 22% jockey + 18% trainer = elite connections
-        if jockey_win_rate >= 0.18 and trainer_win_rate >= 0.15:
-            # Both connections are strong/elite - powerful combination
-            bonus += 0.25  # Elite combo bonus
-        elif jockey_win_rate >= 0.15 and trainer_win_rate >= 0.12:
-            # Both connections are good - moderate combo
-            bonus += 0.15  # Good combo bonus
-
-    return float(np.clip(bonus, 0, 0.50))  # Increased cap from 0.35 to 0.50
+    return float(np.clip(bonus, 0, 0.50))
 
 
 def calculate_track_condition_granular(
