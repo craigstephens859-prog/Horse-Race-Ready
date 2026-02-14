@@ -4441,6 +4441,15 @@ for opt in (preferred, auto_distance, st.session_state["distance_txt"]):
 distance_txt = st.selectbox("Distance:", DISTANCE_OPTIONS, index=idx)
 st.session_state["distance_txt"] = distance_txt
 
+# SECURITY (Feb 13, 2026): Validate distance string before downstream parsing
+if SECURITY_VALIDATORS_AVAILABLE and distance_txt:
+    try:
+        distance_txt = validate_distance_string(distance_txt)
+    except ValueError as e:
+        logger.warning(f"Distance validation failed: {e}, using default")
+        distance_txt = "6 Furlongs"
+        st.session_state["distance_txt"] = distance_txt
+
 # Purse
 
 
@@ -4801,6 +4810,13 @@ for _, r in df_final_field.iterrows():
         if h_name == name:
             horse_block = block
             break
+
+    # DIAGNOSTIC (Feb 13, 2026): Log when horse has no PP block match
+    if not horse_block and pp_text:
+        logger.warning(
+            f"⚠️ ZERO-SCORE RISK (Cclass/Cform): Horse '{name}' has no PP block. "
+            f"Class and form ratings will default to 0.0."
+        )
 
     # Calculate comprehensive class rating
     # NOW includes PP text for race class parser to properly understand race acronyms
@@ -7804,6 +7820,23 @@ def compute_bias_ratings(
         if pp_text
         else {}
     )
+
+    # DIAGNOSTIC (Feb 13, 2026): Detect horses in df_styles that have NO PP block match.
+    # When split_into_horse_chunks fails to match a horse (e.g., regex edge cases with
+    # commas in trainer names, or "Previously trained by" blocks), that horse gets
+    # _horse_block = full pp_text as fallback, which causes ALL component parsers to
+    # return wrong values or zeros. Log these mismatches so they surface immediately.
+    if _horse_pp_blocks and df_styles is not None and not df_styles.empty:
+        _matched_names = set(_horse_pp_blocks.keys())
+        for _, _diag_row in df_styles.iterrows():
+            _diag_name = str(_diag_row.get("Horse", ""))
+            if _diag_name and _diag_name not in _matched_names:
+                logger.warning(
+                    f"⚠️ ZERO-SCORE RISK: Horse '{_diag_name}' (post {_diag_row.get('Post', '?')}) "
+                    f"has no PP block match in split_into_horse_chunks. "
+                    f"Falling back to full pp_text — component scores may be incorrect. "
+                    f"Matched blocks: {sorted(_matched_names)}"
+                )
 
     # ======================== TRACK PATTERN LEARNING: Fetch learned patterns ========================
     _track_patterns: dict = {}
@@ -11012,15 +11045,26 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                         # Calculate race bucket for track bias lookup
                         race_bucket = distance_bucket(distance_txt)
 
+                        # SECURITY (Feb 13, 2026): Sanitize text fields before DB storage
+                        # Strips SQL injection chars (;'"\) from user-influenced text
+                        def _sanitize_metadata_text(
+                            val: str, max_len: int = 200
+                        ) -> str:
+                            import re as _re
+
+                            return _re.sub(r'[;\'"\\]', "", str(val).strip())[:max_len]
+
                         # Prepare COMPREHENSIVE race metadata with all context
                         race_metadata = {
-                            "track": track_name,
+                            "track": _sanitize_metadata_text(track_name, 50),
                             "date": race_date,
                             "race_num": st.session_state.get("race_num", 1),
-                            "race_type": race_type_detected,
-                            "surface": surface_type,
-                            "distance": distance_txt,
-                            "condition": condition_txt,
+                            "race_type": _sanitize_metadata_text(
+                                race_type_detected, 100
+                            ),
+                            "surface": _sanitize_metadata_text(surface_type, 30),
+                            "distance": _sanitize_metadata_text(distance_txt, 50),
+                            "condition": _sanitize_metadata_text(condition_txt, 100),
                             "purse": purse_val,
                             "field_size": len(df_final_field)
                             if df_final_field is not None
