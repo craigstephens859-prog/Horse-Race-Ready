@@ -5635,6 +5635,42 @@ def calculate_weather_impact(
     return float(np.clip(bonus, -0.30, 0.30))
 
 
+def parse_jockey_combo_stats(section: str) -> tuple[float, float]:
+    """
+    Parse jockey stats and combo percentage from BRISNET format.
+    
+    Searches for patterns like:
+    - "Jky: LastName FirstName (starts wins-places-shows win%)"
+    - Combo patterns: "w/TrnrLastName: 50 22% 18% 40%" (starts, win%, place%, combo%)
+    
+    Returns:
+        tuple: (jockey_win_rate, combo_win_rate)
+    """
+    jockey_win_rate = 0.0
+    combo_win_rate = 0.0
+    
+    # JOCKEY: Search for "Jky:" pattern
+    jockey_pattern = r"Jky:.*?\((\d+)\s+(\d+)-(\d+)-(\d+)\s+(\d+)%\)"
+    jockey_match = re.search(jockey_pattern, section)
+    if jockey_match:
+        j_starts = int(jockey_match.group(1))
+        j_win_pct = int(jockey_match.group(5)) / 100.0
+        if j_starts >= 20:
+            jockey_win_rate = j_win_pct
+    
+    # COMBO: Search for trainer/jockey combo patterns
+    # Format: "w/TrnrName: 50 22% 18% 40%" or similar
+    combo_pattern = r"w/.*?:\s*(\d+)\s+(\d+)%\s+(\d+)%\s+(\d+)%"
+    combo_match = re.search(combo_pattern, section)
+    if combo_match:
+        combo_starts = int(combo_match.group(1))
+        combo_pct = int(combo_match.group(4)) / 100.0  # Last percentage is combo win rate
+        if combo_starts >= 10:  # Minimum 10 starts for combo stats
+            combo_win_rate = combo_pct
+    
+    return jockey_win_rate, combo_win_rate
+
+
 def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     """
     ELITE: Calculate impact of jockey/trainer performance based on BRISNET PP stats.
