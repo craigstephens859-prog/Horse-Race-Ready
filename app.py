@@ -5169,6 +5169,11 @@ def calculate_weekly_bias_amplifier(impact_values: dict[str, float]) -> float:
     When weekly impact values show extreme style biases (e.g., E = 2.05, S = 0.32),
     the standard track_bias_mult (1.0-1.15) is woefully inadequate.
 
+    R9 FIX: Also checks absolute min impact value, not just spread.
+    Case: E=1.17, E/P=1.14, P=1.18, S=0.32 → spread=0.86 (only 1.1x)
+    but S at 0.32 is severely suppressed. Now ensures at least 1.2x when
+    any style is below 0.40 impact.
+
     Returns: Multiplier to MULTIPLY with existing track_bias_mult (1.0 = no change).
     """
     if not impact_values:
@@ -5181,14 +5186,25 @@ def calculate_weekly_bias_amplifier(impact_values: dict[str, float]) -> float:
     spread = max_impact - min_impact
 
     if spread >= 2.0:
-        return 1.8  # Extreme bias week (e.g., E=2.05 S=0.32)
+        amp = 1.8  # Extreme bias week (e.g., E=2.05 S=0.32)
     elif spread >= 1.5:
-        return 1.5  # Strong bias week
+        amp = 1.5  # Strong bias week
     elif spread >= 1.0:
-        return 1.3  # Moderate bias week
+        amp = 1.3  # Moderate bias week
     elif spread >= 0.5:
-        return 1.1  # Slight bias week
-    return 1.0
+        amp = 1.1  # Slight bias week
+    else:
+        amp = 1.0
+
+    # R9 FIX: Additional floor when any style is severely suppressed
+    # Catches cases where spread is moderate but one style is crushed
+    # (e.g., E≈1.2, P≈1.2, S=0.32 → spread=0.86 but S is dead)
+    if min_impact < 0.40:
+        amp = max(amp, 1.2)  # At least 1.2x when a style is severely suppressed
+    elif min_impact < 0.60:
+        amp = max(amp, 1.15)  # At least 1.15x when a style is notably weak
+
+    return amp
 
 
 def calculate_style_vs_weekly_bias_bonus(
@@ -5242,15 +5258,17 @@ def calculate_style_vs_weekly_bias_bonus(
     elif impact < 1.00:
         return -0.2  # Slight below-average
 
-    # BONUS for favored styles (graduated — no dead zone)
+    # BONUS for favored styles (R9 FIX: increased differentiation)
+    # Previous scale too flat — impact 1.17 only gave +0.5; not enough
+    # to separate E/P from S when weekly data strongly favors speed
     if impact >= 2.0:
-        return 1.5  # Extreme bias favorite (Tell Me When E at 2.05)
+        return 2.0  # Extreme bias favorite (Tell Me When E at 2.05)
     elif impact >= 1.5:
-        return 1.0  # Strong bias favorite
+        return 1.3  # Strong bias favorite
     elif impact >= 1.3:
-        return 0.7  # Moderate-strong bias favorite
+        return 0.9  # Moderate-strong bias favorite
     elif impact >= 1.15:
-        return 0.5  # Moderate bias favorite (She's Storming E/P 1.17)
+        return 0.6  # Moderate bias favorite (She's Storming E/P 1.17)
     elif impact >= 1.05:
         return 0.3  # Slight bias favorite
     elif impact >= 1.00:
@@ -5290,12 +5308,21 @@ def calculate_post_position_bias_bonus(
         return 1.0  # Strong post bias
     elif impact >= 1.5:
         return 0.5  # Moderate post bias
+    elif impact >= 1.2:
+        return 0.3  # Mild advantage (R9 FIX: fills 1.20-1.50 dead zone)
+    elif impact >= 1.0:
+        return 0.1  # Slight advantage
 
-    # Post DISADVANTAGE (outside posts in rail-bias meet)
+    # Post DISADVANTAGE — GRADUATED (R9 FIX: fills 0.60-1.00 dead zone)
+    # Post 10 at 0.70 impact was getting 0.0 — now gets -0.3
     if impact <= 0.40:
         return -1.0  # Severe post disadvantage
     elif impact <= 0.60:
-        return -0.5  # Moderate post disadvantage
+        return -0.5  # Strong post disadvantage
+    elif impact <= 0.80:
+        return -0.3  # Mild post disadvantage (Sparkly post 10 at 0.70)
+    elif impact < 1.0:
+        return -0.1  # Slight below average
 
     return 0.0
 
@@ -5638,17 +5665,17 @@ def calculate_weather_impact(
 def parse_jockey_combo_stats(section: str) -> tuple[float, float]:
     """
     Parse jockey stats and combo percentage from BRISNET format.
-    
+
     Searches for patterns like:
     - "Jky: LastName FirstName (starts wins-places-shows win%)"
     - Combo patterns: "w/TrnrLastName: 50 22% 18% 40%" (starts, win%, place%, combo%)
-    
+
     Returns:
         tuple: (jockey_win_rate, combo_win_rate)
     """
     jockey_win_rate = 0.0
     combo_win_rate = 0.0
-    
+
     # JOCKEY: Search for "Jky:" pattern
     jockey_pattern = r"Jky:.*?\((\d+)\s+(\d+)-(\d+)-(\d+)\s+(\d+)%\)"
     jockey_match = re.search(jockey_pattern, section)
@@ -5657,17 +5684,19 @@ def parse_jockey_combo_stats(section: str) -> tuple[float, float]:
         j_win_pct = int(jockey_match.group(5)) / 100.0
         if j_starts >= 20:
             jockey_win_rate = j_win_pct
-    
+
     # COMBO: Search for trainer/jockey combo patterns
     # Format: "w/TrnrName: 50 22% 18% 40%" or similar
     combo_pattern = r"w/.*?:\s*(\d+)\s+(\d+)%\s+(\d+)%\s+(\d+)%"
     combo_match = re.search(combo_pattern, section)
     if combo_match:
         combo_starts = int(combo_match.group(1))
-        combo_pct = int(combo_match.group(4)) / 100.0  # Last percentage is combo win rate
+        combo_pct = (
+            int(combo_match.group(4)) / 100.0
+        )  # Last percentage is combo win rate
         if combo_starts >= 10:  # Minimum 10 starts for combo stats
             combo_win_rate = combo_pct
-    
+
     return jockey_win_rate, combo_win_rate
 
 
@@ -5720,7 +5749,7 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
 
     # JOCKEY & COMBO: Parse jockey stats and combo percentage
     jockey_win_rate, combo_win_rate = parse_jockey_combo_stats(section)
-    
+
     # Add individual jockey bonus
     if jockey_win_rate >= 0.25:
         bonus += 0.10
@@ -5731,7 +5760,9 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
 
     # ELITE CONNECTIONS COMBO BONUS - Use restored calculate_hot_combo_bonus function
     # This provides tiered analysis: 40%+ L60 combo was KEY to Litigation 24/1 win!
-    combo_bonus = calculate_hot_combo_bonus(trainer_win_rate, jockey_win_rate, combo_win_rate)
+    combo_bonus = calculate_hot_combo_bonus(
+        trainer_win_rate, jockey_win_rate, combo_win_rate
+    )
     bonus += combo_bonus
 
     return float(np.clip(bonus, 0, 0.50))
@@ -7993,7 +8024,6 @@ def compute_bias_ratings(
         # ELITE: Jockey/Trainer Performance Impact
         tier2_bonus += calculate_jockey_trainer_impact(name, pp_text)
 
-
         # PHASES 2 & 3: Class Movement & Form Cycle Analysis (Feb 13, 2026)
         # Class dropper bonus: +3-5% accuracy on class drop patterns
         try:
@@ -8013,12 +8043,14 @@ def compute_bias_ratings(
                         tier2_bonus -= 0.04  # Moderate class rise
         except:
             pass
-        
+
         # Form cycle bonus: +2-4% accuracy on improving/declining form
         try:
             if pp_text:
                 finish_pattern = r"(?:^|\s)(\d+)(?:st|nd|rd|th)(?:\s|$)"
-                finishes = [int(f) for f in re.findall(finish_pattern, pp_text[:2000])[:5]]
+                finishes = [
+                    int(f) for f in re.findall(finish_pattern, pp_text[:2000])[:5]
+                ]
                 if len(finishes) >= 3:
                     if finishes[0] < finishes[1] < finishes[2]:
                         tier2_bonus += 0.10  # Strong improving form
@@ -8026,7 +8058,7 @@ def compute_bias_ratings(
                         tier2_bonus += 0.06  # Moderate improving form
                     elif finishes[0] > finishes[1] > finishes[2]:
                         tier2_bonus -= 0.08  # Declining form
-                
+
                 figure_pattern = r"(?:BSF|Spd:?)\s*(\d+)"
                 figs = [int(f) for f in re.findall(figure_pattern, pp_text[:2000])[:5]]
                 if len(figs) >= 3:
@@ -8036,7 +8068,6 @@ def compute_bias_ratings(
                         tier2_bonus -= 0.06  # Declining speed
         except:
             pass
-
 
         # ELITE: Track Condition Granularity
         track_info = st.session_state.get("track_condition_detail", None)
