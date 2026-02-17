@@ -303,7 +303,7 @@ def retrain_model(
     model = RankingNN(n_features=n_features, hidden_dim=hidden_dim).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", patience=5, verbose=True
+        optimizer, mode="min", patience=5
     )
 
     # 4. Training loop
