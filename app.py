@@ -4588,6 +4588,10 @@ if (
         if validation.get("overall_confidence", 0.0) >= 0.6:
             # Use elite parser data
             elite_parser_used = True
+            # Store full elite parsed data for downstream DB storage
+            st.session_state["elite_horses_data"] = {
+                name: obj.to_dict() for name, obj in horses.items()
+            }
             for horse_name, horse_obj in horses.items():
                 if horse_name in df_editor["Horse"].values:
                     # Store speed figures
@@ -7329,6 +7333,11 @@ def compute_bias_ratings(
             # Parse with elite parser
             parser = GoldStandardBRISNETParser()
             horses = parser.parse_full_pp(pp_text, debug=False)
+
+            # Store full elite parsed data for downstream DB storage
+            st.session_state["elite_horses_data"] = {
+                name: obj.to_dict() for name, obj in horses.items()
+            }
 
             # Validate parsing quality
             validation = parser.validate_parsed_data(horses, min_confidence=0.5)
@@ -11379,6 +11388,106 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 > 0
                                 else 1.0,
                             }
+
+                            # ═══════════════════════════════════════════════════════
+                            # ELITE PARSER ENRICHMENT: Populate fields from parsed PP data
+                            # The elite parser extracts weight, medication, equipment,
+                            # lifetime records, jockey/trainer stats, surface records,
+                            # damsire, beaten lengths — data that the rating engine
+                            # doesn't produce but is critical for ML training.
+                            # ═══════════════════════════════════════════════════════
+                            elite_data = st.session_state.get("elite_horses_data", {})
+                            # Try exact match first, then normalized match
+                            ep = elite_data.get(horse_name)
+                            if ep is None:
+                                norm_name = normalize_horse_name(horse_name)
+                                for ek, ev in elite_data.items():
+                                    if normalize_horse_name(ek) == norm_name:
+                                        ep = ev
+                                        break
+                            if ep:
+                                horse_dict["weight"] = ep.get(
+                                    "weight"
+                                ) or horse_dict.get("weight")
+                                horse_dict["medication"] = ep.get(
+                                    "medication"
+                                ) or horse_dict.get("medication")
+                                horse_dict["equipment"] = ep.get(
+                                    "equipment_string"
+                                ) or horse_dict.get("equipment")
+                                horse_dict["damsire"] = ep.get("damsire") or ""
+                                # Lifetime records (override if elite parser found them)
+                                if ep.get("starts_lifetime"):
+                                    horse_dict["starts_lifetime"] = ep[
+                                        "starts_lifetime"
+                                    ]
+                                if ep.get("wins_lifetime"):
+                                    horse_dict["wins_lifetime"] = ep["wins_lifetime"]
+                                horse_dict["places_lifetime"] = ep.get(
+                                    "places_lifetime", 0
+                                )
+                                horse_dict["shows_lifetime"] = ep.get(
+                                    "shows_lifetime", 0
+                                )
+                                if ep.get("earnings_lifetime_parsed"):
+                                    horse_dict["earnings_lifetime"] = ep[
+                                        "earnings_lifetime_parsed"
+                                    ]
+                                # Jockey/trainer win pct
+                                j_starts = ep.get("jockey_starts", 0)
+                                j_wins = ep.get("jockey_wins", 0)
+                                horse_dict["jockey_win_pct"] = (
+                                    round(j_wins / j_starts, 3) if j_starts > 0 else 0.0
+                                )
+                                t_starts = ep.get("trainer_starts", 0)
+                                t_wins = ep.get("trainer_wins", 0)
+                                horse_dict["trainer_win_pct"] = (
+                                    round(t_wins / t_starts, 3) if t_starts > 0 else 0.0
+                                )
+
+                                # Surface/distance records (stored as "S-W-P-S" string or dict)
+                                def _parse_record(rec):
+                                    """Parse '5-1-2-0' record string to dict."""
+                                    if isinstance(rec, dict):
+                                        return rec
+                                    if isinstance(rec, str) and "-" in rec:
+                                        parts = rec.split("-")
+                                        if len(parts) >= 2:
+                                            try:
+                                                return {
+                                                    "starts": int(parts[0]),
+                                                    "wins": int(parts[1]),
+                                                }
+                                            except ValueError:
+                                                pass
+                                    return {"starts": 0, "wins": 0}
+
+                                turf_rec = _parse_record(ep.get("turf_record"))
+                                horse_dict["turf_starts"] = turf_rec.get("starts", 0)
+                                horse_dict["turf_wins"] = turf_rec.get("wins", 0)
+                                wet_rec = _parse_record(ep.get("wet_record"))
+                                horse_dict["wet_starts"] = wet_rec.get("starts", 0)
+                                horse_dict["wet_wins"] = wet_rec.get("wins", 0)
+                                dist_rec = _parse_record(ep.get("distance_record"))
+                                horse_dict["distance_starts"] = dist_rec.get(
+                                    "starts", 0
+                                )
+                                horse_dict["distance_wins"] = dist_rec.get("wins", 0)
+                                # Average beaten lengths (from finish beaten lengths list)
+                                beaten = ep.get("beaten_lengths_finish") or []
+                                if beaten:
+                                    try:
+                                        valid_bl = [
+                                            float(b) for b in beaten if b is not None
+                                        ]
+                                        horse_dict["avg_beaten_lengths"] = (
+                                            round(sum(valid_bl) / len(valid_bl), 2)
+                                            if valid_bl
+                                            else 0.0
+                                        )
+                                    except (ValueError, TypeError):
+                                        horse_dict["avg_beaten_lengths"] = 0.0
+
                             horses_data.append(horse_dict)
 
                         # Save to gold database

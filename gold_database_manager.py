@@ -102,6 +102,18 @@ class GoldHighIQDatabase:
                     days_since_last INTEGER, starts_lifetime INTEGER,
                     wins_lifetime INTEGER, win_pct REAL,
                     earnings_lifetime REAL, class_rating REAL,
+                    places_lifetime INTEGER DEFAULT 0,
+                    shows_lifetime INTEGER DEFAULT 0,
+                    jockey_win_pct REAL DEFAULT 0.0,
+                    trainer_win_pct REAL DEFAULT 0.0,
+                    damsire TEXT DEFAULT '',
+                    turf_starts INTEGER DEFAULT 0,
+                    turf_wins INTEGER DEFAULT 0,
+                    wet_starts INTEGER DEFAULT 0,
+                    wet_wins INTEGER DEFAULT 0,
+                    distance_starts INTEGER DEFAULT 0,
+                    distance_wins INTEGER DEFAULT 0,
+                    avg_beaten_lengths REAL DEFAULT 0.0,
                     angle_early_speed REAL, angle_class REAL,
                     angle_recency REAL, angle_work_pattern REAL,
                     angle_connections REAL, angle_pedigree REAL,
@@ -205,6 +217,58 @@ class GoldHighIQDatabase:
             except Exception:
                 pass  # Column already exists
 
+        # ---------- migrate horses_analyzed with enriched columns --------
+        enriched_cols = [
+            ("places_lifetime", "INTEGER DEFAULT 0"),
+            ("shows_lifetime", "INTEGER DEFAULT 0"),
+            ("jockey_win_pct", "REAL DEFAULT 0.0"),
+            ("trainer_win_pct", "REAL DEFAULT 0.0"),
+            ("damsire", "TEXT DEFAULT ''"),
+            ("turf_starts", "INTEGER DEFAULT 0"),
+            ("turf_wins", "INTEGER DEFAULT 0"),
+            ("wet_starts", "INTEGER DEFAULT 0"),
+            ("wet_wins", "INTEGER DEFAULT 0"),
+            ("distance_starts", "INTEGER DEFAULT 0"),
+            ("distance_wins", "INTEGER DEFAULT 0"),
+            ("avg_beaten_lengths", "REAL DEFAULT 0.0"),
+        ]
+        for col_name, col_type in enriched_cols:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE horses_analyzed ADD COLUMN {col_name} {col_type}"
+                )
+            except Exception:
+                pass  # Column already exists
+
+        # ---------- migrate gold_high_iq with enriched columns -----------
+        gold_enriched_cols = [
+            ("weight", "REAL"),
+            ("medication", "TEXT"),
+            ("equipment", "TEXT"),
+            ("jockey_win_pct", "REAL DEFAULT 0.0"),
+            ("trainer_win_pct", "REAL DEFAULT 0.0"),
+            ("places_lifetime", "INTEGER DEFAULT 0"),
+            ("shows_lifetime", "INTEGER DEFAULT 0"),
+            ("turf_starts", "INTEGER DEFAULT 0"),
+            ("turf_wins", "INTEGER DEFAULT 0"),
+            ("wet_starts", "INTEGER DEFAULT 0"),
+            ("wet_wins", "INTEGER DEFAULT 0"),
+            ("distance_starts", "INTEGER DEFAULT 0"),
+            ("distance_wins", "INTEGER DEFAULT 0"),
+            ("avg_beaten_lengths", "REAL DEFAULT 0.0"),
+            ("avg_beyer_3", "REAL DEFAULT 0.0"),
+            ("e1_pace", "REAL DEFAULT 0.0"),
+            ("e2_pace", "REAL DEFAULT 0.0"),
+            ("late_pace", "REAL DEFAULT 0.0"),
+        ]
+        for col_name, col_type in gold_enriched_cols:
+            try:
+                cursor.execute(
+                    f"ALTER TABLE gold_high_iq ADD COLUMN {col_name} {col_type}"
+                )
+            except Exception:
+                pass  # Column already exists
+
         # ---------- guarantee the v_pending_races view -------------------
         try:
             cursor.execute("""
@@ -297,10 +361,15 @@ class GoldHighIQDatabase:
                     """
                     INSERT OR REPLACE INTO horses_analyzed 
                     (horse_id, race_id, program_number, horse_name, post_position, 
-                     morning_line_odds, jockey, trainer, owner, running_style,
-                     prime_power, best_beyer, last_beyer, avg_beyer_3,
+                     morning_line_odds, jockey, trainer, owner,
+                     weight, medication, equipment,
+                     running_style, prime_power, best_beyer, last_beyer, avg_beyer_3,
                      e1_pace, e2_pace, late_pace, days_since_last,
                      starts_lifetime, wins_lifetime, win_pct, earnings_lifetime,
+                     places_lifetime, shows_lifetime,
+                     jockey_win_pct, trainer_win_pct, damsire,
+                     turf_starts, turf_wins, wet_starts, wet_wins,
+                     distance_starts, distance_wins, avg_beaten_lengths,
                      class_rating, angle_early_speed, angle_class, angle_recency,
                      angle_work_pattern, angle_connections, angle_pedigree,
                      angle_runstyle_bias, angle_post, rating_class, rating_form,
@@ -310,7 +379,8 @@ class GoldHighIQDatabase:
                      mud_adjustment, predicted_probability, predicted_rank, fair_odds)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         horse_id,
@@ -322,6 +392,9 @@ class GoldHighIQDatabase:
                         horse.get("jockey", ""),
                         horse.get("trainer", ""),
                         horse.get("owner", ""),
+                        horse.get("weight", None),
+                        horse.get("medication", None),
+                        horse.get("equipment", None),
                         horse.get("running_style", "P"),
                         horse.get("prime_power", 0.0),
                         horse.get("best_beyer", 0),
@@ -335,6 +408,18 @@ class GoldHighIQDatabase:
                         horse.get("wins_lifetime", 0),
                         horse.get("win_pct", 0.0),
                         horse.get("earnings_lifetime", 0.0),
+                        horse.get("places_lifetime", 0),
+                        horse.get("shows_lifetime", 0),
+                        horse.get("jockey_win_pct", 0.0),
+                        horse.get("trainer_win_pct", 0.0),
+                        horse.get("damsire", ""),
+                        horse.get("turf_starts", 0),
+                        horse.get("turf_wins", 0),
+                        horse.get("wet_starts", 0),
+                        horse.get("wet_wins", 0),
+                        horse.get("distance_starts", 0),
+                        horse.get("distance_wins", 0),
+                        horse.get("avg_beaten_lengths", 0.0),
                         horse.get("class_rating", 0.0),
                         horse.get("angle_early_speed", 0.0),
                         horse.get("angle_class", 0.0),
@@ -765,34 +850,71 @@ class GoldHighIQDatabase:
             conn.close()
             return None
 
-        # Load all training data
-        df = pd.read_sql_query(
-            """
-            SELECT 
-                race_id,
-                horse_name,
-                actual_finish_position,
-                predicted_finish_position,
-                prediction_error,
-                odds,
-                prime_power,
-                last_speed_rating,
-                class_rating,
-                best_speed_at_distance,
-                days_since_last_race,
-                career_starts,
-                post_position,
-                field_size
-            FROM gold_high_iq
-            ORDER BY race_id, actual_finish_position
-        """,
-            conn,
-        )
+        # Try enriched query first (joins horses_analyzed for new features)
+        # Falls back to basic query if columns don't exist yet
+        try:
+            df = pd.read_sql_query(
+                """
+                SELECT 
+                    g.race_id,
+                    g.horse_name,
+                    g.actual_finish_position,
+                    g.predicted_finish_position,
+                    g.prediction_error,
+                    g.odds,
+                    g.prime_power,
+                    g.last_speed_rating,
+                    g.class_rating,
+                    g.best_speed_at_distance,
+                    g.days_since_last_race,
+                    g.career_starts,
+                    g.post_position,
+                    g.field_size,
+                    COALESCE(h.weight, 0) AS weight,
+                    COALESCE(h.jockey_win_pct, 0) AS jockey_win_pct,
+                    COALESCE(h.trainer_win_pct, 0) AS trainer_win_pct,
+                    COALESCE(h.avg_beyer_3, 0) AS avg_beyer_3,
+                    COALESCE(h.e1_pace, 0) AS e1_pace,
+                    COALESCE(h.e2_pace, 0) AS e2_pace,
+                    COALESCE(h.late_pace, 0) AS late_pace,
+                    COALESCE(h.turf_starts, 0) AS turf_starts,
+                    COALESCE(h.turf_wins, 0) AS turf_wins,
+                    COALESCE(h.wet_starts, 0) AS wet_starts,
+                    COALESCE(h.wet_wins, 0) AS wet_wins,
+                    COALESCE(h.distance_starts, 0) AS distance_starts,
+                    COALESCE(h.distance_wins, 0) AS distance_wins,
+                    COALESCE(h.avg_beaten_lengths, 0) AS avg_beaten_lengths,
+                    COALESCE(h.places_lifetime, 0) AS places_lifetime,
+                    COALESCE(h.shows_lifetime, 0) AS shows_lifetime
+                FROM gold_high_iq g
+                LEFT JOIN horses_analyzed h 
+                    ON g.race_id = h.race_id AND g.horse_name = h.horse_name
+                ORDER BY g.race_id, g.actual_finish_position
+            """,
+                conn,
+            )
+            enriched = True
+        except Exception:
+            # Fallback: basic query without enriched columns
+            df = pd.read_sql_query(
+                """
+                SELECT 
+                    race_id, horse_name, actual_finish_position,
+                    predicted_finish_position, prediction_error,
+                    odds, prime_power, last_speed_rating, class_rating,
+                    best_speed_at_distance, days_since_last_race,
+                    career_starts, post_position, field_size
+                FROM gold_high_iq
+                ORDER BY race_id, actual_finish_position
+            """,
+                conn,
+            )
+            enriched = False
 
         conn.close()
 
         # Build features DataFrame directly from columns
-        feature_cols = [
+        base_feature_cols = [
             "odds",
             "prime_power",
             "last_speed_rating",
@@ -805,6 +927,30 @@ class GoldHighIQDatabase:
             "predicted_finish_position",
             "prediction_error",
         ]
+        enriched_feature_cols = [
+            "weight",
+            "jockey_win_pct",
+            "trainer_win_pct",
+            "avg_beyer_3",
+            "e1_pace",
+            "e2_pace",
+            "late_pace",
+            "turf_starts",
+            "turf_wins",
+            "wet_starts",
+            "wet_wins",
+            "distance_starts",
+            "distance_wins",
+            "avg_beaten_lengths",
+            "places_lifetime",
+            "shows_lifetime",
+        ]
+        # Only include enriched cols that actually exist in the dataframe
+        feature_cols = base_feature_cols.copy()
+        if enriched:
+            for col in enriched_feature_cols:
+                if col in df.columns:
+                    feature_cols.append(col)
 
         # Fill NaN with 0 for numeric features
         for col in feature_cols:

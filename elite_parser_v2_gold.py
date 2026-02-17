@@ -115,7 +115,47 @@ class HorseData:  # pylint: disable=too-many-instance-attributes
 
     # === EQUIPMENT & MEDICATION ===
     equipment_change: str | None = None  # "Blinkers On", "Blinkers Off", etc.
+    equipment_string: str | None = (
+        None  # Full equipment notation: "b,f" = blinkers + front wraps
+    )
     first_lasix: bool = False
+    medication: str | None = (
+        None  # Current medication: "L" = Lasix, "B" = Bute, "L B" = both
+    )
+    weight: int | None = None  # Weight carried in lbs (typically 118-126)
+
+    # === LIFETIME RECORDS (parsed from PP header) ===
+    starts_lifetime: int = 0
+    wins_lifetime: int = 0
+    places_lifetime: int = 0  # 2nd place finishes
+    shows_lifetime: int = 0  # 3rd place finishes
+    earnings_lifetime_parsed: float = 0.0  # Direct from PP text
+    current_year_starts: int = 0
+    current_year_wins: int = 0
+    current_year_earnings: float = 0.0
+    turf_record: str | None = None  # "5-1-2-0" format
+    wet_record: str | None = None  # "3-0-1-0" format
+    distance_record: str | None = None  # "8-2-1-1" format
+
+    # === FRACTIONAL TIMES & TRACK VARIANT ===
+    fractional_times: list[list[str]] = field(
+        default_factory=list
+    )  # Per-race: [[":22.2", ":45.1", "1:10.3"]]
+    final_times: list[str] = field(default_factory=list)  # Per-race final time
+    track_variants: list[int] = field(default_factory=list)  # Per-race daily variant
+    beaten_lengths_finish: list[float] = field(
+        default_factory=list
+    )  # Lengths behind at finish
+    field_sizes_per_race: list[int] = field(default_factory=list)  # Per-race field size
+
+    # === PEDIGREE EXTENDED ===
+    damsire: str = "Unknown"  # Dam's sire name
+
+    # === JOCKEY/TRAINER EXTENDED STATS ===
+    jockey_starts: int = 0
+    jockey_wins: int = 0
+    trainer_starts: int = 0
+    trainer_wins: int = 0
 
     # === TRIP COMMENTS & RUNNING LINES ===
     trip_comments: list[str] = field(default_factory=list)  # Last 3-5 race comments
@@ -855,14 +895,68 @@ class GoldStandardBRISNETParser:
             horse.errors.append(f"Workout parsing error: {str(e)}")
             logger.warning(f"Workout parsing failed for {name}: {e}")
 
-        # EQUIPMENT CHANGES & MEDICATION
+        # EQUIPMENT CHANGES & MEDICATION & WEIGHT
         try:
             equipment_info = self._parse_equipment_changes(block)
             horse.equipment_change = equipment_info["change"]
             horse.first_lasix = equipment_info["first_lasix"]
+            horse.medication = equipment_info.get("medication")
+            horse.equipment_string = equipment_info.get("equipment_string")
+            horse.weight = equipment_info.get("weight")
         except Exception as e:
             horse.errors.append(f"Equipment parsing error: {str(e)}")
             logger.warning(f"Equipment parsing failed for {name}: {e}")
+
+        # LIFETIME RECORDS
+        try:
+            life_records = self._parse_lifetime_records(block)
+            horse.starts_lifetime = life_records["starts"]
+            horse.wins_lifetime = life_records["wins"]
+            horse.places_lifetime = life_records["places"]
+            horse.shows_lifetime = life_records["shows"]
+            horse.earnings_lifetime_parsed = life_records["earnings"]
+            horse.current_year_starts = life_records["cy_starts"]
+            horse.current_year_wins = life_records["cy_wins"]
+            horse.current_year_earnings = life_records["cy_earnings"]
+            horse.turf_record = life_records["turf_record"]
+            horse.wet_record = life_records["wet_record"]
+            horse.distance_record = life_records["distance_record"]
+        except Exception as e:
+            horse.errors.append(f"Lifetime records parsing error: {str(e)}")
+            logger.warning(f"Lifetime records parsing failed for {name}: {e}")
+
+        # FRACTIONAL TIMES, BEATEN LENGTHS, FIELD SIZES, TRACK VARIANTS
+        try:
+            frac_data = self._parse_fractional_times_and_lengths(block)
+            horse.fractional_times = frac_data["fractionals"]
+            horse.final_times = frac_data["finals"]
+            horse.track_variants = frac_data["variants"]
+            horse.beaten_lengths_finish = frac_data["beaten_lengths"]
+            horse.field_sizes_per_race = frac_data["field_sizes"]
+        except Exception as e:
+            horse.errors.append(f"Fractional times parsing error: {str(e)}")
+            logger.warning(f"Fractional times parsing failed for {name}: {e}")
+
+        # DAMSIRE NAME
+        try:
+            horse.damsire = self._parse_damsire_name(block)
+        except Exception as e:
+            horse.errors.append(f"Damsire parsing error: {str(e)}")
+
+        # JOCKEY/TRAINER EXTENDED STATS
+        try:
+            jk_stats = self._parse_jockey_extended_stats(block)
+            horse.jockey_starts = jk_stats["starts"]
+            horse.jockey_wins = jk_stats["wins"]
+        except Exception as e:
+            horse.errors.append(f"Jockey extended stats error: {str(e)}")
+
+        try:
+            tr_stats = self._parse_trainer_extended_stats(block)
+            horse.trainer_starts = tr_stats["starts"]
+            horse.trainer_wins = tr_stats["wins"]
+        except Exception as e:
+            horse.errors.append(f"Trainer extended stats error: {str(e)}")
 
         # TRIP COMMENTS
         try:
@@ -1937,10 +2031,16 @@ class GoldStandardBRISNETParser:
 
     def _parse_equipment_changes(self, block: str) -> dict[str, Any]:
         """
-        Parse equipment changes (blinkers, tongue tie, etc.) and medication (Lasix).
-        Returns dict with 'change' (str) and 'first_lasix' (bool)
+        Parse equipment changes, current medication, equipment string, and weight.
+        Returns dict with 'change', 'first_lasix', 'medication', 'equipment_string', 'weight'
         """
-        result = {"change": None, "first_lasix": False}
+        result = {
+            "change": None,
+            "first_lasix": False,
+            "medication": None,
+            "equipment_string": None,
+            "weight": None,
+        }
 
         # Blinkers on/off patterns
         if re.search(r"Blinkers?\s+On", block, re.IGNORECASE):
@@ -1954,6 +2054,242 @@ class GoldStandardBRISNETParser:
             if not result["change"]:
                 result["change"] = "First Lasix"
 
+        # Current medication: L = Lasix, B = Bute
+        med_match = re.search(
+            r"(?:Med|Medication)[:\s]*([LBfb]+)", block, re.IGNORECASE
+        )
+        if med_match:
+            result["medication"] = med_match.group(1).upper()
+        else:
+            # Look for standalone L/B near weight in header area (first 300 chars)
+            header = block[:300]
+            med_inline = re.search(r"\b(L\s*B|B\s*L|[LB])\s+\d{3}\b", header)
+            if med_inline:
+                result["medication"] = med_inline.group(1).strip().upper()
+
+        # Equipment string: b=blinkers, f=frontWraps, etc.
+        equip_match = re.search(
+            r"(?:Equip|Equipment)[:\s]*([a-z,\s]+)", block[:400], re.IGNORECASE
+        )
+        if equip_match:
+            result["equipment_string"] = equip_match.group(1).strip()
+        else:
+            # BRISNET often has equipment codes inline: "b" or "b,f" near medication
+            eq_inline = re.search(r"\b([bfrtws](?:,[bfrtws])*)\s", block[:300])
+            if eq_inline:
+                result["equipment_string"] = eq_inline.group(1)
+
+        # Weight carried (typically 3 digits, 100-130 range)
+        wt_match = re.search(r"(?:Wt|Weight)[:\s]*(\d{3})", block[:400], re.IGNORECASE)
+        if wt_match:
+            result["weight"] = int(wt_match.group(1))
+        else:
+            # BRISNET format: weight appears near medication "L 122" or just "122" after name line
+            wt_inline = re.search(r"(?:[LB]\s+)?(\d{3})\s+(?:\d|[A-Z])", block[:300])
+            if wt_inline:
+                w = int(wt_inline.group(1))
+                if 100 <= w <= 135:
+                    result["weight"] = w
+
+        return result
+
+    # ============ LIFETIME RECORDS ============
+
+    def _parse_lifetime_records(self, block: str) -> dict[str, Any]:
+        """
+        Parse lifetime, current year, and specialty records from PP header.
+
+        BRISNET formats:
+          Life: 15 3 4 2  $185,250
+          2026:  3 1 0 1   $45,000
+          2025:  8 2 1 2  $120,000
+          Turf: 5 1 2 0  $54,300
+          Wet:  3 0 1 0   $8,500
+          Dist: 8 2 1 1  $92,000
+        """
+        records = {
+            "starts": 0,
+            "wins": 0,
+            "places": 0,
+            "shows": 0,
+            "earnings": 0.0,
+            "cy_starts": 0,
+            "cy_wins": 0,
+            "cy_earnings": 0.0,
+            "turf_record": None,
+            "wet_record": None,
+            "distance_record": None,
+        }
+
+        # Life record: "Life: N N N N $NNN,NNN" or "Life N-N-N-N $NNN,NNN"
+        life_match = re.search(
+            r"(?:Life|Lifetime|Career)\s*:?\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\$?([\d,]+)",
+            block,
+            re.IGNORECASE,
+        )
+        if life_match:
+            records["starts"] = int(life_match.group(1))
+            records["wins"] = int(life_match.group(2))
+            records["places"] = int(life_match.group(3))
+            records["shows"] = int(life_match.group(4))
+            records["earnings"] = float(life_match.group(5).replace(",", ""))
+
+        # Current year record (2026, 2025, etc.)
+        from datetime import datetime as _dt
+
+        cy = str(_dt.now().year)
+        cy_match = re.search(
+            rf"{cy}\s*:?\s*(\d+)\s+(\d+)\s+\d+\s+\d+\s+\$?([\d,]+)",
+            block,
+            re.IGNORECASE,
+        )
+        if cy_match:
+            records["cy_starts"] = int(cy_match.group(1))
+            records["cy_wins"] = int(cy_match.group(2))
+            records["cy_earnings"] = float(cy_match.group(3).replace(",", ""))
+
+        # Turf record
+        turf_match = re.search(
+            r"(?:Turf|Trf)\s*:?\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", block, re.IGNORECASE
+        )
+        if turf_match:
+            records["turf_record"] = (
+                f"{turf_match.group(1)}-{turf_match.group(2)}-{turf_match.group(3)}-{turf_match.group(4)}"
+            )
+
+        # Wet track record
+        wet_match = re.search(
+            r"(?:Wet|Off|Muddy|Sloppy)\s*:?\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+            block,
+            re.IGNORECASE,
+        )
+        if wet_match:
+            records["wet_record"] = (
+                f"{wet_match.group(1)}-{wet_match.group(2)}-{wet_match.group(3)}-{wet_match.group(4)}"
+            )
+
+        # Distance record
+        dist_match = re.search(
+            r"(?:Dist|Distance)\s*:?\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+            block,
+            re.IGNORECASE,
+        )
+        if dist_match:
+            records["distance_record"] = (
+                f"{dist_match.group(1)}-{dist_match.group(2)}-{dist_match.group(3)}-{dist_match.group(4)}"
+            )
+
+        return records
+
+    # ============ FRACTIONAL TIMES & BEATEN LENGTHS ============
+
+    def _parse_fractional_times_and_lengths(self, block: str) -> dict[str, list]:
+        """
+        Parse fractional times, final times, track variants, beaten lengths,
+        and field sizes from BRISNET running lines.
+
+        BRISNET running line format:
+        29Jan26Tup7   6½ f  :22² :45¹1:04  1:17¹ ⁴⁴ 107 Clm6250...
+                             ^^^^ ^^^^  ^^^^  ^^^^^  ^^  ^^^
+                             frac1 frac2 frac3 final  var fieldsize
+
+        Unicode superscripts map: ¹=1 ²=2 ³=3 ⁴=4 ⁵=5 ⁶=6 ⁷=7 ⁸=8 ⁹=9 ⁰=0
+        """
+        result = {
+            "fractionals": [],  # List of lists: [[":22.2", ":45.1", "1:04.0"], ...]
+            "finals": [],  # List of final times: ["1:17.1", ...]
+            "variants": [],  # Track variants: [22, 18, ...]
+            "beaten_lengths": [],  # Beaten lengths at finish: [0.0, 3.5, 8.0, ...]
+            "field_sizes": [],  # Per-race field sizes: [8, 10, 6, ...]
+        }
+
+        # Unicode superscript → digit mapping
+        sup_map = str.maketrans("¹²³⁴⁵⁶⁷⁸⁹⁰", "1234567890")
+
+        lines = block.split("\n")
+        for line in lines:
+            # Only process running lines (start with date pattern)
+            if not re.match(r"\d{2}[A-Za-z]{3}\d{2}", line.strip()):
+                continue
+
+            clean = line.translate(sup_map)
+
+            # Extract fractional times: :22.2 :45.1 1:04.0 patterns
+            frac_matches = re.findall(r"(:?\d{1,2}:\d{2}\.?\d?|:\d{2}\.?\d?)", clean)
+            if frac_matches:
+                fracs = frac_matches[:-1] if len(frac_matches) > 1 else []
+                final = frac_matches[-1] if frac_matches else ""
+                result["fractionals"].append(fracs)
+                result["finals"].append(final)
+
+            # Track variant: typically 2-digit number after final time
+            var_match = re.search(r"\d:\d{2}\.?\d?\s+(\d{1,2})\s+\d{2,3}\s", clean)
+            if var_match:
+                result["variants"].append(int(var_match.group(1)))
+
+            # Beaten lengths at finish: look for lengths patterns
+            # BRISNET uses superscript-encoded beaten lengths like "3¼" "1½" "nk" "hd" "ns"
+            bl_clean = line.translate(sup_map)
+            bl_match = re.search(
+                r"(\d{1,2}(?:\.\d)?)\s*(?:lengths?|l\b)", bl_clean, re.IGNORECASE
+            )
+            if bl_match:
+                result["beaten_lengths"].append(float(bl_match.group(1)))
+            elif re.search(r"\bnk\b", line, re.IGNORECASE):
+                result["beaten_lengths"].append(0.25)
+            elif re.search(r"\bhd\b", line, re.IGNORECASE):
+                result["beaten_lengths"].append(0.2)
+            elif re.search(r"\bns\b|nose", line, re.IGNORECASE):
+                result["beaten_lengths"].append(0.05)
+
+            # Field size: look for "N starters" or field size digit
+            fs_match = re.search(r"(\d{1,2})\s*(?:starters?|str)", clean, re.IGNORECASE)
+            if fs_match:
+                result["field_sizes"].append(int(fs_match.group(1)))
+
+        return result
+
+    # ============ DAMSIRE NAME ============
+
+    def _parse_damsire_name(self, block: str) -> str:
+        """Extract Dam's Sire (Damsire/Broodmare Sire) name."""
+        # Pattern: "Dam's Sire: Name (Stats)" or "Damsire: Name"
+        match = re.search(
+            r"(?:Dam'?s?\s*Sire|Damsire|Broodmare\s*Sire)\s*:\s*([A-Za-z][A-Za-z\s']+?)(?:\s*\(|\s+AWD|\s*$)",
+            block,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).strip()
+        return "Unknown"
+
+    # ============ JOCKEY/TRAINER EXTENDED STATS ============
+
+    def _parse_jockey_extended_stats(self, block: str) -> dict[str, int]:
+        """Parse jockey starts and wins from PP text."""
+        result = {"starts": 0, "wins": 0}
+        # BRISNET format: "Jockey Name (Sts 150 W 30 P 20 S 15 ...)"
+        match = re.search(
+            r"(?:Jockey|JKY)[:\s]*[A-Za-z\s,.'-]+\(?.*?(?:Sts?|Starts?)\s*(\d+)\s+(?:W|Wins?)\s*(\d+)",
+            block[:500],
+            re.IGNORECASE,
+        )
+        if match:
+            result["starts"] = int(match.group(1))
+            result["wins"] = int(match.group(2))
+        return result
+
+    def _parse_trainer_extended_stats(self, block: str) -> dict[str, int]:
+        """Parse trainer starts and wins from PP text."""
+        result = {"starts": 0, "wins": 0}
+        match = re.search(
+            r"(?:Trainer|TRN)[:\s]*[A-Za-z\s,.'-]+\(?.*?(?:Sts?|Starts?)\s*(\d+)\s+(?:W|Wins?)\s*(\d+)",
+            block[:500],
+            re.IGNORECASE,
+        )
+        if match:
+            result["starts"] = int(match.group(1))
+            result["wins"] = int(match.group(2))
         return result
 
     # ============ TRIP COMMENTS ============
