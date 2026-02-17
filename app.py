@@ -11683,7 +11683,9 @@ else:
             with col4:
                 if completed_races > 0:
                     st.metric(
-                        "Winner Accuracy", f"{stats.get('winner_accuracy', 0.0):.1%}"
+                        "Winner Accuracy",
+                        f"{stats.get('winner_accuracy', 0.0):.1%}",
+                        help="Historical: % of races where the model's #1 pick won at time of analysis (before retraining)",
                     )
                 else:
                     st.metric(
@@ -11723,19 +11725,29 @@ else:
 
             # System performance
             if stats.get("total_races", 0) > 0:
-                st.markdown("#### System Performance")
+                st.markdown("#### Historical Performance")
+                st.caption(
+                    "Based on the model's predictions at the time each race was analyzed "
+                    "(before retraining). See Retrain Model tab for retrained model accuracy."
+                )
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric(
-                        "Winner Accuracy", f"{stats.get('winner_accuracy', 0.0):.1%}"
+                        "Winner Pick Rate",
+                        f"{stats.get('winner_accuracy', 0.0):.1%}",
+                        help="% of races where the #1 pick at analysis time was the actual winner",
                     )
                 with col2:
                     st.metric(
-                        "Top-3 Accuracy", f"{stats.get('top3_accuracy', 0.0):.1%}"
+                        "Top-3 Hit Rate",
+                        f"{stats.get('top3_accuracy', 0.0):.1%}",
+                        help="Avg overlap between predicted top 3 and actual top 3",
                     )
                 with col3:
                     st.metric(
-                        "Top-4 Accuracy", f"{stats.get('top4_accuracy', 0.0):.1%}"
+                        "Top-4 Hit Rate",
+                        f"{stats.get('top4_accuracy', 0.0):.1%}",
+                        help="Avg overlap between predicted top 4 and actual top 4",
                     )
 
             # COMMUNITY RACES TABLE - Show all saved races
@@ -13097,22 +13109,29 @@ else:
                             else:
                                 st.success("✅ Training complete!")
 
-                                # Display results
+                                # Display results (validation set accuracy)
+                                st.caption(
+                                    "Validation accuracy: retrained model tested on "
+                                    "held-out races it was NOT trained on."
+                                )
                                 col1, col2, col3 = st.columns(3)
                                 with col1:
                                     st.metric(
-                                        "Winner Accuracy",
+                                        "Val Winner Accuracy",
                                         f"{results['metrics']['winner_accuracy']:.1%}",
+                                        help="% of validation races where the retrained model's #1 pick was the actual winner",
                                     )
                                 with col2:
                                     st.metric(
-                                        "Top-3 Accuracy",
+                                        "Val Top-3 Accuracy",
                                         f"{results['metrics']['top3_accuracy']:.1%}",
+                                        help="Avg overlap between model's top 3 and actual top 3 on validation races",
                                     )
                                 with col3:
                                     st.metric(
-                                        "Top-4 Accuracy",
+                                        "Val Top-4 Accuracy",
                                         f"{results['metrics']['top4_accuracy']:.1%}",
+                                        help="Avg overlap between model's top 4 and actual top 4 on validation races",
                                     )
 
                                 st.info(
