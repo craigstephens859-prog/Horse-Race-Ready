@@ -770,12 +770,19 @@ class GoldHighIQDatabase:
             """
             SELECT 
                 race_id,
-                horse_id,
+                horse_name,
                 actual_finish_position,
-                features_json,
-                predicted_probability,
-                predicted_rank,
-                prediction_error
+                predicted_finish_position,
+                prediction_error,
+                odds,
+                prime_power,
+                last_speed_rating,
+                class_rating,
+                best_speed_at_distance,
+                days_since_last_race,
+                career_starts,
+                post_position,
+                field_size
             FROM gold_high_iq
             ORDER BY race_id, actual_finish_position
         """,
@@ -784,17 +791,28 @@ class GoldHighIQDatabase:
 
         conn.close()
 
-        # Parse features JSON
-        features_list = []
-        for _, row in df.iterrows():
-            features = json.loads(row["features_json"])
-            features["race_id"] = row["race_id"]
-            features["horse_id"] = row["horse_id"]
-            features["actual_finish"] = row["actual_finish_position"]
-            features_list.append(features)
+        # Build features DataFrame directly from columns
+        feature_cols = [
+            "odds",
+            "prime_power",
+            "last_speed_rating",
+            "class_rating",
+            "best_speed_at_distance",
+            "days_since_last_race",
+            "career_starts",
+            "post_position",
+            "field_size",
+            "predicted_finish_position",
+            "prediction_error",
+        ]
 
-        features_df = pd.DataFrame(features_list)
-        labels_df = df[["race_id", "horse_id", "actual_finish_position"]]
+        # Fill NaN with 0 for numeric features
+        for col in feature_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+        features_df = df[["race_id", "horse_name"] + feature_cols].copy()
+        labels_df = df[["race_id", "horse_name", "actual_finish_position"]]
 
         logger.info(
             f"✅ Loaded {len(features_df)} horses from {num_races} races for training"
