@@ -982,7 +982,7 @@ class GoldHighIQDatabase:
                     COUNT(DISTINCT race_id) as total_races,
                     AVG(CASE WHEN top1_predicted_correctly THEN 1 ELSE 0 END) as winner_accuracy,
                     AVG(top3_predicted_correctly) / 3.0 as top3_accuracy,
-                    AVG(COALESCE(top5_predicted_correctly, 0)) / 5.0 as top5_accuracy
+                    AVG(COALESCE(top5_predicted_correctly, 0)) / 4.0 as top4_accuracy
                 FROM race_results_summary
             """)
             stats = cursor.fetchone()
@@ -996,7 +996,7 @@ class GoldHighIQDatabase:
             "total_races": stats[0] or 0,
             "winner_accuracy": stats[1] or 0.0,
             "top3_accuracy": stats[2] or 0.0,
-            "top5_accuracy": stats[3] or 0.0,
+            "top4_accuracy": stats[3] or 0.0,
         }
 
     def log_retraining(self, metrics: dict, model_path: str) -> int:

@@ -12,6 +12,7 @@ Date: January 29, 2026
 """
 
 import logging
+import random
 import time
 
 import numpy as np
@@ -20,6 +21,25 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
+
+# ═══════════════════════════════════════════════════════════
+# REPRODUCIBILITY: Global seed for deterministic training
+# Without this, weight init, dropout, and DataLoader shuffling
+# produce different results every run — even with same data.
+# ═══════════════════════════════════════════════════════════
+SEED = 42
+
+
+def set_deterministic_seed(seed: int = SEED):
+    """Set all random seeds for fully reproducible training."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 
 from gold_database_manager import GoldHighIQDatabase
 
@@ -175,8 +195,10 @@ def evaluate(model, dataloader, device):
 
     winner_correct = 0
     top3_correct = 0
-    top5_correct = 0
+    top4_correct = 0
     total_races = 0
+    races_with_3plus = 0
+    races_with_4plus = 0
 
     with torch.no_grad():
         for batch in dataloader:
@@ -188,37 +210,41 @@ def evaluate(model, dataloader, device):
                 loss = plackett_luce_loss(scores, rankings)
                 total_loss += loss.item()
 
-                # Calculate accuracy metrics
-                predicted_order = torch.argsort(scores, descending=True)
+                n_horses = len(
+                    predicted_order := torch.argsort(scores, descending=True)
+                )
                 actual_order = torch.argsort(rankings)
 
-                # Winner accuracy
+                # Winner accuracy (always computed)
                 if predicted_order[0] == actual_order[0]:
                     winner_correct += 1
 
-                # Top-3 accuracy
-                pred_top3 = set(predicted_order[:3].cpu().numpy())
-                actual_top3 = set(actual_order[:3].cpu().numpy())
-                top3_correct += len(pred_top3 & actual_top3) / 3.0
+                # Top-3 accuracy (only for races with 3+ horses)
+                if n_horses >= 3:
+                    pred_top3 = set(predicted_order[:3].cpu().numpy())
+                    actual_top3 = set(actual_order[:3].cpu().numpy())
+                    top3_correct += len(pred_top3 & actual_top3) / 3.0
+                    races_with_3plus += 1
 
-                # Top-5 accuracy
-                if len(predicted_order) >= 5:
-                    pred_top5 = set(predicted_order[:5].cpu().numpy())
-                    actual_top5 = set(actual_order[:5].cpu().numpy())
-                    top5_correct += len(pred_top5 & actual_top5) / 5.0
+                # Top-4 accuracy (only for races with 4+ horses)
+                if n_horses >= 4:
+                    pred_top4 = set(predicted_order[:4].cpu().numpy())
+                    actual_top4 = set(actual_order[:4].cpu().numpy())
+                    top4_correct += len(pred_top4 & actual_top4) / 4.0
+                    races_with_4plus += 1
 
                 total_races += 1
 
     avg_loss = total_loss / len(dataloader.dataset)
     winner_acc = winner_correct / total_races if total_races > 0 else 0.0
-    top3_acc = top3_correct / total_races if total_races > 0 else 0.0
-    top5_acc = top5_correct / total_races if total_races > 0 else 0.0
+    top3_acc = top3_correct / races_with_3plus if races_with_3plus > 0 else 0.0
+    top4_acc = top4_correct / races_with_4plus if races_with_4plus > 0 else 0.0
 
     return {
         "loss": avg_loss,
         "winner_accuracy": winner_acc,
         "top3_accuracy": top3_acc,
-        "top5_accuracy": top5_acc,
+        "top4_accuracy": top4_acc,
     }
 
 
@@ -250,6 +276,11 @@ def retrain_model(
     logger.info("🚀 STARTING ML MODEL RETRAINING")
     logger.info("=" * 60)
 
+    # CRITICAL: Set deterministic seed BEFORE any random operations
+    # This ensures identical results given identical data + parameters
+    set_deterministic_seed(SEED)
+    logger.info(f"🎲 Deterministic seed set: {SEED}")
+
     start_time = time.time()
 
     # 1. Load data from database
@@ -279,8 +310,14 @@ def retrain_model(
         dataset, [n_train, n_val], generator=torch.Generator().manual_seed(42)
     )
 
+    # Use seeded generator for DataLoader shuffling (reproducible batch order)
+    shuffle_gen = torch.Generator().manual_seed(SEED)
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_races
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_races,
+        generator=shuffle_gen,
     )
     val_loader = DataLoader(
         val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_races
@@ -302,9 +339,7 @@ def retrain_model(
 
     model = RankingNN(n_features=n_features, hidden_dim=hidden_dim).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", patience=5
-    )
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5)
 
     # 4. Training loop
     best_val_acc = 0.0
@@ -326,7 +361,7 @@ def retrain_model(
                 f"Val Loss: {val_metrics['loss']:.4f} | "
                 f"Winner Acc: {val_metrics['winner_accuracy']:.1%} | "
                 f"Top-3: {val_metrics['top3_accuracy']:.1%} | "
-                f"Top-5: {val_metrics['top5_accuracy']:.1%}"
+                f"Top-4: {val_metrics['top4_accuracy']:.1%}"
             )
 
         # Save best model
@@ -359,7 +394,7 @@ def retrain_model(
     logger.info("=" * 60)
     logger.info(f"Winner Accuracy:  {final_metrics['winner_accuracy']:.1%}")
     logger.info(f"Top-3 Accuracy:   {final_metrics['top3_accuracy']:.1%}")
-    logger.info(f"Top-5 Accuracy:   {final_metrics['top5_accuracy']:.1%}")
+    logger.info(f"Top-4 Accuracy:   {final_metrics['top4_accuracy']:.1%}")
     logger.info(f"Validation Loss:  {final_metrics['loss']:.4f}")
     logger.info(f"Training Time:    {duration:.1f}s")
     logger.info(f"Model Saved:      {model_path}")
@@ -374,7 +409,7 @@ def retrain_model(
             "val_split_pct": 1 - train_split,
             "val_winner_accuracy": final_metrics["winner_accuracy"],
             "val_top3_accuracy": final_metrics["top3_accuracy"],
-            "val_top5_accuracy": final_metrics["top5_accuracy"],
+            "val_top5_accuracy": final_metrics["top4_accuracy"],
             "val_loss": final_metrics["loss"],
             "epochs": epochs,
             "learning_rate": learning_rate,

@@ -11735,7 +11735,7 @@ else:
                     )
                 with col3:
                     st.metric(
-                        "Top-5 Accuracy", f"{stats.get('top5_accuracy', 0.0):.1%}"
+                        "Top-4 Accuracy", f"{stats.get('top4_accuracy', 0.0):.1%}"
                     )
 
             # COMMUNITY RACES TABLE - Show all saved races
@@ -13111,8 +13111,8 @@ else:
                                     )
                                 with col3:
                                     st.metric(
-                                        "Top-5 Accuracy",
-                                        f"{results['metrics']['top5_accuracy']:.1%}",
+                                        "Top-4 Accuracy",
+                                        f"{results['metrics']['top4_accuracy']:.1%}",
                                     )
 
                                 st.info(
@@ -13160,7 +13160,7 @@ else:
                             "Races Used",
                             "Winner Acc",
                             "Top-3 Acc",
-                            "Top-5 Acc",
+                            "Top-4 Acc",
                             "Duration (s)",
                         ]
                         history_df["Winner Acc"] = (
@@ -13169,7 +13169,7 @@ else:
                         history_df["Top-3 Acc"] = (history_df["Top-3 Acc"] * 100).round(
                             1
                         ).astype(str) + "%"
-                        history_df["Top-5 Acc"] = (history_df["Top-5 Acc"] * 100).round(
+                        history_df["Top-4 Acc"] = (history_df["Top-4 Acc"] * 100).round(
                             1
                         ).astype(str) + "%"
                         history_df["Duration (s)"] = history_df["Duration (s)"].round(1)
