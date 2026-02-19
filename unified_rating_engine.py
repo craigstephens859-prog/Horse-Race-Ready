@@ -93,7 +93,7 @@ class UnifiedRatingEngine:
         "form": 1.8,  # Recent form critical
         "pace": 1.5,  # Pace scenario important
         "style": 2.0,  # INCREASED from 1.2 - track bias is CRITICAL (1.55 impact factor)
-        "post": 0.8,  # Least predictive overall
+        "post": 1.2,  # INCREASED from 0.8 — user post bias must impact rankings
         "angles": 0.10,  # Per-angle bonus (8 angles × 0.10 = 0.80 max)
     }
 
@@ -2147,11 +2147,11 @@ class UnifiedRatingEngine:
                 # TUP 6.5f weekly). S-match is already +0.8.
                 # ═══════════════════════════════════════════════════════════════
                 if horse.pace_style == "P" and "P" in style_bias:
-                    base += 0.7  # Near-S-level bonus for P on P-track
+                    base += 0.9  # INCREASED from 0.7 — P on P-track is dominant (TUP R4 winner was P)
                 elif horse.pace_style == "S" and "S" in style_bias:
-                    base += 0.8  # Original S-match bonus
+                    base += 1.0  # INCREASED from 0.8 — S on S-track is dominant
                 else:
-                    base += 0.4  # E or E/P match
+                    base += 0.6  # INCREASED from 0.4 — E or E/P match
             elif horse.pace_style == "E/P" and ("E" in style_bias or "P" in style_bias):
                 base += 0.2
             elif horse.pace_style == "P" and ("E" in style_bias or "E/P" in style_bias):
@@ -2212,14 +2212,14 @@ class UnifiedRatingEngine:
         if post_bias:
             bias_str = str(post_bias).lower()
             if "rail" in bias_str and post_num == 1:
-                rating += 0.3  # Rail bias specifically benefits post 1
+                rating += 0.4  # INCREASED from 0.3 — Rail bias strongly benefits post 1
             elif "inner" in bias_str and post_num <= 3:
-                rating += 0.2  # Inner bias benefits posts 1-3
+                rating += 0.3  # INCREASED from 0.2 — Inner bias benefits posts 1-3
             elif "mid" in bias_str and 4 <= post_num <= 7:
-                rating += 0.2  # Mid-track bias benefits posts 4-7
+                rating += 0.35  # INCREASED from 0.2 — Mid-track bias benefits posts 4-7 (TUP R4: post 7 won)
             elif "outside" in bias_str and post_num >= 8:
-                rating += 0.2  # Outside bias benefits wide posts
-            # Penalize mismatched posts
+                rating += 0.3  # INCREASED from 0.2 — Outside bias benefits wide posts
+            # Penalize mismatched posts more aggressively
             if (
                 "rail" in bias_str
                 and post_num >= 8
@@ -2228,9 +2228,11 @@ class UnifiedRatingEngine:
                 or "outside" in bias_str
                 and post_num <= 3
             ):
-                rating -= 0.15
+                rating -= 0.25  # INCREASED from -0.15 — stronger penalty for mismatch
 
-        return float(np.clip(rating, -0.6, 0.6))
+        return float(
+            np.clip(rating, -0.8, 0.8)
+        )  # WIDENED from [-0.6, 0.6] — let post bias register
 
     def _calc_tier2_bonus(
         self, horse: HorseData, surface_type: str, distance_txt: str

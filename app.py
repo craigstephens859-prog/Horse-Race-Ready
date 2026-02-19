@@ -472,16 +472,16 @@ MODEL_CONFIG = {
     },
     # --- Manual Bias Model (Section B) ---
     "style_match_table": {
-        "favoring": {"E": 0.70, "E/P": 0.50, "P": -0.20, "S": -0.50},
-        "closer favoring": {"E": -0.50, "E/P": -0.20, "P": 0.25, "S": 0.50},
+        "favoring": {"E": 0.85, "E/P": 0.65, "P": -0.25, "S": -0.60},
+        "closer favoring": {"E": -0.60, "E/P": -0.25, "P": 0.35, "S": 0.65},
         "fair/neutral": {"E": 0.0, "E/P": 0.0, "P": 0.0, "S": 0.0},
     },
     "style_quirin_threshold": 6,  # Quirin score needed for "strong" style bonus.
-    "style_quirin_bonus": 0.10,  # Bonus for strong style (e.g., E w/ Q>=6).
-    "post_bias_rail_bonus": 0.40,
-    "post_bias_inner_bonus": 0.25,
-    "post_bias_mid_bonus": 0.15,
-    "post_bias_outside_bonus": 0.25,
+    "style_quirin_bonus": 0.15,  # INCREASED from 0.10 — Quirin matters more
+    "post_bias_rail_bonus": 0.50,
+    "post_bias_inner_bonus": 0.35,
+    "post_bias_mid_bonus": 0.35,
+    "post_bias_outside_bonus": 0.35,
     # --- Pedigree & Angle Tweaks (Cclass) ---
     "ped_dist_bonus": 0.06,
     "ped_dist_penalty": -0.04,  # Note: This should be negative
@@ -7289,7 +7289,9 @@ def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
         if bonus > 0:  # Only add positive bonuses (horse matches this bias category)
             total_bonus += bonus
 
-    return float(np.clip(total_bonus, -0.5, 0.5))
+    return float(
+        np.clip(total_bonus, -0.5, 0.8)
+    )  # WIDENED ceiling from 0.5 — let post bias register
 
 
 def compute_bias_ratings(
