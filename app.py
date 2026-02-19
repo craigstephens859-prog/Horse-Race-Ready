@@ -5278,19 +5278,21 @@ def calculate_style_vs_weekly_bias_bonus(
     elif impact < 1.00:
         return -0.2  # Slight below-average
 
-    # BONUS for favored styles (R9 FIX: increased differentiation)
-    # Previous scale too flat — impact 1.17 only gave +0.5; not enough
-    # to separate E/P from S when weekly data strongly favors speed
+    # BONUS for favored styles
+    # TUP R6 FIX (Feb 19, 2026): Halved bonus scale. When 62% of the field
+    # (5/8 E/P horses) all get +2.0, the bonus adds noise not signal.
+    # Top Review got +2.0 same as winner Stormylux — zero differentiation.
+    # Old: 2.0/1.3/0.9/0.6/0.3  New: 1.0/0.7/0.5/0.35/0.2
     if impact >= 2.0:
-        return 2.0  # Extreme bias favorite (Tell Me When E at 2.05)
+        return 1.0  # Extreme bias favorite (was 2.0)
     elif impact >= 1.5:
-        return 1.3  # Strong bias favorite
+        return 0.7  # Strong bias favorite (was 1.3)
     elif impact >= 1.3:
-        return 0.9  # Moderate-strong bias favorite
+        return 0.5  # Moderate-strong bias favorite (was 0.9)
     elif impact >= 1.15:
-        return 0.6  # Moderate bias favorite (She's Storming E/P 1.17)
+        return 0.35  # Moderate bias favorite (was 0.6)
     elif impact >= 1.05:
-        return 0.3  # Slight bias favorite
+        return 0.2  # Slight bias favorite (was 0.3)
     elif impact >= 1.00:
         return 0.1  # At parity
 
@@ -8134,6 +8136,37 @@ def compute_bias_ratings(
         if weather_data:
             tier2_bonus += calculate_weather_impact(weather_data, style, distance_txt)
 
+        # 13. FIRST-TIME BLINKERS BONUS (TUP R6 Feb 19, 2026)
+        # Stormylux: "1stTimeBlinkers 3 33% 33% +42.67" — 33% win rate, +42.67 ROI
+        # Ranked 6th, WON at 3/1. This angle was completely invisible to the model.
+        # First-time blinkers is one of the strongest trainer angles in handicapping.
+        try:
+            blinkers_match = re.search(
+                r"1stTimeBlinkers\s+(\d+)\s+(\d+)%\s+(\d+)%(?:\s+([+-]?\d+\.?\d*))?",
+                _horse_block,
+            )
+            if blinkers_match:
+                blnk_starts = int(blinkers_match.group(1))
+                blnk_win_pct = int(blinkers_match.group(2)) / 100.0
+                blnk_itm_pct = int(blinkers_match.group(3)) / 100.0
+                blnk_roi = (
+                    float(blinkers_match.group(4)) if blinkers_match.group(4) else None
+                )
+
+                if blnk_starts >= 3:  # Meaningful sample size
+                    if blnk_win_pct >= 0.30:  # 30%+ win rate
+                        tier2_bonus += 1.0  # Elite blinkers angle
+                    elif blnk_win_pct >= 0.20:  # 20-29%
+                        tier2_bonus += 0.6  # Strong blinkers angle
+                    elif blnk_itm_pct >= 0.50:  # 50%+ ITM
+                        tier2_bonus += 0.3  # Moderate blinkers angle
+
+                    # ROI-positive kicker
+                    if blnk_roi is not None and blnk_roi > 0.0:
+                        tier2_bonus += 0.4  # Positive ROI is extremely rare & valuable
+        except BaseException:
+            pass
+
         # ELITE: Jockey/Trainer Performance Impact
         tier2_bonus += calculate_jockey_trainer_impact(name, pp_text)
 
@@ -8563,14 +8596,105 @@ def compute_bias_ratings(
 
         # ======================== End Tier 2 Bonuses ========================
 
+        # ════════════════════════════════════════════════════════════════
+        # FIX E: SPEED QUALITY FLOOR GATE (TUP R6 Feb 19, 2026)
+        # Top Review had worst speed in field (C-Speed = -0.50) but
+        # ranked #1 through +3.88 in stacked bonuses. If C-Speed is
+        # bottom-2 in field, bonuses shouldn't fully compensate.
+        # Apply 0.75 multiplier to tier2 to dampen bonus inflation.
+        # ════════════════════════════════════════════════════════════════
+        if tier2_bonus > 0 and df_styles is not None and not df_styles.empty:
+            try:
+                _all_speeds = []
+                for _, _sr in df_styles.iterrows():
+                    _sv = float(_sr.get("Cspeed", 0.0))
+                    _all_speeds.append(_sv)
+                if len(_all_speeds) >= 4:
+                    _all_speeds_sorted = sorted(_all_speeds)
+                    # Bottom 2 in field
+                    if cspeed <= _all_speeds_sorted[1]:
+                        tier2_bonus *= 0.75
+            except BaseException:
+                pass
+
+        # ════════════════════════════════════════════════════════════════
+        # FIX D: TRAINER PENALTY REDUCED FOR CLASS DROPPERS (TUP R6 Feb 19, 2026)
+        # Stormylux: Kemper 3% got -0.90 penalty, but horse won at OC20k
+        # level and dropped to C4500. Talent overcomes poor trainer when
+        # slumming. If horse drops 2+ class levels, halve trainer penalty.
+        # ════════════════════════════════════════════════════════════════
+        if tier2_bonus < 0:
+            try:
+                # Detect major class drop from PP data
+                _class_levels = {
+                    "mdn": 1,
+                    "mc": 2,
+                    "msw": 3,
+                    "clm": 4,
+                    "c": 4,
+                    "alw": 6,
+                    "aoc": 7,
+                    "oc": 7,
+                    "stk": 8,
+                    "g3": 9,
+                    "g2": 10,
+                    "g1": 11,
+                }
+                _past_class = 0
+                _today_class = 0
+                # Today's class from race_type parameter
+                _rt_lower = (race_type or "").lower().replace(" ", "")
+                for _ck, _cv in _class_levels.items():
+                    if _ck in _rt_lower:
+                        _today_class = _cv
+                        break
+                # Past class from last race in PP block
+                _past_race_types = re.findall(
+                    r"(?:OC|Oc|oc)(\d+)k|(?:Alw|ALW|alw)|(?:Stk|STK|stk)",
+                    _horse_block[:500] if _horse_block else "",
+                )
+                if _past_race_types:
+                    # If we found OC in past races, that's class 7+
+                    _past_class = 7
+                elif re.search(r"™C(\d+)", _horse_block[:300] if _horse_block else ""):
+                    _past_claim_match = re.search(
+                        r"™C(\d+)", _horse_block[:300] if _horse_block else ""
+                    )
+                    if _past_claim_match:
+                        _past_claim_val = int(_past_claim_match.group(1))
+                        _today_claim_match = re.search(r"(\d+)", _rt_lower)
+                        _today_claim_val = (
+                            int(_today_claim_match.group(1))
+                            if _today_claim_match
+                            else 0
+                        )
+                        if (
+                            _today_claim_val > 0
+                            and _past_claim_val >= _today_claim_val * 2
+                        ):
+                            _past_class = 6  # Major claiming drop
+
+                if (
+                    _past_class >= _today_class + 2
+                    or _past_class >= 7
+                    and _today_class <= 4
+                ):
+                    # Major class drop: halve the negative tier2 penalty
+                    tier2_bonus *= 0.5
+            except BaseException:
+                pass
+
         # CAP tier2_bonus: Bonuses should supplement, not dominate, core ratings
-        # Race 4 Oaklawn validation: Track Phantom got +7.30 in bonuses on 3.67 core (2:1 ratio!)
-        # UPDATED Feb 2026 Race Audit: Widened cap from [-2.0, 2.5] to [-3.5, 4.0]
-        # then to [-4.0, 5.0] after adding pace supremacy bonus (Enhancement 6).
-        # Combined audit enhancements can contribute up to ~5.0 for horses with
-        # multiple strong signals (speed + bias + style + post). Cap at 5.0 preserves
-        # the protective ceiling while allowing legitimate edge signals to register.
-        tier2_bonus = np.clip(tier2_bonus, -4.0, 5.0)
+        # FIX C: RACE-TYPE-AWARE TIER2 CAP (TUP R6 Feb 19, 2026)
+        # A $4,500 claimer shouldn't generate +3.88 in bonuses.
+        # Claiming races: [-3.0, 3.0]. Allowance: [-3.5, 4.0]. Stakes: [-4.0, 5.0].
+        _rt_for_cap = (race_type or "").lower()
+        if "claim" in _rt_for_cap or "clm" in _rt_for_cap:
+            tier2_bonus = np.clip(tier2_bonus, -3.0, 3.0)
+        elif "allow" in _rt_for_cap or "aoc" in _rt_for_cap or "oc" in _rt_for_cap:
+            tier2_bonus = np.clip(tier2_bonus, -3.5, 4.0)
+        else:
+            tier2_bonus = np.clip(tier2_bonus, -4.0, 5.0)
 
         # ═══════════════════════════════════════════════════════════════
         # BRIDGE MARKER: When unified engine is active, compute bridge R
