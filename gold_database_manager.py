@@ -380,7 +380,7 @@ class GoldHighIQDatabase:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?)
+                            ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         horse_id,
@@ -456,13 +456,16 @@ class GoldHighIQDatabase:
 
         except Exception as e:
             logger.error(f"❌ Error saving race {race_id}: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
             # ROLLBACK ON ERROR - ensures database integrity
             try:
                 conn.rollback()
                 conn.close()
             except:
                 pass
-            return False
+            return str(e)
 
     def get_pending_races(self, limit: int = 20) -> list[tuple]:
         """

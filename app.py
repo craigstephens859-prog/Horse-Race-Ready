@@ -11499,7 +11499,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             pp_text_raw=pp_text_raw,
                         )
 
-                        if success:
+                        if success is True:
                             st.success(
                                 f"💾 **Auto-saved to gold database:** `{race_id}`"
                             )
@@ -11517,6 +11517,8 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                     backup_to_github_async(gold_db.db_path)
                             except Exception:
                                 pass
+                        elif isinstance(success, str):
+                            st.error(f"❌ Failed to save race {race_id}: {success}")
                         else:
                             st.error(f"❌ Failed to save race {race_id} to database")
 
