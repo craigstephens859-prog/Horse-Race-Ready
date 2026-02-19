@@ -6266,6 +6266,7 @@ def calculate_hot_trainer_bonus(
     trainer_win_pct: float,
     is_hot_l14: bool = False,
     is_2nd_lasix_high_pct: bool = False,
+    trainer_starts: int = 0,
 ) -> float:
     """
     HOT TRAINER BONUS (TUP R6 + R7 Feb 2026 Calibration)
@@ -6283,21 +6284,35 @@ def calculate_hot_trainer_bonus(
     - 3 wins in 50 career starts (6% career win rate)
     - Finished 4th despite being model's top pick
 
+    TUP R4 TUNING (Feb 18, 2026):
+    - Hot Jammies: Trainer LaVanway 2% (1/51) — ranked #1, failed to hit board
+    - Guide My Steps: Trainer Crowe 0% (0/31) — WON at 6/5 (market trusted horse not trainer)
+    - Sample size now amplifies penalty: 0% on 30+ starts >> 0% on 5 starts
+
     Returns: Bonus/penalty to add to rating_final
     """
     bonus = 0.0
 
-    # OPTIMIZED Feb 9 2026: 0% trainer penalty capped at -1.2 (was -2.5)
-    # A single trainer stat should not override the entire 8-component rating.
-    # Also: 0% on 5 starts ≠ 0% on 50 starts. Sample size matters.
+    # ═══════════════════════════════════════════════════════════════
+    # SAMPLE-SIZE AWARE TRAINER PENALTY (Feb 18, 2026 TUP R4 Tuning)
+    # 0% on 5 starts could be bad luck. 0% on 30+ starts is a pattern.
+    # 2% on 51 starts (LaVanway) is effectively a confirmed loser.
+    # ═══════════════════════════════════════════════════════════════
     if trainer_win_pct == 0.0:
-        return -1.2  # Strong negative but doesn't nuke the horse (was -2.5)
+        if trainer_starts >= 30:
+            return -1.8  # Confirmed 0% with huge sample — near-fatal
+        elif trainer_starts >= 15:
+            return -1.5  # Solid sample 0% — very bad
+        else:
+            return -1.2  # Small sample 0% — bad but recoverable
 
-    # Very low % trainer penalty (1-5%)
+    # Very low % trainer penalty (1-5%) — AMPLIFIED with sample size
     if trainer_win_pct > 0.0 and trainer_win_pct < 0.05:
-        bonus -= 0.7  # Significant penalty (was -1.0)
+        bonus -= 0.9  # Was -0.7: 2% trainer penalty increased
+        if trainer_starts >= 30:
+            bonus -= 0.3  # Extra penalty for confirmed low % with large sample
     elif trainer_win_pct >= 0.05 and trainer_win_pct < 0.10:
-        bonus -= 0.4  # Moderate penalty (was -0.5)
+        bonus -= 0.5  # Was -0.4: Moderate penalty slightly increased
 
     # High % trainer baseline
     if trainer_win_pct >= 0.25:  # Elite trainer (25%+)
@@ -7390,6 +7405,20 @@ def compute_bias_ratings(
                     track_name=track_name,
                     surface_type=surface_type,
                     distance_txt=final_distance,
+                    style_bias=(
+                        running_style_bias
+                        if isinstance(running_style_bias, list)
+                        else [running_style_bias]
+                        if running_style_bias
+                        else None
+                    ),
+                    post_bias=(
+                        post_bias_pick
+                        if isinstance(post_bias_pick, list)
+                        else [post_bias_pick]
+                        if post_bias_pick
+                        else None
+                    ),
                 )
 
                 if not results_df.empty:
@@ -8335,30 +8364,46 @@ def compute_bias_ratings(
         except BaseException:
             pass
 
-        # 6. 2ND OFF LAYOFF BONUS (TUP R7 Feb 2026)
+        # 6. 2ND OFF LAYOFF BONUS (TUP R7 Feb 2026, enhanced TUP R4 tuning)
         # Winner #4 If You Want It: 2nd start after layoff, improved from Speed 62
+        # TUP R4: Capital Heat 2nd at 22/1 had 22%/61%/+0.11 ROI — massively undervalued
         # BRISNET shows: "2nd off layoff 65 22% 60%" (22% win rate, 60% ITM)
         is_second_off_layoff = False
         try:
             # Check for "2nd off layoff" stat with high win%
+            # Extended regex to optionally capture ROI: "2nd off layoff 65 22% 61% +0.11"
             layoff_match = re.search(
-                r"2nd off layoff\s+(\d+)\s+(\d+)%\s+(\d+)%", _horse_block
+                r"2nd off layoff\s+(\d+)\s+(\d+)%\s+(\d+)%(?:\s+([+-]?\d+\.?\d*))?",
+                _horse_block,
             )
             if layoff_match:
                 layoff_starts = int(layoff_match.group(1))
                 layoff_win_pct = int(layoff_match.group(2)) / 100.0
                 layoff_itm_pct = int(layoff_match.group(3)) / 100.0
+                layoff_roi = (
+                    float(layoff_match.group(4)) if layoff_match.group(4) else None
+                )
 
                 if layoff_starts >= 3:  # Meaningful sample size
+                    # --- Base bonus by win% tier ---
                     if layoff_win_pct >= 0.20:  # 20%+ win rate
-                        tier2_bonus += 0.8  # Strong bonus
+                        tier2_bonus += 1.2  # Strong bonus (was 0.8)
                         is_second_off_layoff = True
                     elif layoff_win_pct >= 0.15:  # 15-19% win rate
-                        tier2_bonus += 0.5  # Moderate bonus
+                        tier2_bonus += 0.7  # Moderate bonus (was 0.5)
                         is_second_off_layoff = True
                     elif layoff_itm_pct >= 0.50:  # 50%+ ITM even if lower win%
-                        tier2_bonus += 0.3  # Small bonus
+                        tier2_bonus += 0.5  # Small bonus (was 0.3)
                         is_second_off_layoff = True
+
+                    # --- ROI-positive multiplier (extremely rare & valuable) ---
+                    if layoff_roi is not None and layoff_roi > 0.0:
+                        tier2_bonus += 0.4  # Positive ROI is a strong signal
+                        is_second_off_layoff = True
+
+                    # --- High ITM kicker (60%+) ---
+                    if layoff_itm_pct >= 0.60 and is_second_off_layoff:
+                        tier2_bonus += 0.3  # Elite ITM rate kicker
         except BaseException:
             pass
 
@@ -8409,15 +8454,17 @@ def compute_bias_ratings(
         # 8. HOT TRAINER BONUS (TUP R6 + R7 Feb 2026 - Winner had 22% trainer, 4-0-0 L14, 2nd time Lasix 33%)
         # Extract trainer win % from PP text
         trainer_win_pct = 0.0
+        trainer_starts = 0
         is_hot_l14 = False
         is_2nd_lasix_high_pct = False
         try:
             # Parse trainer win %: "Trnr: Eikleberry Kevin (50 11-7-4 22%)"
             trainer_match = re.search(
-                r"Trnr:.*?\(\d+\s+\d+-\d+-\d+\s+(\d+)%\)", _horse_block
+                r"Trnr:.*?\((\d+)\s+\d+-\d+-\d+\s+(\d+)%\)", _horse_block
             )
             if trainer_match:
-                trainer_win_pct = int(trainer_match.group(1)) / 100.0
+                trainer_starts = int(trainer_match.group(1))
+                trainer_win_pct = int(trainer_match.group(2)) / 100.0
 
             # Check for hot trainer in last 14 days (look for patterns like "9 4-0-0")
             hot_l14_match = re.search(
@@ -8431,7 +8478,7 @@ def compute_bias_ratings(
                 is_2nd_lasix_high_pct = True
 
             tier2_bonus += calculate_hot_trainer_bonus(
-                trainer_win_pct, is_hot_l14, is_2nd_lasix_high_pct
+                trainer_win_pct, is_hot_l14, is_2nd_lasix_high_pct, trainer_starts
             )
         except BaseException:
             pass
@@ -8990,6 +9037,18 @@ def compute_bias_ratings(
                             comp_weight = base_comp + 0.10
                         else:
                             pp_weight, comp_weight = base_pp, base_comp
+
+            # ═══════════════════════════════════════════════════════════════════════
+            # PP RECENCY DAMPENING (TUP R4 tuning - Feb 2026)
+            # When a horse has high PP but poor recent speed+form, PP may be stale.
+            # Union Coach: PP 112.5 (#1) but last SPD 65, cspeed -0.30 → PP misleading.
+            # Reduce PP weight when both speed and form components are negative,
+            # indicating the horse's recent performances don't support its historical PP.
+            # ═══════════════════════════════════════════════════════════════════════
+            if cspeed < -0.2 and c_form < 0:
+                recency_discount = min(0.15, abs(cspeed) * 0.3)  # Max 0.15 reduction
+                pp_weight = max(0.40, pp_weight - recency_discount)
+                comp_weight = 1.0 - pp_weight
 
             # Apply surface-adaptive hybrid model
             # ALL secondary factors (components + track + bonuses) at component weight

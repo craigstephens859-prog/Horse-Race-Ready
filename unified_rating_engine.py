@@ -1973,6 +1973,34 @@ class UnifiedRatingEngine:
                     f"Speed capped at -0.8"
                 )
 
+        # ═══════════════════════════════════════════════════════════════
+        # DISTANCE EXPERIENCE PENALTY (Feb 18, 2026 — TUP R4 Tuning)
+        # Hot Jammies ranked #1 with ZERO starts at 6.5f and SPD 52 at
+        # only 6f attempt. Model ignored distance inexperience entirely.
+        # The "Dis" key in surface_stats contains distance record:
+        #   Dis (102) 0 0-0-0 $0  → 0 starts at today's distance
+        # ═══════════════════════════════════════════════════════════════
+        if self.FEATURE_FLAGS.get("use_distance_experience_penalty", True):
+            dis_stats = getattr(horse, "surface_stats", {}).get("Dis", {})
+            dist_starts = dis_stats.get("starts", -1)  # -1 = no data parsed
+
+            if dist_starts == 0:
+                # Zero starts at today's distance — significant risk factor
+                # Cap speed advantage and apply penalty
+                differential = min(differential, 0.0) - 0.4
+                logger.info(
+                    f"  → DIST PENALTY: {horse.name} has 0 starts at distance. "
+                    f"Speed capped at 0 and -0.4 applied."
+                )
+            elif (
+                dist_starts == -1
+                and hasattr(horse, "surface_stats")
+                and horse.surface_stats
+            ):
+                # Surface stats parsed but no "Dis" key → couldn't determine distance rec
+                # Apply mild uncertainty penalty
+                differential -= 0.15
+
         return float(np.clip(differential, -2.0, 2.0))
 
     def _calc_pace(
@@ -2112,15 +2140,40 @@ class UnifiedRatingEngine:
                     if "E" in style_bias or "E/P" in style_bias:
                         base += 0.1  # Partial credit for likely early speed
             elif horse.pace_style in style_bias:
-                # DOUBLED bonus for matching dominant track bias
-                base += 0.8 if "S" in style_bias else 0.4
+                # ═══════════════════════════════════════════════════════════════
+                # TUNING (Feb 18, 2026 — TUP R4): Differentiate match bonuses.
+                # Previously P-match got same +0.4 as E/P-match.
+                # P-type on P-biased track is a DOMINANT match (impact 2.83 at
+                # TUP 6.5f weekly). S-match is already +0.8.
+                # ═══════════════════════════════════════════════════════════════
+                if horse.pace_style == "P" and "P" in style_bias:
+                    base += 0.7  # Near-S-level bonus for P on P-track
+                elif horse.pace_style == "S" and "S" in style_bias:
+                    base += 0.8  # Original S-match bonus
+                else:
+                    base += 0.4  # E or E/P match
             elif horse.pace_style == "E/P" and ("E" in style_bias or "P" in style_bias):
                 base += 0.2
+            elif horse.pace_style == "P" and ("E" in style_bias or "E/P" in style_bias):
+                # P-style on E/EP-biased track: penalize but less than E on S-track
+                base -= 0.4
             elif horse.pace_style == "E" and "S" in style_bias:
                 # CRITICAL: Heavy penalty for early speed on stalker-biased track
                 base -= 1.2
             elif horse.pace_style == "E/P" and "S" in style_bias:
                 base -= 0.6
+            elif (
+                horse.pace_style == "E" and "P" in style_bias and "E" not in style_bias
+            ):
+                # E-style on purely P-biased track: strong penalty
+                base -= 0.8
+            elif (
+                horse.pace_style == "E/P"
+                and "P" in style_bias
+                and "E/P" not in style_bias
+            ):
+                # E/P on purely P-biased track: moderate penalty
+                base -= 0.4
             else:
                 base -= 0.3
 
