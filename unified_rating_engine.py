@@ -2207,17 +2207,30 @@ class UnifiedRatingEngine:
             elif post_num <= 2 or post_num >= 10:
                 rating = -0.3
 
-        # Post bias adjustment
+        # Post bias adjustment — handle ALL UI selections
+        # UI options: "favors rail (1)", "favors inner (1-3)", "favors mid (4-7)", "favors outside (8+)"
         if post_bias:
+            bias_str = str(post_bias).lower()
+            if "rail" in bias_str and post_num == 1:
+                rating += 0.3  # Rail bias specifically benefits post 1
+            elif "inner" in bias_str and post_num <= 3:
+                rating += 0.2  # Inner bias benefits posts 1-3
+            elif "mid" in bias_str and 4 <= post_num <= 7:
+                rating += 0.2  # Mid-track bias benefits posts 4-7
+            elif "outside" in bias_str and post_num >= 8:
+                rating += 0.2  # Outside bias benefits wide posts
+            # Penalize mismatched posts
             if (
-                "inner" in str(post_bias).lower()
-                and post_num <= 3
-                or "outside" in str(post_bias).lower()
+                "rail" in bias_str
                 and post_num >= 8
+                or "inner" in bias_str
+                and post_num >= 8
+                or "outside" in bias_str
+                and post_num <= 3
             ):
-                rating += 0.2
+                rating -= 0.15
 
-        return float(np.clip(rating, -0.5, 0.5))
+        return float(np.clip(rating, -0.6, 0.6))
 
     def _calc_tier2_bonus(
         self, horse: HorseData, surface_type: str, distance_txt: str

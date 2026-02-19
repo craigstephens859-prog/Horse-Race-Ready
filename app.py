@@ -7329,6 +7329,7 @@ def compute_bias_ratings(
         "Cclass",
         "Cform",
         "Atrack",
+        "Tier2_Bonus",
         "Arace",
         "R",
     ]
@@ -7405,6 +7406,7 @@ def compute_bias_ratings(
                     track_name=track_name,
                     surface_type=surface_type,
                     distance_txt=final_distance,
+                    condition_txt=condition_txt,
                     style_bias=(
                         running_style_bias
                         if isinstance(running_style_bias, list)
@@ -7501,6 +7503,9 @@ def compute_bias_ratings(
                                 ),
                                 "Parsing_Confidence": results_df_filtered.get(
                                     "Parsing_Confidence", avg_confidence
+                                ),
+                                "Tier2_Bonus": results_df_filtered.get(
+                                    "Tier2_Bonus", 0.0
                                 ),
                             }
                         )
@@ -7830,7 +7835,20 @@ def compute_bias_ratings(
                             f"floored {r_val:.2f}→{floored:.2f}"
                         )
 
-        return df_styles
+        # ═══════════════════════════════════════════════════════════════════════
+        # BRIDGE ARCHITECTURE (Feb 18, 2026):
+        # Instead of returning early, fall through to the traditional Tier 2
+        # bonus computation. The unified engine computed the 6 core components
+        # (Class, Form, Speed, Pace, Style, Post) — those are KEPT as-is.
+        # The traditional tier2 bonuses add 20 additional angles/adjustments
+        # (trainer, layoff, career futility, pace supremacy, weekly bias, etc.)
+        # that the unified engine doesn't compute.
+        # The 5 overlapping bonuses (SPI, surface switch, surface stats,
+        # workouts, class movement) are SKIPPED to avoid double-counting.
+        # ═══════════════════════════════════════════════════════════════════════
+        logger.info(
+            "🌉 BRIDGE: Applying traditional Tier 2 bonuses on unified engine ratings"
+        )
 
     # Ensure class and form columns present
     if "Cclass" not in df_styles.columns:
@@ -7973,25 +7991,40 @@ def compute_bias_ratings(
         )
         quirin = row.get("Quirin", np.nan)  # Keep as potential NaN
 
-        # Use multi-bias functions to aggregate bonuses from ALL selected biases
-        cstyle = style_match_score_multi(style_biases, style, quirin)
-        cpost = post_bias_score_multi(post_biases_list, post)
-        cpace = float(ppi_map.get(name, 0.0))
-        cspeed = float(speed_map.get(name, 0.0))  # Speed component from figures
+        if use_unified_engine:
+            # BRIDGE: Use unified engine's pre-computed core components
+            cstyle = float(row.get("Cstyle", 0.0))
+            cpost = float(row.get("Cpost", 0.0))
+            cpace = float(row.get("Cpace", 0.0))
+            cspeed = float(row.get("Cspeed", 0.0))
+            c_class = float(row.get("Cclass", 0.0))
+            c_form = float(row.get("Cform", 0.0))
+            a_track = float(row.get("Atrack", 0.0))
+            # Store pre-bridge R for later delta calculation
+            _pre_bridge_R = float(row.get("R", 0.0))
+        else:
+            # TRADITIONAL: Compute core components from Section A inputs
+            # Use multi-bias functions to aggregate bonuses from ALL selected biases
+            cstyle = style_match_score_multi(style_biases, style, quirin)
+            cpost = post_bias_score_multi(post_biases_list, post)
+            cpace = float(ppi_map.get(name, 0.0))
+            cspeed = float(speed_map.get(name, 0.0))  # Speed component from figures
 
-        # Track bias with dynamic weight multiplier
-        dw = dynamic_weights or {}
-        track_bias_mult = dw.get("track_bias", 1.0)
-        # RACE AUDIT ENHANCEMENT 1: Amplify track_bias_mult when extreme weekly biases detected
-        track_bias_mult *= weekly_bias_amplifier
-        a_track = (
-            _get_track_bias_delta(track_name, surface_type, distance_txt, style, post)
-            * track_bias_mult
-        )
+            # Track bias with dynamic weight multiplier
+            dw = dynamic_weights or {}
+            track_bias_mult = dw.get("track_bias", 1.0)
+            # RACE AUDIT ENHANCEMENT 1: Amplify track_bias_mult when extreme weekly biases detected
+            track_bias_mult *= weekly_bias_amplifier
+            a_track = (
+                _get_track_bias_delta(
+                    track_name, surface_type, distance_txt, style, post
+                )
+                * track_bias_mult
+            )
 
-        # Get pre-computed Cclass and Cform from df_styles (calculated in Section A)
-        c_class = float(row.get("Cclass", 0.0))
-        c_form = float(row.get("Cform", 0.0))
+            # Get pre-computed Cclass and Cform from df_styles (calculated in Section A)
+            c_class = float(row.get("Cclass", 0.0))
+            c_form = float(row.get("Cform", 0.0))
 
         # ======================== Tier 2 Bonuses ========================
         tier2_bonus = 0.0
@@ -8104,8 +8137,9 @@ def compute_bias_ratings(
 
         # PHASES 2 & 3: Class Movement & Form Cycle Analysis (Feb 13, 2026)
         # Class dropper bonus: +3-5% accuracy on class drop patterns
+        # BRIDGE: Skip if unified engine already computed class drop bonus
         try:
-            if pp_text and claiming_price:
+            if not use_unified_engine and pp_text and claiming_price:
                 claiming_pattern = r"(\d+)(?:clm|CLM|Clm)"
                 claiming_matches = re.findall(claiming_pattern, pp_text[:2000])
                 if claiming_matches and len(claiming_matches) >= 2:
@@ -8203,41 +8237,45 @@ def compute_bias_ratings(
         # System gave 69.1% win prob — should have been heavily penalized for
         # Dirt→Turf switch with zero turf experience.
         # ENHANCED (Feb 13, 2026): Now passes pedigree data for mud/turf pedigree integration
-        try:
-            if not horse_race_history:
-                horse_race_history = parse_race_history_from_block(_horse_block)
-            if horse_race_history:
-                # Build pedigree data dict for surface switch evaluation
-                _ped = pedigree_per_horse.get(name, {}) if pedigree_per_horse else {}
-                _ped_data = {}
-                if _ped:
-                    _mud = _ped.get("sire_mud_pct", np.nan)
-                    if pd.notna(_mud):
-                        _ped_data["sire_mud_pct"] = float(_mud)
-                    _off = _ped.get("pedigree_off", np.nan)
-                    if pd.notna(_off):
-                        _ped_data["pedigree_off"] = float(_off)
-                    _turf = _ped.get("pedigree_turf", np.nan)
-                    if pd.notna(_turf):
-                        _ped_data["pedigree_turf"] = float(_turf)
+        # BRIDGE: Skip surface switch & workout if unified engine already handled
+        if not use_unified_engine:
+            try:
+                if not horse_race_history:
+                    horse_race_history = parse_race_history_from_block(_horse_block)
+                if horse_race_history:
+                    # Build pedigree data dict for surface switch evaluation
+                    _ped = (
+                        pedigree_per_horse.get(name, {}) if pedigree_per_horse else {}
+                    )
+                    _ped_data = {}
+                    if _ped:
+                        _mud = _ped.get("sire_mud_pct", np.nan)
+                        if pd.notna(_mud):
+                            _ped_data["sire_mud_pct"] = float(_mud)
+                        _off = _ped.get("pedigree_off", np.nan)
+                        if pd.notna(_off):
+                            _ped_data["pedigree_off"] = float(_off)
+                        _turf = _ped.get("pedigree_turf", np.nan)
+                        if pd.notna(_turf):
+                            _ped_data["pedigree_turf"] = float(_turf)
 
-                surface_result = detect_surface_switch(
-                    horse_race_history, surface_type, _ped_data or None
-                )
-                surface_bonus = surface_result.get("bonus", 0.0)
-                tier2_bonus += surface_bonus
-        except BaseException:
-            pass
+                    surface_result = detect_surface_switch(
+                        horse_race_history, surface_type, _ped_data or None
+                    )
+                    surface_bonus = surface_result.get("bonus", 0.0)
+                    tier2_bonus += surface_bonus
+            except BaseException:
+                pass
 
-        # ======================== WORKOUT QUALITY SCORING (Feb 10, 2026) ========================
-        # JWB BUG: Workout rank 43/43 (dead last) was invisible to system.
-        # Now scores actual workout rankings as a quality signal.
-        try:
-            workout_quality = score_workout_quality(_horse_block)
-            workout_bonus = workout_quality.get("quality_bonus", 0.0)
-            tier2_bonus += workout_bonus
-        except BaseException:
-            pass
+            # ======================== WORKOUT QUALITY SCORING (Feb 10, 2026) ========================
+            # JWB BUG: Workout rank 43/43 (dead last) was invisible to system.
+            # Now scores actual workout rankings as a quality signal.
+            try:
+                workout_quality = score_workout_quality(_horse_block)
+                workout_bonus = workout_quality.get("quality_bonus", 0.0)
+                tier2_bonus += workout_bonus
+            except BaseException:
+                pass
 
         # ======================== TRACK PATTERN LEARNING BONUS ========================
         # Apply learned historical patterns at this track/surface/distance.
@@ -8319,22 +8357,26 @@ def compute_bias_ratings(
             elif impact_val >= 1.2:
                 tier2_bonus += 0.10
 
-        # 2. SPI (Sire Performance Index) bonus
-        if name in spi_values:
-            tier2_bonus += calculate_spi_bonus(spi_values[name])
+        # 2. SPI (Sire Performance Index) bonus - BRIDGE: skip if unified engine handled
+        if not use_unified_engine:
+            if name in spi_values:
+                tier2_bonus += calculate_spi_bonus(spi_values[name])
 
-        # 3. Surface Specialty bonus
-        if name in surface_stats:
-            stats = surface_stats[name]
-            if surface_type.lower() == "tur" and "turf_pct" in stats:
-                tier2_bonus += calculate_surface_specialty_bonus(
-                    stats["turf_pct"], "tur"
-                )
-            elif (
-                surface_type.lower() in ["aw", "all-weather", "synthetic"]
-                and "aw_pct" in stats
-            ):
-                tier2_bonus += calculate_surface_specialty_bonus(stats["aw_pct"], "aw")
+        # 3. Surface Specialty bonus - BRIDGE: skip if unified engine handled
+        if not use_unified_engine:
+            if name in surface_stats:
+                stats = surface_stats[name]
+                if surface_type.lower() == "tur" and "turf_pct" in stats:
+                    tier2_bonus += calculate_surface_specialty_bonus(
+                        stats["turf_pct"], "tur"
+                    )
+                elif (
+                    surface_type.lower() in ["aw", "all-weather", "synthetic"]
+                    and "aw_pct" in stats
+                ):
+                    tier2_bonus += calculate_surface_specialty_bonus(
+                        stats["aw_pct"], "aw"
+                    )
 
         # 4. AWD (Distance Mismatch) penalty
         if name in awd_analysis:
@@ -8527,6 +8569,16 @@ def compute_bias_ratings(
         # multiple strong signals (speed + bias + style + post). Cap at 5.0 preserves
         # the protective ceiling while allowing legitimate edge signals to register.
         tier2_bonus = np.clip(tier2_bonus, -4.0, 5.0)
+
+        # ═══════════════════════════════════════════════════════════════
+        # BRIDGE MARKER: When unified engine is active, compute bridge R
+        # by wiring tier2 bonuses directly onto engine's pre-computed R.
+        # The HYBRID MODEL section below still runs (harmless) but its
+        # result is overridden after it completes.
+        # ═══════════════════════════════════════════════════════════════
+        _bridge_R = None
+        if use_unified_engine:
+            _bridge_R = _pre_bridge_R + tier2_bonus
 
         # HYBRID MODEL: Surface-Adaptive + Maiden-Aware PP Weight (SA R8 + GP R1 + GP R2 - Feb 2026)
         #
@@ -9062,6 +9114,15 @@ def compute_bias_ratings(
         R = arace
 
         # ═══════════════════════════════════════════════════════════════
+        # BRIDGE OVERRIDE: Replace traditional R with engine R + tier2
+        # The HYBRID MODEL above computed arace using traditional logic,
+        # but the bridge path uses the engine's pre-computed rating instead.
+        # ═══════════════════════════════════════════════════════════════
+        if _bridge_R is not None:
+            R = _bridge_R
+            arace = R
+
+        # ═══════════════════════════════════════════════════════════════
         # FTS (FIRST-TIME STARTER) ADJUSTMENT - TRADITIONAL PATH
         # ═══════════════════════════════════════════════════════════════
         # Apply conservative multiplier for debut horses in MSW races.
@@ -9167,6 +9228,16 @@ def compute_bias_ratings(
         # Ensure Quirin is formatted correctly for display (handle NaN)
         quirin_display = quirin if pd.notna(quirin) else None
 
+        # ═══════════════════════════════════════════════════════════════
+        # BRIDGE WRITEBACK: Write final adjusted R back to df_styles
+        # and skip rows.append — bridge returns df_styles directly.
+        # ═══════════════════════════════════════════════════════════════
+        if use_unified_engine:
+            df_styles.at[row.name, "R"] = round(R, 2)
+            df_styles.at[row.name, "Arace"] = round(arace, 2)
+            df_styles.at[row.name, "Tier2_Bonus"] = round(tier2_bonus, 2)
+            continue  # Skip rows.append — bridge returns df_styles
+
         rows.append(
             {
                 "#": post,
@@ -9181,10 +9252,19 @@ def compute_bias_ratings(
                 "Cclass": round(c_class, 2),
                 "Cform": round(c_form, 2),
                 "Atrack": round(a_track, 2),
+                "Tier2_Bonus": round(tier2_bonus, 2),
                 "Arace": round(arace, 2),
                 "R": round(R, 2),
             }
         )
+    # ═══════════════════════════════════════════════════════════════
+    # BRIDGE RETURN: When unified engine is active, all horses were
+    # written back to df_styles via the continue path above.
+    # Return df_styles directly (already has all columns).
+    # ═══════════════════════════════════════════════════════════════
+    if use_unified_engine:
+        return df_styles.sort_values(by="R", ascending=False)
+
     out = pd.DataFrame(rows, columns=cols)
     return out.sort_values(by="R", ascending=False)
 
@@ -11335,9 +11415,18 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 "rating_pace": safe_float(row.get("Cpace", 0.0)),
                                 "rating_style": safe_float(row.get("Cstyle", 0.0)),
                                 "rating_post": safe_float(row.get("Cpost", 0.0)),
-                                "rating_angles_total": safe_float(
-                                    row.get("Arace", 0.0)
+                                "class_rating": safe_float(row.get("Cclass", 0.0)),
+                                "rating_tier2_bonus": safe_float(
+                                    row.get("Tier2_Bonus", 0.0)
                                 ),
+                                "rating_angles_total": safe_float(
+                                    row.get("Cstyle", 0.0)
+                                )
+                                + safe_float(row.get("Cpost", 0.0))
+                                + safe_float(row.get("Cpace", 0.0))
+                                + safe_float(row.get("Cspeed", 0.0))
+                                + safe_float(row.get("Cclass", 0.0))
+                                + safe_float(row.get("Cform", 0.0)),
                                 "rating_final": safe_float(row.get("R", 0.0)),
                                 "predicted_probability": fair_pct_value,
                                 "predicted_rank": int(rank_idx + 1),
