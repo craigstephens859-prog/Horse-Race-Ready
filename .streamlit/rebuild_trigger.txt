@@ -1,5 +1,9 @@
-# FORCE REBUILD - Updated 2026-02-04 13:15 PST
+# FORCE REBUILD - Updated 2026-02-19 00:30 PST
 # This file forces Streamlit Cloud to rebuild with latest fixes:
-# - Bug fix: calculate_final_rating_with_uncertainty signature corrected
-# - Bug fix: days_since_last attribute fixed  
-# - Bug fix: None safety checks added for Bayesian calculations
+# - Bridge Tier2 architecture: 20+ traditional bonuses wired onto unified engine
+# - User bias influence increased (style +30%, post +50%)
+# - _calc_post enhanced for all 4 bias types
+# - condition_txt forwarded to engine (was defaulting to 'fast')
+# - DB column fixes: class_rating, rating_tier2_bonus, rating_angles_total
+# - Awaiting Results -1 bug fix (max 0 clamp)
+# - Green parser banners removed from Section B

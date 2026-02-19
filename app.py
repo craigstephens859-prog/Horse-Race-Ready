@@ -310,7 +310,7 @@ try:
                     help="Races with actual finish results",
                 )
             with cols[2]:
-                pending = total_analyzed - with_results
+                pending = max(0, total_analyzed - with_results)  # Never show negative
                 st.metric(
                     "⏳ Awaiting Results",
                     pending,
