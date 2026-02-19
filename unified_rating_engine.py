@@ -651,6 +651,7 @@ class UnifiedRatingEngine:
                     "Cstyle": components.cstyle,
                     "Cpost": components.cpost,
                     "Tier2_Bonus": components.tier2_bonus,
+                    "Prime_Power": horse.prime_power or 0.0,
                 }
             )
 

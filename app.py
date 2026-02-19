@@ -7467,6 +7467,9 @@ def compute_bias_ratings(
                                 "Atrack": 0.0,  # Placeholder - computed below
                                 "Arace": results_df_filtered["Rating"],
                                 "R": results_df_filtered["Rating"],
+                                "Prime Power": results_df_filtered.get(
+                                    "Prime_Power", 0.0
+                                ),
                                 "Parsing_Confidence": results_df_filtered.get(
                                     "Parsing_Confidence", avg_confidence
                                 ),
@@ -7538,13 +7541,17 @@ def compute_bias_ratings(
                                 # ═══════════════════════════════════════════════════════
                                 horse_name = row.get("Horse", "")
                                 ml_val = None
-                                pp_val = 0.0
+                                # CRITICAL FIX (Feb 18, 2026): Check unified_ratings row
+                                # first for Prime Power — df_styles (Section A) never had
+                                # this column, so PP was always 0.0 in fallback.
+                                pp_val = safe_float(row.get("Prime Power", 0.0), 0.0)
                                 for _, ff_row in df_styles.iterrows():
                                     if ff_row.get("Horse") == horse_name:
                                         ml_val = ff_row.get("ML", "")
-                                        pp_val = safe_float(
-                                            ff_row.get("Prime Power", 0.0), 0.0
-                                        )
+                                        if pp_val == 0.0:
+                                            pp_val = safe_float(
+                                                ff_row.get("Prime Power", 0.0), 0.0
+                                            )
                                         break
                                 try:
                                     ml_dec = (
