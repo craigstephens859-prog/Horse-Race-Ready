@@ -762,14 +762,18 @@ class UnifiedRatingEngine:
                     "Horse": name,
                     "Post": self._extract_post_number(horse.post),
                     "LastFig": horse.last_fig if horse.last_fig > 0 else np.nan,
-                    "CR": np.nan,  # Would extract from parsed data
+                    "CR": horse.class_rating_individual
+                    if horse.class_rating_individual
+                    else np.nan,  # Class Rating from parser
                     "SireROI": horse.sire_awd if horse.sire_awd else np.nan,
                     "TrainerWin%": horse.trainer_win_pct * 100,
                     "JockeyWin%": horse.jockey_win_pct * 100,
                     "DaysSince": horse.days_since_last
                     if horse.days_since_last
                     else 30.0,
-                    "WorkCount": len(horse.speed_figures),  # Proxy for workout count
+                    "WorkCount": horse.workout_count
+                    if horse.workout_count
+                    else 0,  # True workout count from parser
                     "RunstyleBias": self._style_to_numeric(horse.pace_style),
                 }
             )

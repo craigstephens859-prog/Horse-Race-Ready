@@ -2878,20 +2878,6 @@ class GoldStandardBRISNETParser:
 
         return 0.0
 
-    # ============ PRIME POWER (method) ============
-
-    def _parse_prime_power(self, block: str) -> tuple[float | None, int | None]:
-        """Parse BRISNET Prime Power rating and rank"""
-        match = self.PRIME_POWER_PATTERN.search(block)
-        if match:
-            try:
-                value = float(match.group(1))
-                rank = int(match.group(2))
-                return value, rank
-            except Exception:
-                pass
-        return None, None
-
     # ============ FALLBACK DATA ============
 
     def _create_fallback_data(

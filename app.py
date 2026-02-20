@@ -63,15 +63,7 @@ except ImportError:
 
     print("⚠️ db_persistence not available, using local DB path")
 
-# Try importing ML Engine for Phase 2 functionality
-try:
-    from ml_engine import MLCalibrator, RaceDatabase
-
-    ML_AVAILABLE = True
-except ImportError:
-    ML_AVAILABLE = False
-    MLCalibrator = None
-    RaceDatabase = None
+# ML Engine removed — functionality superseded by MLBlendEngine + TrackIntelligenceEngine
 
 # Historical Data System - LAZY LOADED for fast boot times
 # PyTorch is 2-3GB and slows down Render deploys significantly
@@ -92,30 +84,14 @@ except ImportError:
 
 # RACE CLASS PARSER: Comprehensive race type and purse analysis
 try:
-    from race_class_parser import (
-        CLASS_MAP,
-        LEVEL_MAP,
-        calculate_class_weight,
-        get_hierarchy_level,
-        parse_and_calculate_class,
-        parse_race_conditions,
-    )
+    from race_class_parser import parse_and_calculate_class
 
     RACE_CLASS_PARSER_AVAILABLE = True
 except ImportError:
     RACE_CLASS_PARSER_AVAILABLE = False
     parse_and_calculate_class = None
-    CLASS_MAP = {}
-    LEVEL_MAP = {}
 
-# ULTRATHINK INTEGRATION: Import comprehensive rating system
-try:
-    from parser_integration import ParserToRatingBridge
-
-    COMPREHENSIVE_RATING_AVAILABLE = True
-except ImportError:
-    COMPREHENSIVE_RATING_AVAILABLE = False
-    ParserToRatingBridge = None
+# ParserToRatingBridge removed — superseded by UnifiedRatingEngine pipeline
 
 # ULTRATHINK V2: Gold-standard parser (94% accuracy, 50+ edge cases)
 try:
