@@ -219,13 +219,12 @@ def plackett_luce_loss(
 
     n = len(sorted_scores)
 
-    # Vectorised reverse cumulative logsumexp
+    # Vectorised reverse cumulative logsumexp (list-based to avoid inplace ops)
     reversed_scores = sorted_scores.flip(0)
-    cum = torch.empty(n, device=scores.device, dtype=scores.dtype)
-    cum[0] = reversed_scores[0]
+    cum_list = [reversed_scores[0]]
     for i in range(1, n):
-        cum[i] = torch.logaddexp(cum[i - 1], reversed_scores[i])
-    reverse_cum_lse = cum.flip(0)  # reverse_cum_lse[i] = logsumexp(sorted_scores[i:])
+        cum_list.append(torch.logaddexp(cum_list[-1], reversed_scores[i]))
+    reverse_cum_lse = torch.stack(cum_list).flip(0)
 
     loss = -(sorted_scores - reverse_cum_lse).sum()
     return loss
