@@ -1831,9 +1831,10 @@ def detect_valid_race_headers(pp_text: str):
 HORSE_HDR_RE = re.compile(
     r"""(?mi)^\s*
     (?:POST\s+)?          # optional "POST " prefix
-    (\d+)                 # post/program number
+    (\d+[A-Za-z]?)        # program number (may have letter suffix for coupled entries, e.g. "1A")
+    (?:pp(\d+))?          # optional "pp" + post position (e.g. "pp6" in "1pp6")
     [:\s]+                # colon or whitespace separator
-    ([A-Za-z0-9'.\-\s&]+)    # horse name (greedy to capture full name)
+    ([A-Za-z0-9''\u2019.\-\s&]+?)  # horse name (lazy to avoid over-capturing)
     [^\w(]*               # skip any special chars/icons between name and parentheses
     \(\s*
     (E\/P|EP|E|P|S|NA)   # running style
@@ -1905,8 +1906,9 @@ def split_into_horse_chunks(pp_text: str) -> list[tuple]:
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(pp_text)
-        post = m.group(1).strip()
-        name = m.group(2).strip()
+        # group(2) is the post from "ppN"; group(1) is program# (fallback when pp absent)
+        post = (m.group(2) or m.group(1)).strip()
+        name = m.group(3).strip()
         block = pp_text[start:end]
         chunks.append((post, name, block))
     return chunks
@@ -1915,15 +1917,17 @@ def split_into_horse_chunks(pp_text: str) -> list[tuple]:
 def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
     rows = []
     for m in HORSE_HDR_RE.finditer(pp_text or ""):
-        post = m.group(1).strip()
-        name = m.group(2).strip()
-        style = _normalize_style(m.group(3))
-        qpts = m.group(4)
+        program_num = m.group(1).strip()
+        # group(2) is the post from "ppN"; group(1) is program# (fallback when pp absent)
+        post = (m.group(2) or program_num).strip()
+        name = m.group(3).strip()
+        style = _normalize_style(m.group(4))
+        qpts = m.group(5)
         quirin = int(qpts) if qpts else np.nan
         auto_strength = calculate_style_strength(style, quirin)
         rows.append(
             {
-                "#": post,
+                "#": program_num,
                 "Post": post,
                 "Horse": name,
                 "DetectedStyle": style,
