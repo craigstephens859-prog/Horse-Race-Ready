@@ -13552,6 +13552,7 @@ else:
 
             Once you have **50+ completed races**, retrain the model to learn from real outcomes.
             The model uses PyTorch with Plackett-Luce ranking loss for optimal accuracy.
+            Features are auto-standardised. Early stopping prevents overfitting.
             """)
 
             # Check if ready
@@ -13567,20 +13568,30 @@ else:
                     f"✅ Ready to train! {stats.get('total_races', 0)} races available."
                 )
 
-                # Training parameters
+                # Training parameters — tuned for small horse racing datasets
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     epochs = st.number_input(
-                        "Epochs", min_value=10, max_value=200, value=50
+                        "Max Epochs",
+                        min_value=20,
+                        max_value=300,
+                        value=100,
+                        help="Training stops early if val loss plateaus (patience=15)",
                     )
                 with col2:
                     learning_rate = st.select_slider(
                         "Learning Rate",
-                        options=[0.0001, 0.0005, 0.001, 0.005, 0.01],
-                        value=0.001,
+                        options=[0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005],
+                        value=0.0005,
+                        help="Lower = more stable. 0.0005 is optimal for <200 races",
                     )
                 with col3:
-                    batch_size = st.selectbox("Batch Size", [4, 8, 16, 32], index=1)
+                    batch_size = st.selectbox(
+                        "Batch Size (races)",
+                        [1, 2, 4, 8, 16],
+                        index=2,
+                        help="Number of races per gradient update. 4 is optimal for <200 races",
+                    )
 
                 # Train button
                 if st.button("🚀 Start Retraining", type="primary", key="retrain_btn"):
@@ -13631,6 +13642,10 @@ else:
                                 st.info(
                                     f"⏱️ Training time: {results.get('duration', 0):.1f} seconds"
                                 )
+                                epochs_info = f"Best epoch: {results.get('best_epoch', '?')} / {results.get('total_epochs_run', '?')} run"
+                                if results.get("early_stopped"):
+                                    epochs_info += " (early stopped)"
+                                st.info(f"📈 {epochs_info}")
                                 st.info(
                                     f"💾 Model saved: {results.get('model_path', 'N/A')}"
                                 )

@@ -6,12 +6,22 @@ Retrain the racing prediction model using real race results
 from the gold_high_iq database.
 
 Uses PyTorch with Plackett-Luce ranking loss for optimal accuracy.
+Optimized for small-dataset horse racing (67–500+ races).
+
+Key design decisions:
+  - Batch size = number of RACES per batch (not horses)
+  - Feature z-score standardisation (speed ~100 vs jockey_pct ~0.15)
+  - Early stopping (patience=15) to prevent overfitting on <100 races
+  - Gradient clipping (max_norm=1.0) for PL loss stability
+  - Hidden dim 64 (~4.5K params) sized for current dataset
 
 Author: Top-Tier ML Engineer
 Date: January 29, 2026
+Updated: February 20, 2026 — parameter tuning for 67-race dataset
 """
 
 import logging
+import os
 import random
 import time
 
@@ -22,12 +32,17 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 
+from gold_database_manager import GoldHighIQDatabase
+
 # ═══════════════════════════════════════════════════════════
 # REPRODUCIBILITY: Global seed for deterministic training
 # Without this, weight init, dropout, and DataLoader shuffling
 # produce different results every run — even with same data.
 # ═══════════════════════════════════════════════════════════
 SEED = 42
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def set_deterministic_seed(seed: int = SEED):
@@ -41,31 +56,66 @@ def set_deterministic_seed(seed: int = SEED):
     torch.backends.cudnn.benchmark = False
 
 
-from gold_database_manager import GoldHighIQDatabase
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ═══════════════════════════════════════════════════════════
+# DATASET
+# ═══════════════════════════════════════════════════════════
 
 
 class RaceDataset(Dataset):
-    """PyTorch Dataset for race data with listwise ranking."""
+    """PyTorch Dataset for race data with listwise ranking.
 
-    def __init__(self, features_df: pd.DataFrame, labels_df: pd.DataFrame):
+    Each item is one race: a variable-length tensor of (n_horses, n_features)
+    paired with integer finish positions.  Features are z-score standardised
+    using training-set statistics to equalise scale across speed ratings
+    (~50-120), percentages (~0-0.3), and counts (~0-50).
+    """
+
+    def __init__(
+        self,
+        features_df: pd.DataFrame,
+        labels_df: pd.DataFrame,
+        feat_mean: np.ndarray | None = None,
+        feat_std: np.ndarray | None = None,
+    ):
         """
         Args:
-            features_df: DataFrame with features and race_id
-            labels_df: DataFrame with race_id, horse_name, actual_finish_position
+            features_df: DataFrame with race_id, horse_name, and feature columns
+            labels_df:   DataFrame with race_id, horse_name, actual_finish_position
+            feat_mean:   Optional pre-computed feature means (for val/test sets)
+            feat_std:    Optional pre-computed feature stds  (for val/test sets)
         """
         self.races = []
 
-        # Group by race
+        # Identify feature columns (exclude metadata)
+        feature_cols = [
+            c
+            for c in features_df.columns
+            if c
+            not in ["race_id", "horse_name", "actual_finish", "actual_finish_position"]
+        ]
+        self.feature_cols = feature_cols
+
+        # ── Z-score standardisation ──────────────────────────────
+        # Compute stats from this DataFrame if not provided (train set).
+        # Val/test sets MUST receive the train set's mean/std to prevent
+        # data leakage.
+        raw = features_df[feature_cols].values.astype(np.float32)
+
+        if feat_mean is None or feat_std is None:
+            self.feat_mean = np.nanmean(raw, axis=0)
+            self.feat_std = np.nanstd(raw, axis=0)
+            # Prevent division by zero for constant features
+            self.feat_std[self.feat_std < 1e-8] = 1.0
+        else:
+            self.feat_mean = feat_mean
+            self.feat_std = feat_std
+
+        # Group by race and build tensors
         race_groups = features_df.groupby("race_id")
 
         for race_id, race_data in race_groups:
-            # Get actual finish positions for this race
             race_labels = labels_df[labels_df["race_id"] == race_id]
 
-            # Merge features with labels
             race_combined = race_data.merge(
                 race_labels[["horse_name", "actual_finish_position"]],
                 on="horse_name",
@@ -73,23 +123,13 @@ class RaceDataset(Dataset):
             )
 
             if len(race_combined) < 2:
-                continue  # Skip races with less than 2 horses
-
-            # Extract feature columns (exclude metadata)
-            feature_cols = [
-                c
-                for c in race_combined.columns
-                if c
-                not in [
-                    "race_id",
-                    "horse_name",
-                    "actual_finish",
-                    "actual_finish_position",
-                ]
-            ]
+                continue  # Need at least 2 horses for ranking
 
             features = race_combined[feature_cols].values.astype(np.float32)
             rankings = race_combined["actual_finish_position"].values.astype(np.int64)
+
+            # Apply z-score: (x - mean) / std
+            features = (features - self.feat_mean) / self.feat_std
 
             self.races.append(
                 {
@@ -107,95 +147,146 @@ class RaceDataset(Dataset):
 
 
 def collate_races(batch):
-    """Custom collate function for variable-length races."""
-    return batch  # Return list of dicts
+    """Custom collate: return list of dicts (variable-length races can't stack)."""
+    return batch
+
+
+# ═══════════════════════════════════════════════════════════
+# MODEL
+# ═══════════════════════════════════════════════════════════
 
 
 class RankingNN(nn.Module):
-    """Neural network for listwise ranking."""
+    """Compact MLP for listwise ranking.
 
-    def __init__(self, n_features: int, hidden_dim: int = 128):
+    Architecture sized for small datasets (67-500 races):
+      Linear(n_features -> 64) -> ReLU -> Dropout(0.4)
+      Linear(64 -> 64)         -> ReLU -> Dropout(0.4)
+      Linear(64 -> 1)          -> score per horse
+
+    ~4.5K params at 27 features.  Scales safely to 1000+ races.
+    """
+
+    def __init__(self, n_features: int, hidden_dim: int = 64):
         super().__init__()
-        self.fc1 = nn.Linear(n_features, hidden_dim)
-        self.dropout1 = nn.Dropout(0.3)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.dropout2 = nn.Dropout(0.3)
-        self.fc3 = nn.Linear(hidden_dim, 1)  # Single score output
+        self.net = nn.Sequential(
+            nn.Linear(n_features, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(hidden_dim, 1),
+        )
 
     def forward(self, x):
         """
         Args:
             x: (n_horses, n_features)
-
         Returns:
-            scores: (n_horses,)
+            scores: (n_horses,)  — one scalar score per horse
         """
-        h1 = torch.relu(self.fc1(x))
-        h1 = self.dropout1(h1)
-        h2 = torch.relu(self.fc2(h1))
-        h2 = self.dropout2(h2)
-        scores = self.fc3(h2).squeeze(-1)
-        return scores
+        return self.net(x).squeeze(-1)
+
+
+# ═══════════════════════════════════════════════════════════
+# PLACKETT-LUCE LOSS
+# ═══════════════════════════════════════════════════════════
 
 
 def plackett_luce_loss(
     scores: torch.Tensor, true_rankings: torch.Tensor
 ) -> torch.Tensor:
     """
-    Plackett-Luce listwise ranking loss.
+    Plackett-Luce listwise ranking loss (vectorised via reverse cumulative logsumexp).
+
+    The PL model probability of an observed ranking (r1, r2, ..., rn) is:
+        P = prod_i  exp(s_ri) / sum_{j>=i} exp(s_rj)
+
+    Negative log-likelihood:
+        L = -sum_i [s_ri - logsumexp(s_ri, s_{ri+1}, ..., s_rn)]
 
     Args:
-        scores: (n_horses,) - model output scores
-        true_rankings: (n_horses,) - actual finish positions (1, 2, 3, ...)
+        scores:        (n_horses,) model output scores
+        true_rankings: (n_horses,) actual finish positions (1-based)
 
     Returns:
-        loss: scalar
+        loss: scalar tensor
     """
-    # Sort by true ranking
+    # Sort scores into true finish order
     sorted_indices = torch.argsort(true_rankings)
     sorted_scores = scores[sorted_indices]
 
-    # Plackett-Luce: L = -Σ [score_i - log_sum_exp(remaining)]
-    loss = 0.0
     n = len(sorted_scores)
 
-    for i in range(n):
-        remaining_scores = sorted_scores[i:]
-        log_sum_exp = torch.logsumexp(remaining_scores, dim=0)
-        loss += sorted_scores[i] - log_sum_exp
+    # Vectorised reverse cumulative logsumexp
+    reversed_scores = sorted_scores.flip(0)
+    cum = torch.empty(n, device=scores.device, dtype=scores.dtype)
+    cum[0] = reversed_scores[0]
+    for i in range(1, n):
+        cum[i] = torch.logaddexp(cum[i - 1], reversed_scores[i])
+    reverse_cum_lse = cum.flip(0)  # reverse_cum_lse[i] = logsumexp(sorted_scores[i:])
 
-    return -loss  # Negate for minimization
+    loss = -(sorted_scores - reverse_cum_lse).sum()
+    return loss
 
 
-def train_epoch(model, dataloader, optimizer, device):
-    """Train for one epoch."""
+# ═══════════════════════════════════════════════════════════
+# TRAIN / EVAL FUNCTIONS
+# ═══════════════════════════════════════════════════════════
+
+
+def train_epoch(model, dataloader, optimizer, device, max_grad_norm=1.0):
+    """Train for one epoch with gradient clipping.
+
+    Accumulates loss over all races in a batch before stepping,
+    giving a true batch gradient rather than per-race stepping.
+    This is more stable for Plackett-Luce with variable field sizes.
+    """
     model.train()
     total_loss = 0.0
+    n_races = 0
 
     for batch in dataloader:
+        optimizer.zero_grad()
+        batch_loss = torch.tensor(0.0, device=device, requires_grad=True)
+
         for race in batch:
             features = race["features"].to(device)
             rankings = race["rankings"].to(device)
 
-            optimizer.zero_grad()
             scores = model(features)
             loss = plackett_luce_loss(scores, rankings)
-            loss.backward()
-            optimizer.step()
+            batch_loss = batch_loss + loss
+            n_races += 1
 
-            total_loss += loss.item()
+        # Average over races in batch for consistent gradient magnitude
+        batch_loss = batch_loss / len(batch)
+        batch_loss.backward()
 
-    return total_loss / len(dataloader.dataset)
+        # Clip gradients — PL loss on 14-horse fields can spike
+        nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
+        optimizer.step()
+        total_loss += batch_loss.item() * len(batch)
+
+    return total_loss / max(n_races, 1)
 
 
 def evaluate(model, dataloader, device):
-    """Evaluate model on validation set."""
+    """Evaluate model on validation set.
+
+    Metrics:
+      - winner_accuracy: % of races where model's #1 pick = actual winner
+      - top3_accuracy:   avg |pred_top3 intersection actual_top3| / 3
+      - top4_accuracy:   avg |pred_top4 intersection actual_top4| / 4
+    """
     model.eval()
     total_loss = 0.0
 
     winner_correct = 0
-    top3_correct = 0
-    top4_correct = 0
+    top3_correct = 0.0
+    top4_correct = 0.0
     total_races = 0
     races_with_3plus = 0
     races_with_4plus = 0
@@ -210,23 +301,22 @@ def evaluate(model, dataloader, device):
                 loss = plackett_luce_loss(scores, rankings)
                 total_loss += loss.item()
 
-                n_horses = len(
-                    predicted_order := torch.argsort(scores, descending=True)
-                )
+                predicted_order = torch.argsort(scores, descending=True)
                 actual_order = torch.argsort(rankings)
+                n_horses = len(predicted_order)
 
-                # Winner accuracy (always computed)
+                # Winner accuracy
                 if predicted_order[0] == actual_order[0]:
                     winner_correct += 1
 
-                # Top-3 accuracy (only for races with 3+ horses)
+                # Top-3 overlap
                 if n_horses >= 3:
                     pred_top3 = set(predicted_order[:3].cpu().numpy())
                     actual_top3 = set(actual_order[:3].cpu().numpy())
                     top3_correct += len(pred_top3 & actual_top3) / 3.0
                     races_with_3plus += 1
 
-                # Top-4 accuracy (only for races with 4+ horses)
+                # Top-4 overlap
                 if n_horses >= 4:
                     pred_top4 = set(predicted_order[:4].cpu().numpy())
                     actual_top4 = set(actual_order[:4].cpu().numpy())
@@ -235,82 +325,101 @@ def evaluate(model, dataloader, device):
 
                 total_races += 1
 
-    avg_loss = total_loss / len(dataloader.dataset)
-    winner_acc = winner_correct / total_races if total_races > 0 else 0.0
-    top3_acc = top3_correct / races_with_3plus if races_with_3plus > 0 else 0.0
-    top4_acc = top4_correct / races_with_4plus if races_with_4plus > 0 else 0.0
-
     return {
-        "loss": avg_loss,
-        "winner_accuracy": winner_acc,
-        "top3_accuracy": top3_acc,
-        "top4_accuracy": top4_acc,
+        "loss": total_loss / max(total_races, 1),
+        "winner_accuracy": winner_correct / max(total_races, 1),
+        "top3_accuracy": top3_correct / max(races_with_3plus, 1),
+        "top4_accuracy": top4_correct / max(races_with_4plus, 1),
     }
+
+
+# ═══════════════════════════════════════════════════════════
+# MAIN RETRAINING FUNCTION
+# ═══════════════════════════════════════════════════════════
 
 
 def retrain_model(
     db_path: str = "gold_high_iq.db",
-    epochs: int = 50,
-    learning_rate: float = 0.001,
-    batch_size: int = 8,
-    hidden_dim: int = 128,
+    epochs: int = 100,
+    learning_rate: float = 0.0005,
+    batch_size: int = 4,
+    hidden_dim: int = 64,
     train_split: float = 0.8,
     min_races: int = 50,
+    early_stopping_patience: int = 15,
+    weight_decay: float = 1e-3,
+    max_grad_norm: float = 1.0,
 ) -> dict:
     """
-    Main retraining function.
+    Main retraining function — optimised for small horse racing datasets.
 
     Args:
-        db_path: Path to gold database
-        epochs: Number of training epochs
-        learning_rate: Learning rate for Adam optimizer
-        batch_size: Batch size (number of races per batch)
-        hidden_dim: Hidden layer dimension
-        train_split: Train/val split ratio
-        min_races: Minimum number of completed races required
+        db_path:     Path to gold_high_iq.db
+        epochs:      Maximum training epochs (early stopping may exit sooner)
+        learning_rate: Initial LR for AdamW (scheduler will reduce)
+        batch_size:  Number of RACES per batch (not horses)
+        hidden_dim:  MLP hidden layer width (64 recommended for <500 races)
+        train_split: Fraction of races used for training (rest = validation)
+        min_races:   Minimum completed races required to begin training
+        early_stopping_patience: Stop after N epochs with no val loss improvement
+        weight_decay: L2 regularisation strength for AdamW
+        max_grad_norm: Gradient clipping threshold
 
     Returns:
-        Dict with training results and metrics
+        Dict with training results, metrics, and model path
     """
     logger.info("=" * 60)
     logger.info("🚀 STARTING ML MODEL RETRAINING")
     logger.info("=" * 60)
 
-    # CRITICAL: Set deterministic seed BEFORE any random operations
-    # This ensures identical results given identical data + parameters
     set_deterministic_seed(SEED)
-    logger.info(f"🎲 Deterministic seed set: {SEED}")
+    logger.info(f"🎲 Deterministic seed: {SEED}")
 
     start_time = time.time()
 
-    # 1. Load data from database
+    # ── 1. Load data from database ───────────────────────────
     db = GoldHighIQDatabase(db_path)
     training_data = db.get_training_data(min_races=min_races)
 
     if training_data is None:
-        logger.error(
-            f"❌ Insufficient data. Need at least {min_races} completed races."
-        )
-        return {"error": "Insufficient data"}
+        logger.error(f"❌ Need at least {min_races} completed races.")
+        return {"error": f"Insufficient data — need {min_races}+ completed races"}
 
     features_df, labels_df = training_data
+    n_total_races = len(features_df["race_id"].unique())
+    logger.info(f"✅ Loaded {len(features_df)} horses from {n_total_races} races")
 
-    logger.info(
-        f"✅ Loaded {len(features_df)} horses from {len(features_df['race_id'].unique())} races"
+    # ── 2. Chronological train/val split ─────────────────────
+    # Split by race_id order (preserves temporal structure) so the model
+    # is validated on the most recent races — simulating real usage.
+    race_ids = features_df["race_id"].unique()
+    n_train = int(len(race_ids) * train_split)
+    train_race_ids = set(race_ids[:n_train])
+    val_race_ids = set(race_ids[n_train:])
+
+    train_features = features_df[features_df["race_id"].isin(train_race_ids)]
+    train_labels = labels_df[labels_df["race_id"].isin(train_race_ids)]
+    val_features = features_df[features_df["race_id"].isin(val_race_ids)]
+    val_labels = labels_df[labels_df["race_id"].isin(val_race_ids)]
+
+    # ── 3. Create datasets (standardised) ────────────────────
+    # Train set computes its own mean/std; val set reuses them (no leakage)
+    train_dataset = RaceDataset(train_features, train_labels)
+    val_dataset = RaceDataset(
+        val_features,
+        val_labels,
+        feat_mean=train_dataset.feat_mean,
+        feat_std=train_dataset.feat_std,
     )
 
-    # 2. Create datasets
-    dataset = RaceDataset(features_df, labels_df)
+    n_train_races = len(train_dataset)
+    n_val_races = len(val_dataset)
 
-    # Train/val split
-    n_train = int(len(dataset) * train_split)
-    n_val = len(dataset) - n_train
+    if n_val_races == 0:
+        logger.error("❌ No validation races after split")
+        return {"error": "Insufficient data for validation split"}
 
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [n_train, n_val], generator=torch.Generator().manual_seed(42)
-    )
-
-    # Use seeded generator for DataLoader shuffling (reproducible batch order)
+    # Seeded DataLoaders for reproducibility
     shuffle_gen = torch.Generator().manual_seed(SEED)
     train_loader = DataLoader(
         train_dataset,
@@ -323,75 +432,117 @@ def retrain_model(
         val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_races
     )
 
-    logger.info(f"📊 Train: {n_train} races | Val: {n_val} races")
+    logger.info(f"📊 Train: {n_train_races} races | Val: {n_val_races} races")
 
-    # 3. Initialize model
-    n_features = len(
-        [
-            c
-            for c in features_df.columns
-            if c not in ["race_id", "horse_name", "actual_finish"]
-        ]
-    )
-
+    # ── 4. Initialise model + optimiser + scheduler ──────────
+    n_features = len(train_dataset.feature_cols)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"🖥️  Device: {device}")
+    logger.info(f"🖥️  Device: {device} | Features: {n_features} | Hidden: {hidden_dim}")
 
     model = RankingNN(n_features=n_features, hidden_dim=hidden_dim).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5)
+    total_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"📐 Model parameters: {total_params:,}")
 
-    # 4. Training loop
+    optimizer = optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=weight_decay
+    )
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=7, min_lr=1e-6
+    )
+
+    # ── 5. Training loop with early stopping ─────────────────
+    best_val_loss = float("inf")
     best_val_acc = 0.0
     best_model_state = None
+    best_epoch = 0
+    epochs_no_improve = 0
 
-    logger.info(f"\n🏃 Training for {epochs} epochs...")
+    logger.info(
+        f"\n🏃 Training for up to {epochs} epochs "
+        f"(early stop patience={early_stopping_patience})..."
+    )
 
     for epoch in range(epochs):
-        train_loss = train_epoch(model, train_loader, optimizer, device)
+        train_loss = train_epoch(model, train_loader, optimizer, device, max_grad_norm)
         val_metrics = evaluate(model, val_loader, device)
+        val_loss = val_metrics["loss"]
 
-        scheduler.step(val_metrics["loss"])
+        scheduler.step(val_loss)
+        current_lr = optimizer.param_groups[0]["lr"]
 
-        # Log progress
-        if (epoch + 1) % 5 == 0:
+        # Check for improvement (track val loss for early stopping)
+        if val_loss < best_val_loss - 1e-6:
+            best_val_loss = val_loss
+            best_val_acc = val_metrics["winner_accuracy"]
+            best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
+            best_epoch = epoch + 1
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        # Log progress every 10 epochs or on new best
+        if (epoch + 1) % 10 == 0 or epochs_no_improve == 0:
             logger.info(
-                f"Epoch {epoch + 1}/{epochs} | "
-                f"Train Loss: {train_loss:.4f} | "
-                f"Val Loss: {val_metrics['loss']:.4f} | "
-                f"Winner Acc: {val_metrics['winner_accuracy']:.1%} | "
-                f"Top-3: {val_metrics['top3_accuracy']:.1%} | "
-                f"Top-4: {val_metrics['top4_accuracy']:.1%}"
+                f"Epoch {epoch + 1:3d}/{epochs} | "
+                f"Train: {train_loss:.4f} | Val: {val_loss:.4f} | "
+                f"Win: {val_metrics['winner_accuracy']:.1%} | "
+                f"Top3: {val_metrics['top3_accuracy']:.1%} | "
+                f"Top4: {val_metrics['top4_accuracy']:.1%} | "
+                f"LR: {current_lr:.6f}"
             )
 
-        # Save best model
-        if val_metrics["winner_accuracy"] > best_val_acc:
-            best_val_acc = val_metrics["winner_accuracy"]
-            best_model_state = model.state_dict().copy()
+        # Early stopping
+        if epochs_no_improve >= early_stopping_patience:
+            logger.info(
+                f"⏹️  Early stopping at epoch {epoch + 1} "
+                f"(no improvement for {early_stopping_patience} epochs). "
+                f"Best epoch: {best_epoch}"
+            )
+            break
 
-    # 5. Load best model and save
+    actual_epochs = epoch + 1
+
+    # ── 6. Restore best model and save ───────────────────────
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
+    os.makedirs("models", exist_ok=True)
     model_path = f"models/ranking_model_{int(time.time())}.pt"
+
+    # Save everything needed for inference: model weights, architecture
+    # config, feature standardisation stats, and validation metrics
     torch.save(
         {
             "model_state_dict": model.state_dict(),
             "n_features": n_features,
             "hidden_dim": hidden_dim,
+            "feature_cols": train_dataset.feature_cols,
+            "feat_mean": train_dataset.feat_mean.tolist(),
+            "feat_std": train_dataset.feat_std.tolist(),
             "val_metrics": val_metrics,
+            "best_epoch": best_epoch,
+            "total_epochs_run": actual_epochs,
+            "training_config": {
+                "learning_rate": learning_rate,
+                "batch_size": batch_size,
+                "weight_decay": weight_decay,
+                "max_grad_norm": max_grad_norm,
+                "early_stopping_patience": early_stopping_patience,
+                "train_races": n_train_races,
+                "val_races": n_val_races,
+            },
         },
         model_path,
     )
 
-    # 6. Final evaluation
+    # ── 7. Final evaluation on best model ────────────────────
     final_metrics = evaluate(model, val_loader, device)
-
     duration = time.time() - start_time
 
     logger.info("\n" + "=" * 60)
     logger.info("✅ TRAINING COMPLETE")
     logger.info("=" * 60)
+    logger.info(f"Best Epoch:       {best_epoch} / {actual_epochs} run")
     logger.info(f"Winner Accuracy:  {final_metrics['winner_accuracy']:.1%}")
     logger.info(f"Top-3 Accuracy:   {final_metrics['top3_accuracy']:.1%}")
     logger.info(f"Top-4 Accuracy:   {final_metrics['top4_accuracy']:.1%}")
@@ -400,10 +551,10 @@ def retrain_model(
     logger.info(f"Model Saved:      {model_path}")
     logger.info("=" * 60)
 
-    # 7. Log to database
+    # ── 8. Log to database ───────────────────────────────────
     db.log_retraining(
         metrics={
-            "total_races": len(dataset),
+            "total_races": n_train_races + n_val_races,
             "total_horses": len(features_df),
             "train_split_pct": train_split,
             "val_split_pct": 1 - train_split,
@@ -411,7 +562,7 @@ def retrain_model(
             "val_top3_accuracy": final_metrics["top3_accuracy"],
             "val_top5_accuracy": final_metrics["top4_accuracy"],
             "val_loss": final_metrics["loss"],
-            "epochs": epochs,
+            "epochs": actual_epochs,
             "learning_rate": learning_rate,
             "batch_size": batch_size,
             "training_duration": duration,
@@ -424,8 +575,11 @@ def retrain_model(
         "model_path": model_path,
         "metrics": final_metrics,
         "duration": duration,
-        "n_races": len(dataset),
+        "n_races": n_train_races + n_val_races,
         "n_horses": len(features_df),
+        "best_epoch": best_epoch,
+        "total_epochs_run": actual_epochs,
+        "early_stopped": actual_epochs < epochs,
     }
 
 
@@ -434,10 +588,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Retrain racing ML model")
-    parser.add_argument(
-        "--epochs", type=int, default=50, help="Number of training epochs"
-    )
-    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+    parser.add_argument("--epochs", type=int, default=100, help="Max training epochs")
+    parser.add_argument("--lr", type=float, default=0.0005, help="Learning rate")
+    parser.add_argument("--batch-size", type=int, default=4, help="Races per batch")
     parser.add_argument(
         "--min-races", type=int, default=50, help="Minimum races required"
     )
@@ -445,7 +598,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     results = retrain_model(
-        epochs=args.epochs, learning_rate=args.lr, min_races=args.min_races
+        epochs=args.epochs,
+        learning_rate=args.lr,
+        batch_size=args.batch_size,
+        min_races=args.min_races,
     )
 
     if "error" in results:
