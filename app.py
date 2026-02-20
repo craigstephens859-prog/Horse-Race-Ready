@@ -13465,12 +13465,48 @@ else:
                             )
 
                             # Show learning progress metrics
+                            # ── Sync with retrained model if available ───
+                            # The dashboard must show the MOST RECENT accuracy
+                            # source, whether from auto-calibration or ML retrain.
+                            # retraining_history has true held-out val metrics;
+                            # calibration_history has weight-tuning heuristic metrics.
                             st.markdown("#### 📊 Learning Progress")
                             total_calibrations = len(_cal_rows)
+
+                            # Default: auto-calibration metrics
                             latest_winner_acc = (_cal_rows[0][2] or 0) * 100
                             latest_top3_acc = (_cal_rows[0][3] or 0) * 100
+                            latest_top4_acc = 0.0
+                            metric_source = "auto-calibration"
 
-                            col1, col2, col3 = st.columns(3)
+                            # Override with ML retrain metrics if they are newer
+                            try:
+                                _rt_conn = sqlite3.connect(gold_db.db_path, timeout=5.0)
+                                _rt_cur = _rt_conn.cursor()
+                                _rt_cur.execute("""
+                                    SELECT retrain_timestamp,
+                                           val_winner_accuracy,
+                                           val_top3_accuracy,
+                                           val_top5_accuracy
+                                    FROM retraining_history
+                                    ORDER BY retrain_timestamp DESC
+                                    LIMIT 1
+                                """)
+                                _rt_row = _rt_cur.fetchone()
+                                _rt_conn.close()
+                                if _rt_row:
+                                    # Compare timestamps to pick the more recent source
+                                    rt_ts = _rt_row[0] or ""
+                                    cal_ts = _cal_rows[0][0] or ""
+                                    if rt_ts >= cal_ts:
+                                        latest_winner_acc = (_rt_row[1] or 0) * 100
+                                        latest_top3_acc = (_rt_row[2] or 0) * 100
+                                        latest_top4_acc = (_rt_row[3] or 0) * 100
+                                        metric_source = "ML retrain"
+                            except Exception:
+                                pass  # Fall back to auto-calibration metrics
+
+                            col1, col2, col3, col4 = st.columns(4)
                             with col1:
                                 st.metric(
                                     "Total Calibrations",
@@ -13489,7 +13525,17 @@ else:
                                     f"{latest_top3_acc:.1f}%",
                                     help="Most recent top-3 prediction accuracy",
                                 )
+                            with col4:
+                                st.metric(
+                                    "Latest Top-4 Accuracy",
+                                    f"{latest_top4_acc:.1f}%" if latest_top4_acc > 0 else "N/A",
+                                    help="Most recent top-4 prediction accuracy (from ML retrain)",
+                                )
 
+                            if metric_source == "ML retrain":
+                                st.info(
+                                    "📊 **Metrics source: ML Retrain** — showing held-out validation accuracy from the latest retrained model"
+                                )
                             st.success(
                                 "✅ **Auto-Calibration Active:** Model updates after every race result submission"
                             )
