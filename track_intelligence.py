@@ -821,6 +821,8 @@ class TrackIntelligenceEngine:
         Rebuild just one track's profile after a new result submission.
         Called from the Submit Top 4 flow.
         """
+        # Normalize to UPPER to avoid duplicate entries from mixed-case track names
+        track_code = track_code.upper()
         profile = self.build_full_profile(track_code)
         self.save_profile(profile)
         return profile

@@ -52,7 +52,7 @@ try:
     )
 
     PERSISTENT_DB_PATH = initialize_persistent_db("gold_high_iq.db")
-    print(f"✅ Persistent DB path: {PERSISTENT_DB_PATH}")
+    print(f"[OK] Persistent DB path: {PERSISTENT_DB_PATH}")
 except ImportError:
     PERSISTENT_DB_PATH = "gold_high_iq.db"
     backup_to_github_async = None
@@ -888,10 +888,15 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
         # Format: "Ultimate PP's w/ QuickPlay Comments Oaklawn Park Alw 12500s 6 Furlongs 4&up Thursday, February 05, 2026 Race 9"
         text = header_line
 
-        # Strip "Ultimate PP's w/ QuickPlay Comments" prefix
-        # Note: Space after Comments is optional (\s*) to handle "CommentsTampa" format
+        # Strip product-type prefixes:
+        #   "Ultimate PP's w/ QuickPlay Comments"
+        #   "Premium Plus PP's"
+        #   and similar BRISNET product headers
         text = re.sub(
-            r"^Ultimate PP.*?Comments\s*", "", text, flags=re.IGNORECASE
+            r"^(?:Ultimate\s+PP.*?Comments|Premium\s+Plus\s+PP[''']?s?(?:\s+MC)?)\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
         ).strip()
 
         # --- Extract Race Number (anchored at end, e.g., "Race 9") ---
@@ -989,8 +994,12 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
     for i, part in enumerate(parts):
         part_lower = part.lower()
 
-        # Skip "Ultimate PP's w/ QuickPlay Comments"
-        if "ultimate" in part_lower or "quickplay" in part_lower:
+        # Skip product-type segments like "Ultimate PP's w/ QuickPlay Comments" or "Premium Plus PP's"
+        if (
+            "ultimate" in part_lower
+            or "quickplay" in part_lower
+            or "premium plus" in part_lower
+        ):
             continue
 
         # Track name (first non-Ultimate part)
@@ -13593,8 +13602,10 @@ else:
                             _track_intel.rebuild_all_profiles()
                         _ti_summaries = _track_intel.get_all_track_summaries() or []
 
-                _cal_tracks = {tc.get("track_code", ""): tc for tc in _track_cals}
-                _ti_tracks = {s["track"]: s for s in _ti_summaries}
+                _cal_tracks = {
+                    tc.get("track_code", "").upper(): tc for tc in _track_cals
+                }
+                _ti_tracks = {s["track"].upper(): s for s in _ti_summaries}
                 _all_track_codes = sorted(
                     set(list(_cal_tracks.keys()) + list(_ti_tracks.keys()))
                 )
@@ -13725,7 +13736,7 @@ else:
                         _overview_rows.append(
                             {
                                 "": _conf_icon,
-                                "Track": _tc,
+                                "Track": _tc.title(),
                                 "Races": _n_races,
                                 "Confidence": f"{_conf:.0%}" if _conf > 0 else "—",
                                 "Winner %": f"{_win_pct:.1f}%" if _win_pct > 0 else "—",
@@ -13749,6 +13760,7 @@ else:
                         _all_track_codes,
                         index=_default_idx,
                         key="ti_deep_selector",
+                        format_func=lambda x: x.title(),
                     )
 
                     if _selected_track:
