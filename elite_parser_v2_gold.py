@@ -294,32 +294,36 @@ class GoldStandardBRISNETParser:
     # ============ REGEX PATTERNS (WITH FALLBACKS) ============
 
     # HORSE HEADER: 4 progressive patterns (strict → permissive)
+    # UPDATED: All patterns handle BRISNET NppM format (e.g. "1pp6", "1App9")
+    # Group layout: (1)=program#, (2)=pp_post (optional), then name/style/quirin
     HORSE_HDR_PATTERNS = [
-        # Pattern 1: Strict BRISNET format (handles foreign = prefix)
+        # Pattern 1: Strict BRISNET format (handles foreign = prefix + NppM)
         re.compile(r"""(?mix)
-            ^\s*=?(\d+[A-Z]?)\s+            # Post (optional = prefix, then 1, 2, 1A)
-            ([A-Za-z0-9'.\-\s&]+?)          # Horse name
+            ^\s*=?(\d+[A-Za-z]?)       # Program number (1, 1A, 10)
+            (?:pp(\d+))?               # Optional pp + post position (pp6, pp10)
+            \s+                        # Whitespace before horse name
+            ([A-Za-z0-9''\u2019.\-\s&]+?)  # Horse name (lazy)
             \s*\(\s*
-            (E\/P|EP|E|P|S|NA)              # Pace style
-            (?:\s+(\d+))?                   # Optional Quirin points
+            (E\/P|EP|E|P|S|NA)         # Pace style
+            (?:\s+(\d+))?              # Optional Quirin points
             \s*\)\s*$
         """),
-        # Pattern 2: No Quirin points (handles foreign = prefix)
+        # Pattern 2: No Quirin points (handles foreign = prefix + NppM)
         re.compile(r"""(?mix)
-            ^\s*=?(\d+[A-Z]?)\s+
-            ([A-Za-z0-9][A-Za-z0-9\s'.\-&]+)
+            ^\s*=?(\d+[A-Za-z]?)(?:pp(\d+))?\s+
+            ([A-Za-z0-9][A-Za-z0-9\s''\u2019.\-&]+)
             \s*\(\s*(E\/P|EP|E|P|S|NA)\s*\)
         """),
-        # Pattern 3: Style might be outside parens (handles foreign = prefix)
+        # Pattern 3: Style might be outside parens (handles NppM)
         re.compile(r"""(?mix)
-            ^\s*=?(\d+[A-Z]?)\s+
-            ([A-Za-z0-9][A-Za-z0-9\s'.\-&]+)
+            ^\s*=?(\d+[A-Za-z]?)(?:pp(\d+))?\s+
+            ([A-Za-z0-9][A-Za-z0-9\s''\u2019.\-&]+)
             \s+(E\/P|EP|E|P|S|NA)
         """),
-        # Pattern 4: Fallback - just post and name (handles foreign = prefix)
+        # Pattern 4: Fallback - just post and name (handles NppM)
         re.compile(r"""(?mix)
-            ^\s*=?(\d+[A-Z]?)\s+
-            ([A-Za-z][A-Za-z0-9\s'.\-&]{2,})
+            ^\s*=?(\d+[A-Za-z]?)(?:pp(\d+))?\s+
+            ([A-Za-z][A-Za-z0-9\s''\u2019.\-&]{2,})
         """),
     ]
 
@@ -683,11 +687,13 @@ class GoldStandardBRISNETParser:
                     logger.info(f"✓ Pattern {idx + 1} matched {len(matches)} horses")
 
                 for i, m in enumerate(matches):
-                    # Extract fields
-                    post = m.group(1).strip()
-                    name = m.group(2).strip() if len(m.groups()) >= 2 else "Unknown"
-                    style = m.group(3).upper() if len(m.groups()) >= 3 else "NA"
-                    quirin_str = m.group(4) if len(m.groups()) >= 4 else None
+                    # Extract fields — group(1)=program#, group(2)=pp_post, then name/style/quirin
+                    program = m.group(1).strip()
+                    pp_post = m.group(2)  # from "ppN", None when absent
+                    post = pp_post.strip() if pp_post else program
+                    name = m.group(3).strip() if len(m.groups()) >= 3 else "Unknown"
+                    style = m.group(4).upper() if len(m.groups()) >= 4 else "NA"
+                    quirin_str = m.group(5) if len(m.groups()) >= 5 else None
 
                     # Normalize style
                     style = "E/P" if style in ("EP", "E/P") else style
