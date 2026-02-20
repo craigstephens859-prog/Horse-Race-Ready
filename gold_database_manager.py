@@ -204,6 +204,23 @@ class GoldHighIQDatabase:
             except Exception as tbl_err:
                 logger.debug(f"Track pattern table {tbl_name} skipped: {tbl_err}")
 
+        # ---------- rich track accuracy profiles table -------------------
+        # Stores per-track surface/distance accuracy stats and bias intelligence
+        try:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS track_accuracy_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    track_code TEXT NOT NULL,
+                    profile_key TEXT NOT NULL,
+                    profile_value TEXT NOT NULL,
+                    sample_size INTEGER DEFAULT 0,
+                    last_updated TEXT,
+                    UNIQUE(track_code, profile_key)
+                )
+            """)
+        except Exception as tbl_err:
+            logger.debug(f"track_accuracy_profiles skipped: {tbl_err}")
+
         # ---------- migrate existing track_pattern_winners if needed -----
         # Add columns that may not exist in older databases
         for col_def in [
@@ -812,6 +829,12 @@ class GoldHighIQDatabase:
                 self.store_winner_patterns(race_id, finish_order_programs, horses_ui)
             except Exception as pat_err:
                 logger.warning(f"⚠️ Pattern storage failed (non-fatal): {pat_err}")
+
+            # TRACK ACCURACY PROFILES: Update surface/distance accuracy & bias intelligence
+            try:
+                self.update_track_profile_after_submission(race_id)
+            except Exception as prof_err:
+                logger.warning(f"⚠️ Track profile update failed (non-fatal): {prof_err}")
 
             return True
 
@@ -1520,3 +1543,434 @@ class GoldHighIQDatabase:
 
         conn.close()
         return summaries
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  RICH TRACK ACCURACY PROFILES — Surface, Distance & Bias Intelligence
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def update_track_profile_after_submission(self, race_id: str) -> bool:
+        """
+        Called after every result submission. Recalculates accuracy stats
+        and bias intelligence for the track associated with this race_id.
+
+        Accuracy metric:
+            overlap_pct = |predicted_top4 ∩ actual_top4| / 4
+            A race with 3/4 overlap = 75% accuracy for that race.
+
+        Updates track_accuracy_profiles with:
+            - Surface accuracy (Dirt / Turf)
+            - Distance accuracy (Sprint / Route)
+            - Bias intelligence (speed bias, closer bias, rail bias, post stats)
+        """
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            cursor = conn.cursor()
+
+            # Get race metadata
+            cursor.execute(
+                "SELECT track_code, surface, distance FROM races_analyzed WHERE race_id = ?",
+                (race_id,),
+            )
+            race_row = cursor.fetchone()
+            if not race_row:
+                conn.close()
+                return False
+
+            track_code = race_row[0]
+            conn.close()
+
+            # Recalculate full profile for this track
+            self._rebuild_accuracy_profile(track_code)
+            self._rebuild_bias_profile(track_code)
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error updating track profile for {race_id}: {e}")
+            return False
+
+    def _rebuild_accuracy_profile(self, track_code: str) -> None:
+        """
+        Rebuild accuracy stats for a track broken down by surface and distance.
+
+        Accuracy = average overlap between predicted top 4 and actual top 4.
+        overlap_pct = |predicted_top4_programs ∩ actual_top4_programs| / 4
+        """
+        track_code_upper = track_code.upper()
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+
+        def _upsert_profile(key: str, value: str, sample: int):
+            cursor.execute(
+                """
+                INSERT INTO track_accuracy_profiles
+                    (track_code, profile_key, profile_value, sample_size, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(track_code, profile_key)
+                DO UPDATE SET profile_value = excluded.profile_value,
+                              sample_size = excluded.sample_size,
+                              last_updated = excluded.last_updated
+            """,
+                (track_code_upper, key, value, sample, now),
+            )
+
+        # Get all completed races for this track (case-insensitive match)
+        cursor.execute(
+            """
+            SELECT ra.race_id, ra.surface, ra.distance,
+                   rrs.top3_predicted_correctly, rrs.top5_predicted_correctly
+            FROM races_analyzed ra
+            JOIN race_results_summary rrs ON ra.race_id = rrs.race_id
+            WHERE UPPER(ra.track_code) = ?
+        """,
+            (track_code_upper,),
+        )
+        completed_races = cursor.fetchall()
+
+        if not completed_races:
+            conn.close()
+            return
+
+        # For each completed race, compute overlap accuracy
+        # top5_predicted_correctly actually stores top4 hits (see submit_race_results)
+        race_accuracy = []
+        for race_id, surface, distance, top3_hits, top4_hits in completed_races:
+            # overlap_pct = top4_hits / 4 (how many of our predicted top4 were in actual top4)
+            overlap = (top4_hits or 0) / 4.0
+            furlongs = self._distance_to_furlongs(distance or "6f")
+            dist_bucket = "sprint" if furlongs <= 7.5 else "route"
+            surf = (surface or "Dirt").strip().lower()
+            if "turf" in surf:
+                surf_key = "turf"
+            else:
+                surf_key = "dirt"
+            race_accuracy.append(
+                {
+                    "race_id": race_id,
+                    "surface": surf_key,
+                    "distance_bucket": dist_bucket,
+                    "overlap_pct": overlap,
+                    "top1_correct": top3_hits is not None and top4_hits is not None,
+                    "top4_hits": top4_hits or 0,
+                }
+            )
+
+        # Also get top1 (winner) accuracy from race_results_summary
+        cursor.execute(
+            """
+            SELECT ra.race_id, ra.surface, ra.distance,
+                   rrs.top1_predicted_correctly
+            FROM races_analyzed ra
+            JOIN race_results_summary rrs ON ra.race_id = rrs.race_id
+            WHERE UPPER(ra.track_code) = ?
+        """,
+            (track_code_upper,),
+        )
+        winner_data = {}
+        for race_id, surface, distance, top1_correct in cursor.fetchall():
+            winner_data[race_id] = bool(top1_correct)
+
+        # ---- Overall track accuracy ----
+        total = len(race_accuracy)
+        overall_overlap = sum(r["overlap_pct"] for r in race_accuracy) / max(total, 1)
+        overall_winner = sum(
+            1 for r in race_accuracy if winner_data.get(r["race_id"], False)
+        ) / max(total, 1)
+        _upsert_profile("overall_accuracy_pct", f"{overall_overlap * 100:.1f}", total)
+        _upsert_profile("overall_winner_pct", f"{overall_winner * 100:.1f}", total)
+
+        # ---- Surface accuracy ----
+        for surf_key in ["dirt", "turf"]:
+            surf_races = [r for r in race_accuracy if r["surface"] == surf_key]
+            n = len(surf_races)
+            if n > 0:
+                acc = sum(r["overlap_pct"] for r in surf_races) / n
+                w_acc = (
+                    sum(1 for r in surf_races if winner_data.get(r["race_id"], False))
+                    / n
+                )
+                _upsert_profile(f"{surf_key}_accuracy_pct", f"{acc * 100:.1f}", n)
+                _upsert_profile(f"{surf_key}_winner_pct", f"{w_acc * 100:.1f}", n)
+                _upsert_profile(f"{surf_key}_races", str(n), n)
+            else:
+                _upsert_profile(f"{surf_key}_accuracy_pct", "0.0", 0)
+                _upsert_profile(f"{surf_key}_winner_pct", "0.0", 0)
+                _upsert_profile(f"{surf_key}_races", "0", 0)
+
+        # ---- Distance accuracy ----
+        for dist_key in ["sprint", "route"]:
+            dist_races = [r for r in race_accuracy if r["distance_bucket"] == dist_key]
+            n = len(dist_races)
+            if n > 0:
+                acc = sum(r["overlap_pct"] for r in dist_races) / n
+                w_acc = (
+                    sum(1 for r in dist_races if winner_data.get(r["race_id"], False))
+                    / n
+                )
+                _upsert_profile(f"{dist_key}_accuracy_pct", f"{acc * 100:.1f}", n)
+                _upsert_profile(f"{dist_key}_winner_pct", f"{w_acc * 100:.1f}", n)
+                _upsert_profile(f"{dist_key}_races", str(n), n)
+            else:
+                _upsert_profile(f"{dist_key}_accuracy_pct", "0.0", 0)
+                _upsert_profile(f"{dist_key}_winner_pct", "0.0", 0)
+                _upsert_profile(f"{dist_key}_races", "0", 0)
+
+        # ---- Surface + Distance cross-cuts ----
+        for surf in ["dirt", "turf"]:
+            for dist in ["sprint", "route"]:
+                combo_races = [
+                    r
+                    for r in race_accuracy
+                    if r["surface"] == surf and r["distance_bucket"] == dist
+                ]
+                n = len(combo_races)
+                if n > 0:
+                    acc = sum(r["overlap_pct"] for r in combo_races) / n
+                    _upsert_profile(
+                        f"{surf}_{dist}_accuracy_pct", f"{acc * 100:.1f}", n
+                    )
+                    _upsert_profile(f"{surf}_{dist}_races", str(n), n)
+
+        conn.commit()
+        conn.close()
+        logger.info(f"📊 Rebuilt accuracy profile for {track_code} ({total} races)")
+
+    def _rebuild_bias_profile(self, track_code: str) -> None:
+        """
+        Detect track biases from winner patterns stored in track_pattern_winners.
+
+        Biases detected:
+          - Running style bias: "Speed Bias", "Closer Bias", "Balanced"
+          - Post position bias: inside (1-3), middle (4-6), outside (7+) win rates
+          - Rail bias: if inside posts win > 40% with 5+ sample = "Rail Bias"
+        """
+        track_code_upper = track_code.upper()
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+
+        def _upsert_profile(key: str, value: str, sample: int):
+            cursor.execute(
+                """
+                INSERT INTO track_accuracy_profiles
+                    (track_code, profile_key, profile_value, sample_size, last_updated)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(track_code, profile_key)
+                DO UPDATE SET profile_value = excluded.profile_value,
+                              sample_size = excluded.sample_size,
+                              last_updated = excluded.last_updated
+            """,
+                (track_code_upper, key, value, sample, now),
+            )
+
+        # Pull all finishers from track_pattern_winners for this track (case-insensitive)
+        cursor.execute(
+            """
+            SELECT post_position, running_style, actual_finish, field_size
+            FROM track_pattern_winners
+            WHERE UPPER(track_code) = ?
+        """,
+            (track_code_upper,),
+        )
+        all_rows = cursor.fetchall()
+
+        if not all_rows:
+            conn.close()
+            return
+
+        winners = [r for r in all_rows if r[2] == 1]
+        top4 = [r for r in all_rows if r[2] <= 4]
+        total_winners = len(winners)
+
+        # ════════════════════════════════════════════════════════
+        # 1. RUNNING STYLE BIAS
+        # ════════════════════════════════════════════════════════
+        style_win_counts: dict[str, int] = {}
+        for w in winners:
+            s = (w[1] or "P").upper()
+            # Normalize: E and EP are "speed" types, S is "closer", P is "presser"
+            style_win_counts[s] = style_win_counts.get(s, 0) + 1
+
+        speed_styles = sum(style_win_counts.get(s, 0) for s in ["E", "EP"])
+        closer_styles = style_win_counts.get("S", 0)
+        presser_styles = style_win_counts.get("P", 0)
+
+        if total_winners >= 3:
+            speed_pct = speed_styles / total_winners
+            closer_pct = closer_styles / total_winners
+            if speed_pct >= 0.50:
+                style_bias = "Strong Speed Bias"
+            elif speed_pct >= 0.35:
+                style_bias = "Moderate Speed Bias"
+            elif closer_pct >= 0.40:
+                style_bias = "Favors Closers"
+            elif closer_pct >= 0.30:
+                style_bias = "Moderate Closer Bias"
+            else:
+                style_bias = "Balanced / No Dominant Style"
+        else:
+            style_bias = "Insufficient Data"
+
+        _upsert_profile("style_bias", style_bias, total_winners)
+        _upsert_profile(
+            "style_win_breakdown",
+            json.dumps(
+                {
+                    "E/EP (Speed)": speed_styles,
+                    "P (Presser)": presser_styles,
+                    "S (Closer)": closer_styles,
+                }
+            ),
+            total_winners,
+        )
+
+        # ════════════════════════════════════════════════════════
+        # 2. POST POSITION BIAS  — Inside (1-3), Middle (4-6), Outside (7+)
+        # ════════════════════════════════════════════════════════
+        def _post_zone(pp: int) -> str:
+            if pp <= 3:
+                return "inside"
+            elif pp <= 6:
+                return "middle"
+            else:
+                return "outside"
+
+        zone_wins: dict[str, int] = {"inside": 0, "middle": 0, "outside": 0}
+        zone_top4: dict[str, int] = {"inside": 0, "middle": 0, "outside": 0}
+        zone_total: dict[str, int] = {"inside": 0, "middle": 0, "outside": 0}
+
+        for row in all_rows:
+            pp = row[0] or 0
+            if pp <= 0:
+                continue
+            zone = _post_zone(pp)
+            zone_total[zone] = zone_total.get(zone, 0) + 1
+
+        for w in winners:
+            pp = w[0] or 0
+            if pp <= 0:
+                continue
+            zone = _post_zone(pp)
+            zone_wins[zone] += 1
+
+        for row in top4:
+            pp = row[0] or 0
+            if pp <= 0:
+                continue
+            zone = _post_zone(pp)
+            zone_top4[zone] += 1
+
+        post_stats = {}
+        for zone in ["inside", "middle", "outside"]:
+            total_z = zone_total.get(zone, 0)
+            wins_z = zone_wins.get(zone, 0)
+            t4_z = zone_top4.get(zone, 0)
+            post_stats[zone] = {
+                "win_pct": round(wins_z / max(total_z, 1) * 100, 1),
+                "top4_pct": round(t4_z / max(total_z, 1) * 100, 1),
+                "sample": total_z,
+            }
+
+        _upsert_profile("post_position_stats", json.dumps(post_stats), total_winners)
+
+        # Detect rail bias: inside posts winning > 40% with reasonable sample
+        rail_bias = "No"
+        if total_winners >= 5 and zone_total.get("inside", 0) >= 3:
+            inside_win_rate = zone_wins["inside"] / max(zone_total["inside"], 1)
+            if inside_win_rate >= 0.40:
+                rail_bias = "Strong Rail Bias"
+            elif inside_win_rate >= 0.30:
+                rail_bias = "Moderate Rail Bias"
+        _upsert_profile("rail_bias", rail_bias, total_winners)
+
+        # ════════════════════════════════════════════════════════
+        # 3. AGGREGATE BIAS SUMMARY (list of active biases)
+        # ════════════════════════════════════════════════════════
+        active_biases = []
+        if "Speed" in style_bias or "Closer" in style_bias:
+            active_biases.append(style_bias)
+        if "Rail" in rail_bias:
+            active_biases.append(rail_bias)
+
+        # Check if outside posts are hot
+        if (
+            zone_total.get("outside", 0) >= 3
+            and zone_wins.get("outside", 0) / max(zone_total.get("outside", 1), 1)
+            >= 0.35
+        ):
+            active_biases.append("Outside Posts Hot")
+
+        if not active_biases:
+            active_biases.append("No Strong Biases Detected")
+
+        _upsert_profile("active_biases", json.dumps(active_biases), total_winners)
+
+        conn.commit()
+        conn.close()
+        logger.info(
+            f"🔍 Rebuilt bias profile for {track_code} ({total_winners} winners)"
+        )
+
+    def calculate_accuracy_stats(self, track_name: str) -> dict:
+        """
+        Retrieve the full accuracy profile for a track.
+
+        Returns dict with keys like:
+            overall_accuracy_pct, dirt_accuracy_pct, turf_accuracy_pct,
+            sprint_accuracy_pct, route_accuracy_pct, dirt_races, turf_races,
+            sprint_races, route_races, etc.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=5)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT profile_key, profile_value, sample_size
+            FROM track_accuracy_profiles
+            WHERE track_code = ?
+        """,
+            (track_name.upper(),),
+        )
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        result = {}
+        for key, value, sample in rows:
+            try:
+                parsed = json.loads(value)
+                result[key] = {"value": parsed, "sample": sample}
+            except (json.JSONDecodeError, TypeError):
+                try:
+                    result[key] = {"value": float(value), "sample": sample}
+                except ValueError:
+                    result[key] = {"value": value, "sample": sample}
+
+        return result
+
+    def detect_biases(self, track_name: str) -> dict:
+        """
+        Retrieve bias intelligence for a track.
+
+        Returns dict with:
+            style_bias: str (e.g. "Strong Speed Bias")
+            rail_bias: str
+            active_biases: list[str]
+            post_position_stats: dict (inside/middle/outside win%/top4%)
+            style_win_breakdown: dict
+        """
+        profile = self.calculate_accuracy_stats(track_name)
+
+        return {
+            "style_bias": profile.get("style_bias", {}).get(
+                "value", "Insufficient Data"
+            ),
+            "rail_bias": profile.get("rail_bias", {}).get("value", "No"),
+            "active_biases": profile.get("active_biases", {}).get("value", ["No Data"]),
+            "post_position_stats": profile.get("post_position_stats", {}).get(
+                "value", {}
+            ),
+            "style_win_breakdown": profile.get("style_win_breakdown", {}).get(
+                "value", {}
+            ),
+        }

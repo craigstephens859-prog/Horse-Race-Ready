@@ -13062,7 +13062,7 @@ else:
                         st.warning(f"Could not load calibration history: {db_err}")
 
                     # ═══════════════════════════════════════════════════════
-                    #  TRACK-SPECIFIC CALIBRATION PROFILES
+                    #  TRACK-SPECIFIC CALIBRATION PROFILES (Rich Version)
                     # ═══════════════════════════════════════════════════════
                     st.markdown("---")
                     st.markdown("#### 🏇 Track-Specific Calibration Profiles")
@@ -13078,6 +13078,23 @@ else:
                         )
 
                         if track_cals:
+                            # Pre-load all accuracy profiles for display
+                            _all_track_profiles = {}
+                            _all_track_biases = {}
+                            if gold_db and hasattr(gold_db, "calculate_accuracy_stats"):
+                                for tcal in track_cals:
+                                    _tc_code = tcal.get("track_code", "???")
+                                    try:
+                                        _all_track_profiles[_tc_code] = (
+                                            gold_db.calculate_accuracy_stats(_tc_code)
+                                        )
+                                        _all_track_biases[_tc_code] = (
+                                            gold_db.detect_biases(_tc_code)
+                                        )
+                                    except Exception:
+                                        _all_track_profiles[_tc_code] = {}
+                                        _all_track_biases[_tc_code] = {}
+
                             # Show each track as an expander
                             for tcal in track_cals:
                                 tc = tcal.get("track_code", "???")
@@ -13099,7 +13116,7 @@ else:
                                     f"Confidence: {tc_conf:.0%}",
                                     expanded=False,
                                 ):
-                                    # Show track weights vs global
+                                    # ── Learned Weights Row ──
                                     wt_cols = st.columns(6)
                                     wt_names = [
                                         "class",
@@ -13124,29 +13141,225 @@ else:
                                                 help=f"Track weight vs global ({gw:.2f})",
                                             )
 
-                                    # Show track pattern stats if available
-                                    if gold_db and hasattr(
-                                        gold_db, "get_all_track_summaries"
-                                    ):
-                                        try:
-                                            summaries = (
-                                                gold_db.get_all_track_summaries()
-                                            )
-                                            tc_summaries = [
-                                                s
-                                                for s in summaries
-                                                if s.get("track_code", "").upper() == tc
-                                            ]
-                                            if tc_summaries:
-                                                st.caption("📊 Track Pattern Data:")
-                                                for ts in tc_summaries:
-                                                    st.text(
-                                                        f"  {ts['surface']} {ts['distance_category']}: "
-                                                        f"{ts['races_analyzed']} races analyzed"
-                                                    )
-                                        except Exception:
-                                            pass
+                                    # ── Rich accuracy profile ──
+                                    _tc_profile = _all_track_profiles.get(tc, {})
+                                    _tc_biases = _all_track_biases.get(tc, {})
 
+                                    if _tc_profile:
+                                        st.markdown("---")
+
+                                        # ──── 1. SURFACE ACCURACY ────
+                                        st.markdown("**🏁 Surface Accuracy**")
+                                        _s_cols = st.columns(2)
+                                        for _si, _surf in enumerate(["dirt", "turf"]):
+                                            with _s_cols[_si]:
+                                                _s_races = _tc_profile.get(
+                                                    f"{_surf}_races", {}
+                                                )
+                                                _s_n = (
+                                                    int(_s_races.get("value", 0))
+                                                    if isinstance(_s_races, dict)
+                                                    else int(_s_races or 0)
+                                                )
+                                                _s_acc = _tc_profile.get(
+                                                    f"{_surf}_accuracy_pct", {}
+                                                )
+                                                _s_acc_v = (
+                                                    float(_s_acc.get("value", 0))
+                                                    if isinstance(_s_acc, dict)
+                                                    else float(_s_acc or 0)
+                                                )
+                                                _s_win = _tc_profile.get(
+                                                    f"{_surf}_winner_pct", {}
+                                                )
+                                                _s_win_v = (
+                                                    float(_s_win.get("value", 0))
+                                                    if isinstance(_s_win, dict)
+                                                    else float(_s_win or 0)
+                                                )
+                                                if _s_n > 0:
+                                                    st.metric(
+                                                        f"{'🟤' if _surf == 'dirt' else '🟢'} {_surf.title()}",
+                                                        f"{_s_acc_v:.1f}%",
+                                                        delta=f"{_s_n} races",
+                                                        delta_color="off",
+                                                        help=f"Top-4 overlap accuracy on {_surf}. Winner accuracy: {_s_win_v:.1f}%",
+                                                    )
+                                                else:
+                                                    st.metric(
+                                                        f"{'🟤' if _surf == 'dirt' else '🟢'} {_surf.title()}",
+                                                        "—",
+                                                        delta="0 races",
+                                                        delta_color="off",
+                                                    )
+
+                                        # ──── 2. DISTANCE ACCURACY ────
+                                        st.markdown("**📏 Distance Accuracy**")
+                                        _d_cols = st.columns(2)
+                                        _dist_labels = {
+                                            "sprint": ("⚡ Sprints", "4½f – 7½f"),
+                                            "route": ("🏃 Routes", "8f – 1½mi"),
+                                        }
+                                        for _di, _dist in enumerate(
+                                            ["sprint", "route"]
+                                        ):
+                                            with _d_cols[_di]:
+                                                _d_races = _tc_profile.get(
+                                                    f"{_dist}_races", {}
+                                                )
+                                                _d_n = (
+                                                    int(_d_races.get("value", 0))
+                                                    if isinstance(_d_races, dict)
+                                                    else int(_d_races or 0)
+                                                )
+                                                _d_acc = _tc_profile.get(
+                                                    f"{_dist}_accuracy_pct", {}
+                                                )
+                                                _d_acc_v = (
+                                                    float(_d_acc.get("value", 0))
+                                                    if isinstance(_d_acc, dict)
+                                                    else float(_d_acc or 0)
+                                                )
+                                                _d_win = _tc_profile.get(
+                                                    f"{_dist}_winner_pct", {}
+                                                )
+                                                _d_win_v = (
+                                                    float(_d_win.get("value", 0))
+                                                    if isinstance(_d_win, dict)
+                                                    else float(_d_win or 0)
+                                                )
+                                                _lbl, _range = _dist_labels[_dist]
+                                                if _d_n > 0:
+                                                    st.metric(
+                                                        f"{_lbl}",
+                                                        f"{_d_acc_v:.1f}%",
+                                                        delta=f"{_d_n} races ({_range})",
+                                                        delta_color="off",
+                                                        help=f"Top-4 overlap accuracy for {_dist}s. Winner accuracy: {_d_win_v:.1f}%",
+                                                    )
+                                                else:
+                                                    st.metric(
+                                                        f"{_lbl}",
+                                                        "—",
+                                                        delta=f"0 races ({_range})",
+                                                        delta_color="off",
+                                                    )
+
+                                        # ──── 3. BIAS INTELLIGENCE ────
+                                        if (
+                                            _tc_biases
+                                            and _tc_biases.get("style_bias")
+                                            != "Insufficient Data"
+                                        ):
+                                            st.markdown("---")
+                                            st.markdown("**🔍 Bias Intelligence**")
+
+                                            # Active biases as tags
+                                            _active = _tc_biases.get(
+                                                "active_biases", ["No Data"]
+                                            )
+                                            if isinstance(_active, list) and _active:
+                                                _bias_tags = " · ".join(
+                                                    f"**{b}**" for b in _active
+                                                )
+                                                st.markdown(
+                                                    f"Track Tendencies: {_bias_tags}"
+                                                )
+                                            else:
+                                                st.caption(
+                                                    "No strong biases detected yet"
+                                                )
+
+                                            # Post Position table
+                                            _pp_stats = _tc_biases.get(
+                                                "post_position_stats", {}
+                                            )
+                                            if _pp_stats and isinstance(
+                                                _pp_stats, dict
+                                            ):
+                                                _pp_rows = []
+                                                for _zone in [
+                                                    "inside",
+                                                    "middle",
+                                                    "outside",
+                                                ]:
+                                                    _zd = _pp_stats.get(_zone, {})
+                                                    _pp_label = {
+                                                        "inside": "Inside (1-3)",
+                                                        "middle": "Middle (4-6)",
+                                                        "outside": "Outside (7+)",
+                                                    }
+                                                    _pp_rows.append(
+                                                        {
+                                                            "Post Zone": _pp_label.get(
+                                                                _zone, _zone
+                                                            ),
+                                                            "Win %": f"{_zd.get('win_pct', 0):.1f}%",
+                                                            "Top-4 %": f"{_zd.get('top4_pct', 0):.1f}%",
+                                                            "Sample": _zd.get(
+                                                                "sample", 0
+                                                            ),
+                                                        }
+                                                    )
+                                                _pp_df = pd.DataFrame(_pp_rows)
+                                                st.dataframe(
+                                                    _pp_df,
+                                                    use_container_width=True,
+                                                    hide_index=True,
+                                                    height=142,
+                                                )
+
+                                            # Style breakdown (compact)
+                                            _style_bd = _tc_biases.get(
+                                                "style_win_breakdown", {}
+                                            )
+                                            if (
+                                                _style_bd
+                                                and isinstance(_style_bd, dict)
+                                                and sum(_style_bd.values()) > 0
+                                            ):
+                                                _total_wins = sum(_style_bd.values())
+                                                _style_parts = []
+                                                for _sk, _sv in _style_bd.items():
+                                                    if _sv > 0:
+                                                        _pct = (
+                                                            _sv
+                                                            / max(_total_wins, 1)
+                                                            * 100
+                                                        )
+                                                        _style_parts.append(
+                                                            f"{_sk}: {_sv} ({_pct:.0f}%)"
+                                                        )
+                                                st.caption(
+                                                    f"🎯 Style Wins: {' | '.join(_style_parts)}"
+                                                )
+
+                                    else:
+                                        # No accuracy profile yet — show track pattern data
+                                        if gold_db and hasattr(
+                                            gold_db, "get_all_track_summaries"
+                                        ):
+                                            try:
+                                                summaries = (
+                                                    gold_db.get_all_track_summaries()
+                                                )
+                                                tc_summaries = [
+                                                    s
+                                                    for s in summaries
+                                                    if s.get("track_code", "").upper()
+                                                    == tc
+                                                ]
+                                                if tc_summaries:
+                                                    st.caption("📊 Track Pattern Data:")
+                                                    for ts in tc_summaries:
+                                                        st.text(
+                                                            f"  {ts['surface']} {ts['distance_category']}: "
+                                                            f"{ts['races_analyzed']} races analyzed"
+                                                        )
+                                            except Exception:
+                                                pass
+
+                                    # Timestamp
                                     if tc_updated:
                                         try:
                                             from datetime import datetime as _dt
