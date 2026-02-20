@@ -13545,8 +13545,44 @@ else:
 
                 st.code(traceback.format_exc())
 
-        # Tab 4: Retrain Model
+        # Tab 4: Retrain Model (ADMIN ONLY)
         with tab_retrain:
+            # ── Admin authentication gate ────────────────────────
+            # Only the site owner can retrain. Customers see a locked message.
+            # Set ADMIN_PASSWORD in Streamlit Cloud → Settings → Secrets:
+            #   ADMIN_PASSWORD = "your-password-here"
+            # Or locally in .streamlit/secrets.toml
+            admin_password = ""
+            try:
+                admin_password = st.secrets.get("ADMIN_PASSWORD", "")
+            except Exception:
+                pass
+
+            if not admin_password:
+                # No secret configured — block everyone on deployed, allow locally
+                if is_render() or os.environ.get("STREAMLIT_SERVER_HEADLESS"):
+                    st.warning("🔒 Model retraining is restricted to administrators.")
+                    st.info("Contact support if you need access to this feature.")
+                    st.stop()
+                # Local dev — allow through (no secret needed)
+            else:
+                if "admin_authenticated" not in st.session_state:
+                    st.session_state.admin_authenticated = False
+
+                if not st.session_state.admin_authenticated:
+                    st.markdown("### 🔐 Admin Access Required")
+                    st.info("Model retraining is restricted to administrators.")
+                    pwd = st.text_input(
+                        "Enter admin password:", type="password", key="admin_pwd_input"
+                    )
+                    if st.button("Unlock", key="admin_unlock_btn"):
+                        if pwd == admin_password:
+                            st.session_state.admin_authenticated = True
+                            st.rerun()
+                        else:
+                            st.error("Incorrect password.")
+                    st.stop()
+
             st.markdown("""
             ### Retrain ML Model with Real Data
 
