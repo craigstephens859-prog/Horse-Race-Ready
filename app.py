@@ -12599,6 +12599,24 @@ else:
                                                             f"Auto-calibration failed: {cal_err}"
                                                         )
 
+                                                    # TRACK INTELLIGENCE: Auto-rebuild profile for this track after new results
+                                                    try:
+                                                        if TRACK_INTEL_AVAILABLE and _track_intel is not None:
+                                                            _rebuild_track = (
+                                                                race_id.split("_")[0]
+                                                                if "_" in race_id
+                                                                else ""
+                                                            )
+                                                            if _rebuild_track:
+                                                                _track_intel.update_after_submission(_rebuild_track)
+                                                                logger.info(
+                                                                    f"🧠 Track Intelligence profile rebuilt for {_rebuild_track}"
+                                                                )
+                                                    except Exception as ti_err:
+                                                        logger.warning(
+                                                            f"Track Intelligence rebuild failed: {ti_err}"
+                                                        )
+
                                                     # INTELLIGENT LEARNING: High-IQ pattern analysis
                                                     try:
                                                         if (
