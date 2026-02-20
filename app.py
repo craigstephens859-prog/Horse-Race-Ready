@@ -4538,6 +4538,23 @@ race_type = race_type_manual or race_type_detected
 race_type_detected = race_type  # lock in constant key
 st.session_state["race_type"] = race_type_detected  # Store for Classic Report
 
+# ═══ AUTO-REFRESH Track Intelligence profile for the active track ═══
+# Eagerly rebuild the TI profile so Section E shows fresh data without Retrain.
+# Guard: only rebuild once per track_name to avoid redundant DB writes on rerun.
+if (
+    TRACK_INTEL_AVAILABLE
+    and _track_intel is not None
+    and track_name
+    and track_name != "Unknown Track"
+    and st.session_state.get("_ti_last_refreshed_track") != track_name.upper()
+):
+    try:
+        _track_intel.update_after_submission(track_name)
+        st.session_state["_ti_last_refreshed_track"] = track_name.upper()
+        logger.info(f"Auto-refreshed Track Intelligence profile for {track_name}")
+    except Exception as _ti_refresh_err:
+        logger.debug(f"TI auto-refresh skipped: {_ti_refresh_err}")
+
 # ===================== A. Race Setup: Scratches, ML & Styles =====================
 
 st.markdown("---")
@@ -13605,6 +13622,20 @@ else:
                         ):
                             _track_intel.rebuild_all_profiles()
                         _ti_summaries = _track_intel.get_all_track_summaries() or []
+
+                    # Ensure active analysis track has a fresh profile entry
+                    _ti_active = st.session_state.get("track_name", "").strip().upper()
+                    if (
+                        _ti_active
+                        and _ti_active != "UNKNOWN TRACK"
+                        and _ti_active
+                        not in {s["track"].upper() for s in _ti_summaries}
+                    ):
+                        try:
+                            _track_intel.update_after_submission(_ti_active)
+                            _ti_summaries = _track_intel.get_all_track_summaries() or []
+                        except Exception:
+                            pass  # Graceful: new track with zero history won't have data yet
 
                 _cal_tracks = {
                     tc.get("track_code", "").upper(): tc for tc in _track_cals
