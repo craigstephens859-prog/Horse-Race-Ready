@@ -940,6 +940,11 @@ class GoldHighIQDatabase:
         conn.close()
 
         # Build features DataFrame directly from columns
+        # NOTE: predicted_finish_position and prediction_error are intentionally
+        # EXCLUDED from training features — they leak outcome information
+        # (prediction_error = abs(predicted_rank - actual_finish)), causing the
+        # model to learn from its own prior predictions rather than genuine
+        # input features.  They remain in the SQL query for backward compat.
         base_feature_cols = [
             "odds",
             "prime_power",
@@ -950,8 +955,6 @@ class GoldHighIQDatabase:
             "career_starts",
             "post_position",
             "field_size",
-            "predicted_finish_position",
-            "prediction_error",
         ]
         enriched_feature_cols = [
             "weight",

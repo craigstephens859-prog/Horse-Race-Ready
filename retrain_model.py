@@ -601,7 +601,9 @@ def retrain_model(
             "val_split_pct": 1 - train_split,
             "val_winner_accuracy": final_metrics["winner_accuracy"],
             "val_top3_accuracy": final_metrics["top3_accuracy"],
-            "val_top5_accuracy": final_metrics["top4_accuracy"],
+            "val_top5_accuracy": final_metrics[
+                "top4_accuracy"
+            ],  # DB column is named top5 but stores top-4 overlap
             "val_loss": final_metrics["loss"],
             "epochs": actual_epochs,
             "learning_rate": learning_rate,
