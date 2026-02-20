@@ -95,6 +95,7 @@ class UnifiedRatingEngine:
         "style": 2.0,  # INCREASED from 1.2 - track bias is CRITICAL (1.55 impact factor)
         "post": 1.2,  # INCREASED from 0.8 — user post bias must impact rankings
         "angles": 0.10,  # Per-angle bonus (8 angles × 0.10 = 0.80 max)
+        "ml_score": 1.5,  # PyTorch Plackett-Luce retrained model blend weight
     }
 
     # DYNAMIC WEIGHT MODIFIERS BY RACE TYPE
@@ -512,6 +513,7 @@ class UnifiedRatingEngine:
                 "style",
                 "post",
                 "angles",
+                "ml_score",
             ]
             for key in core_weight_keys:
                 if key in learned_weights and learned_weights[key] > 0:
@@ -531,6 +533,7 @@ class UnifiedRatingEngine:
         condition_txt: str = "fast",
         style_bias: list[str] | None = None,
         post_bias: list[str] | None = None,
+        ml_scores: dict[str, float] | None = None,
     ) -> pd.DataFrame:
         """
         END-TO-END PREDICTION: PP text → win probabilities
@@ -611,6 +614,9 @@ class UnifiedRatingEngine:
             is_fts = name in fts_horses
             is_elite_trainer = name in elite_trainer_horses
 
+            # Get ML blend score for this horse (0.0 if no model)
+            horse_ml_score = (ml_scores or {}).get(name, 0.0)
+
             # Calculate all rating components
             components = self._calculate_rating_components(
                 horse=horse,
@@ -626,6 +632,7 @@ class UnifiedRatingEngine:
                 post_bias=post_bias,
                 is_fts=is_fts,
                 is_elite_trainer=is_elite_trainer,
+                ml_score=horse_ml_score,
             )
 
             rows.append(
@@ -798,6 +805,7 @@ class UnifiedRatingEngine:
         post_bias: list[str] | None,
         is_fts: bool = False,
         is_elite_trainer: bool = False,
+        ml_score: float = 0.0,
     ) -> RatingComponents:
         """
         COMPREHENSIVE RATING CALCULATION WITH BAYESIAN UNCERTAINTY
@@ -963,6 +971,18 @@ class UnifiedRatingEngine:
             "style": (cstyle, cstyle_std),  # Now adjusted for track bias
             "post": (cpost, cpost_std),  # Now adjusted for track bias
         }
+
+        # ═══════════════════════════════════════════════════════════════
+        # ML BLEND: PyTorch Plackett-Luce retrained model score
+        # Added as a 7th Bayesian component alongside the 6 core ratings.
+        # The score is z-normalised to [-3, +3] by MLBlendEngine, so it
+        # naturally fits in the same range as the other components.
+        # ═══════════════════════════════════════════════════════════════
+        if ml_score != 0.0:
+            # Uncertainty scales inversely with model confidence
+            ml_std = 0.5  # Moderate uncertainty for blended model
+            component_ratings_dict["ml_score"] = (ml_score, ml_std)
+            logger.debug(f"  → ML blend score: {ml_score:.3f} (std={ml_std})")
 
         # === RELIABILITY-BASED CONFIDENCE WEIGHTING ===
         # Apply confidence adjustments based on data freshness

@@ -348,6 +348,7 @@ def retrain_model(
     early_stopping_patience: int = 15,
     weight_decay: float = 1e-3,
     max_grad_norm: float = 1.0,
+    track_name: str | None = None,
 ) -> dict:
     """
     Main retraining function — optimised for small horse racing datasets.
@@ -363,12 +364,18 @@ def retrain_model(
         early_stopping_patience: Stop after N epochs with no val loss improvement
         weight_decay: L2 regularisation strength for AdamW
         max_grad_norm: Gradient clipping threshold
+        track_name:  If provided, retrain only on races from this track.
+                     Requires min_races for that track. Saves a track-specific
+                     checkpoint under models/ranking_model_{track}_{timestamp}.pt
 
     Returns:
         Dict with training results, metrics, and model path
     """
     logger.info("=" * 60)
-    logger.info("🚀 STARTING ML MODEL RETRAINING")
+    if track_name:
+        logger.info(f"🚀 STARTING PER-TRACK ML RETRAINING: {track_name}")
+    else:
+        logger.info("🚀 STARTING ML MODEL RETRAINING")
     logger.info("=" * 60)
 
     set_deterministic_seed(SEED)
@@ -385,6 +392,36 @@ def retrain_model(
         return {"error": f"Insufficient data — need {min_races}+ completed races"}
 
     features_df, labels_df = training_data
+
+    # ── 1b. Per-track filtering (if track_name provided) ─────
+    if track_name:
+        # Filter to just this track's races by joining back to gold_high_iq
+        import sqlite3 as _sqlite3
+
+        _conn = _sqlite3.connect(db_path)
+        _cursor = _conn.cursor()
+        _cursor.execute(
+            "SELECT DISTINCT race_id FROM gold_high_iq WHERE UPPER(track) = UPPER(?)",
+            (track_name,),
+        )
+        track_race_ids = set(r[0] for r in _cursor.fetchall())
+        _conn.close()
+
+        features_df = features_df[features_df["race_id"].isin(track_race_ids)]
+        labels_df = labels_df[labels_df["race_id"].isin(track_race_ids)]
+
+        n_track_races = len(features_df["race_id"].unique())
+        if n_track_races < min_races:
+            logger.error(
+                f"❌ {track_name} has only {n_track_races} races. "
+                f"Need {min_races}+ for per-track retrain."
+            )
+            return {
+                "error": f"Insufficient data for {track_name} — "
+                f"only {n_track_races} races (need {min_races}+)"
+            }
+        logger.info(f"🏟️  Filtered to {n_track_races} races for {track_name}")
+
     n_total_races = len(features_df["race_id"].unique())
     logger.info(f"✅ Loaded {len(features_df)} horses from {n_total_races} races")
 
@@ -506,7 +543,11 @@ def retrain_model(
         model.load_state_dict(best_model_state)
 
     os.makedirs("models", exist_ok=True)
-    model_path = f"models/ranking_model_{int(time.time())}.pt"
+    if track_name:
+        safe_track = track_name.upper().replace(" ", "_")
+        model_path = f"models/ranking_model_{safe_track}_{int(time.time())}.pt"
+    else:
+        model_path = f"models/ranking_model_{int(time.time())}.pt"
 
     # Save everything needed for inference: model weights, architecture
     # config, feature standardisation stats, and validation metrics
@@ -529,6 +570,7 @@ def retrain_model(
                 "early_stopping_patience": early_stopping_patience,
                 "train_races": n_train_races,
                 "val_races": n_val_races,
+                "track_name": track_name,
             },
         },
         model_path,

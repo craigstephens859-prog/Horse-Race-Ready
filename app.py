@@ -172,6 +172,37 @@ except ImportError as e:
         return []
 
 
+# ML BLEND ENGINE: PyTorch retrained model for prediction blending
+try:
+    from ml_blend_engine import MLBlendEngine
+
+    _ml_blend = MLBlendEngine(model_dir="models")
+    ML_BLEND_AVAILABLE = _ml_blend.model is not None
+    if ML_BLEND_AVAILABLE:
+        _mi = _ml_blend.get_model_info()
+        print(
+            f"✅ ML Blend Engine loaded: {_mi.get('model_path', '?')} ({_mi.get('n_features', '?')} features)"
+        )
+    else:
+        print("⚠️ ML Blend Engine: no trained model found in models/")
+except Exception as e:
+    ML_BLEND_AVAILABLE = False
+    _ml_blend = None
+    print(f"ML Blend Engine not available: {e}")
+
+# TRACK INTELLIGENCE: Bias detection & track-specific profiling
+try:
+    from track_intelligence import TrackIntelligenceEngine
+
+    _track_intel = TrackIntelligenceEngine(db_path=PERSISTENT_DB_PATH)
+    TRACK_INTEL_AVAILABLE = True
+    print("✅ Track Intelligence Engine initialized")
+except Exception as e:
+    TRACK_INTEL_AVAILABLE = False
+    _track_intel = None
+    print(f"Track Intelligence not available: {e}")
+
+
 # ===================== First-Time Starter (FTS) Parameters =====================
 # Maiden Special Weight (MSW) - Define FTS Parameters Dictionary
 # Handles horses with zero previous racing history
@@ -7402,6 +7433,53 @@ def compute_bias_ratings(
                 if today_purse == 0:
                     today_purse = st.session_state.get("purse_val", 20000)
 
+                # ═══ ML BLEND: Compute PyTorch model scores ═══
+                _ml_scores = None
+                if ML_BLEND_AVAILABLE and _ml_blend and _ml_blend.model is not None:
+                    try:
+                        # Build feature dicts from parsed HorseData
+                        horse_features = {}
+                        for hname, hdata in horses.items():
+                            horse_features[hname] = {
+                                "odds": getattr(hdata, "ml_odds", 0) or 0,
+                                "prime_power": getattr(hdata, "prime_power", 0) or 0,
+                                "last_speed_rating": getattr(hdata, "last_fig", 0) or 0,
+                                "class_rating": getattr(hdata, "class_rating", 0) or 0,
+                                "best_speed_at_distance": getattr(hdata, "avg_top2", 0)
+                                or 0,
+                                "days_since_last_race": getattr(
+                                    hdata, "days_since_last", 30
+                                )
+                                or 30,
+                                "career_starts": getattr(hdata, "starts", 0) or 0,
+                                "post_position": int(
+                                    "".join(
+                                        c
+                                        for c in str(getattr(hdata, "post", "5"))
+                                        if c.isdigit()
+                                    )
+                                    or "5"
+                                ),
+                                "field_size": len(horses),
+                                "predicted_finish_position": 0,
+                                "prediction_error": 0,
+                                "jockey_win_pct": getattr(hdata, "jockey_win_pct", 0)
+                                or 0,
+                                "trainer_win_pct": getattr(hdata, "trainer_win_pct", 0)
+                                or 0,
+                            }
+                        _ml_scores = _ml_blend.score_from_gold_features(
+                            list(horse_features.values()),
+                            horse_names=list(horse_features.keys()),
+                        )
+                        if _ml_scores:
+                            logger.info(
+                                f"🧠 ML blend scores computed for {len(_ml_scores)} horses"
+                            )
+                    except Exception as e:
+                        logger.warning(f"ML blend scoring failed (using fallback): {e}")
+                        _ml_scores = None
+
                 # Get predictions with extracted metadata
                 results_df = engine.predict_race(
                     pp_text=pp_text,
@@ -7425,6 +7503,7 @@ def compute_bias_ratings(
                         if post_bias_pick
                         else None
                     ),
+                    ml_scores=_ml_scores,
                 )
 
                 if not results_df.empty:
@@ -11889,13 +11968,16 @@ else:
         pending_races = gold_db.get_pending_races(limit=20)
 
         # Create tabs for Gold High-IQ System
-        tab_overview, tab_results, tab_calibration, tab_retrain = st.tabs(
-            [
-                "📊 Dashboard",
-                "🏁 Submit Actual Top 4",
-                "🤖 Auto-Calibration Monitor",
-                "🚀 Retrain Model",
-            ]
+        tab_overview, tab_results, tab_calibration, tab_retrain, tab_track_intel = (
+            st.tabs(
+                [
+                    "📊 Dashboard",
+                    "🏁 Submit Actual Top 4",
+                    "🤖 Auto-Calibration Monitor",
+                    "🚀 Retrain Model",
+                    "🧠 Track Intelligence",
+                ]
+            )
         )
 
         # Tab 1: Dashboard
@@ -13528,7 +13610,9 @@ else:
                             with col4:
                                 st.metric(
                                     "Latest Top-4 Accuracy",
-                                    f"{latest_top4_acc:.1f}%" if latest_top4_acc > 0 else "N/A",
+                                    f"{latest_top4_acc:.1f}%"
+                                    if latest_top4_acc > 0
+                                    else "N/A",
                                     help="Most recent top-4 prediction accuracy (from ML retrain)",
                                 )
 
@@ -13793,6 +13877,339 @@ else:
                         )
                 except Exception:
                     st.warning("Could not load training history.")
+
+        # Tab 5: Track Intelligence
+        with tab_track_intel:
+            st.markdown("### 🧠 Track Intelligence — Bias Detection & Profiling")
+            st.caption(
+                "Automatic bias analysis from your Gold High-IQ database. "
+                "Detects running style, post position, surface, and distance biases per track."
+            )
+
+            if not TRACK_INTEL_AVAILABLE or _track_intel is None:
+                st.warning("Track Intelligence module not available.")
+            else:
+                # Build/rebuild all profiles on demand
+                if st.button(
+                    "🔄 Rebuild All Track Profiles", key="rebuild_profiles_btn"
+                ):
+                    with st.spinner("Analysing all tracks..."):
+                        _track_intel.rebuild_all_profiles()
+                    st.success("✅ All track profiles rebuilt!")
+                    st.rerun()
+
+                # Get all track summaries
+                summaries = _track_intel.get_all_track_summaries()
+                if not summaries:
+                    # Try building them for the first time
+                    with st.spinner("Building track profiles for the first time..."):
+                        _track_intel.rebuild_all_profiles()
+                    summaries = _track_intel.get_all_track_summaries()
+
+                if summaries:
+                    # Overview table
+                    st.markdown("#### 📋 Track Overview")
+                    overview_data = []
+                    for s in summaries:
+                        overview_data.append(
+                            {
+                                "Track": s["track"],
+                                "Races": s["total_races"],
+                                "Winner %": f"{s['overall_winner_pct']:.1f}%",
+                                "Top-3 %": f"{s['overall_top3_pct']:.1f}%",
+                                "Style Bias": s["style_bias"],
+                                "Top Insight": s["top_insight"],
+                            }
+                        )
+                    st.dataframe(
+                        pd.DataFrame(overview_data),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    # Detailed per-track view
+                    st.markdown("---")
+                    track_names = [s["track"] for s in summaries]
+                    selected_track = st.selectbox(
+                        "Select track for detailed analysis:",
+                        track_names,
+                        key="track_intel_selector",
+                    )
+
+                    if selected_track:
+                        profile = _track_intel.build_full_profile(selected_track)
+
+                        # Key metrics row
+                        st.markdown(
+                            f"#### 🏟️ {selected_track} — {profile.total_races} Races"
+                        )
+                        mc1, mc2, mc3, mc4 = st.columns(4)
+                        with mc1:
+                            st.metric("Winner %", f"{profile.overall_winner_pct:.1f}%")
+                        with mc2:
+                            st.metric("Top-3 %", f"{profile.overall_top3_pct:.1f}%")
+                        with mc3:
+                            st.metric("Top-4 %", f"{profile.overall_top4_pct:.1f}%")
+                        with mc4:
+                            st.metric("Horses Analysed", profile.total_horses)
+
+                        # Surface / Distance / Condition breakdown
+                        st.markdown("##### 📊 Accuracy by Category")
+                        cat_cols = st.columns(3)
+                        with cat_cols[0]:
+                            st.markdown("**🏇 Surface**")
+                            surface_data = []
+                            if profile.dirt_races > 0:
+                                surface_data.append(
+                                    {
+                                        "Surface": "Dirt",
+                                        "Races": profile.dirt_races,
+                                        "Winner %": f"{profile.dirt_winner_pct:.1f}%",
+                                    }
+                                )
+                            if profile.turf_races > 0:
+                                surface_data.append(
+                                    {
+                                        "Surface": "Turf",
+                                        "Races": profile.turf_races,
+                                        "Winner %": f"{profile.turf_winner_pct:.1f}%",
+                                    }
+                                )
+                            if surface_data:
+                                st.dataframe(
+                                    pd.DataFrame(surface_data), hide_index=True
+                                )
+                            else:
+                                st.caption("No surface data")
+                        with cat_cols[1]:
+                            st.markdown("**📏 Distance**")
+                            dist_data = []
+                            if profile.sprint_races > 0:
+                                dist_data.append(
+                                    {
+                                        "Distance": "Sprint (<8f)",
+                                        "Races": profile.sprint_races,
+                                        "Winner %": f"{profile.sprint_winner_pct:.1f}%",
+                                    }
+                                )
+                            if profile.route_races > 0:
+                                dist_data.append(
+                                    {
+                                        "Distance": "Route (≥8f)",
+                                        "Races": profile.route_races,
+                                        "Winner %": f"{profile.route_winner_pct:.1f}%",
+                                    }
+                                )
+                            if dist_data:
+                                st.dataframe(pd.DataFrame(dist_data), hide_index=True)
+                            else:
+                                st.caption("No distance data")
+                        with cat_cols[2]:
+                            st.markdown("**🌤️ Condition**")
+                            cond_data = []
+                            if profile.fast_races > 0:
+                                cond_data.append(
+                                    {
+                                        "Condition": "Fast/Firm",
+                                        "Races": profile.fast_races,
+                                        "Winner %": f"{profile.fast_winner_pct:.1f}%",
+                                    }
+                                )
+                            if profile.off_track_races > 0:
+                                cond_data.append(
+                                    {
+                                        "Condition": "Off Track",
+                                        "Races": profile.off_track_races,
+                                        "Winner %": f"{profile.off_track_winner_pct:.1f}%",
+                                    }
+                                )
+                            if cond_data:
+                                st.dataframe(pd.DataFrame(cond_data), hide_index=True)
+                            else:
+                                st.caption("No condition data")
+
+                        # Style & Post bias
+                        st.markdown("##### 🎯 Bias Detection")
+                        bias_cols = st.columns(2)
+                        with bias_cols[0]:
+                            st.markdown(f"**Running Style:** {profile.style_bias}")
+                            style_df = pd.DataFrame(
+                                [
+                                    {
+                                        "Style": "Speed (E/EP)",
+                                        "Win %": f"{profile.speed_win_pct:.1f}%",
+                                    },
+                                    {
+                                        "Style": "Presser (P)",
+                                        "Win %": f"{profile.presser_win_pct:.1f}%",
+                                    },
+                                    {
+                                        "Style": "Closer (S/C)",
+                                        "Win %": f"{profile.closer_win_pct:.1f}%",
+                                    },
+                                ]
+                            )
+                            st.dataframe(style_df, hide_index=True)
+                        with bias_cols[1]:
+                            st.markdown("**Post Position Zones**")
+                            post_df = pd.DataFrame(
+                                [
+                                    {
+                                        "Zone": "Inside (1-3)",
+                                        "Win %": f"{profile.inside_win_pct:.1f}%",
+                                        "Top-4 %": f"{profile.inside_top4_pct:.1f}%",
+                                    },
+                                    {
+                                        "Zone": "Middle (4-6)",
+                                        "Win %": f"{profile.middle_win_pct:.1f}%",
+                                        "Top-4 %": f"{profile.middle_top4_pct:.1f}%",
+                                    },
+                                    {
+                                        "Zone": "Outside (7+)",
+                                        "Win %": f"{profile.outside_win_pct:.1f}%",
+                                        "Top-4 %": f"{profile.outside_top4_pct:.1f}%",
+                                    },
+                                ]
+                            )
+                            st.dataframe(post_df, hide_index=True)
+
+                        # Insights cards
+                        if profile.insights:
+                            st.markdown("##### 💡 Detected Biases")
+                            for ins in profile.insights:
+                                severity_icon = {
+                                    "strong": "🔴",
+                                    "moderate": "🟡",
+                                    "mild": "🟢",
+                                }.get(ins.severity, "⚪")
+                                st.info(
+                                    f"{severity_icon} **[{ins.category.upper()}]** {ins.description} *(n={ins.sample_size}, conf={ins.confidence:.0%})*"
+                                )
+
+                        # Top J/T combos
+                        if profile.top_jt_combos:
+                            st.markdown("##### 🏆 Top Jockey-Trainer Combos")
+                            jt_data = [
+                                {
+                                    "Jockey": c["jockey"],
+                                    "Trainer": c["trainer"],
+                                    "Starts": c["starts"],
+                                    "Wins": c["wins"],
+                                    "Win %": f"{c['win_pct']}%",
+                                }
+                                for c in profile.top_jt_combos[:10]
+                            ]
+                            st.dataframe(pd.DataFrame(jt_data), hide_index=True)
+
+                        # ML blend model info
+                        if ML_BLEND_AVAILABLE and _ml_blend:
+                            st.markdown("---")
+                            st.markdown("##### 🤖 ML Blend Model Status")
+                            mi = _ml_blend.get_model_info()
+                            mi_cols = st.columns(4)
+                            with mi_cols[0]:
+                                st.metric("Features", mi.get("n_features", "?"))
+                            with mi_cols[1]:
+                                st.metric("Hidden Dim", mi.get("hidden_dim", "?"))
+                            with mi_cols[2]:
+                                st.metric("Architecture", "Plackett-Luce RankingNN")
+                            with mi_cols[3]:
+                                st.metric(
+                                    "Status",
+                                    "✅ Active"
+                                    if mi.get("model_loaded")
+                                    else "❌ Not Loaded",
+                                )
+
+                        # Per-track retrain button
+                        st.markdown("---")
+                        st.markdown("##### 🎯 Per-Track Retrain")
+                        st.caption(
+                            f"Retrain the ML model using only {selected_track} races. "
+                            f"Requires at least 30 races for this track."
+                        )
+                        track_race_count = profile.total_races
+                        min_track_races = 30
+
+                        if track_race_count >= min_track_races:
+                            if st.button(
+                                f"🚀 Retrain for {selected_track} Only ({track_race_count} races)",
+                                key=f"retrain_track_{selected_track}",
+                                type="primary",
+                            ):
+                                with st.spinner(
+                                    f"Retraining model on {selected_track} data..."
+                                ):
+                                    try:
+                                        from retrain_model import (
+                                            retrain_model as _retrain_fn,
+                                        )
+
+                                        track_results = _retrain_fn(
+                                            db_path=gold_db.db_path,
+                                            epochs=100,
+                                            learning_rate=0.0005,
+                                            batch_size=4,
+                                            min_races=min_track_races,
+                                            track_name=selected_track,
+                                        )
+                                        if "error" in track_results:
+                                            st.error(f"❌ {track_results['error']}")
+                                        else:
+                                            st.success(
+                                                f"✅ {selected_track} model trained!"
+                                            )
+                                            tc1, tc2, tc3 = st.columns(3)
+                                            with tc1:
+                                                st.metric(
+                                                    "Winner %",
+                                                    f"{track_results['metrics']['winner_accuracy']:.1%}",
+                                                )
+                                            with tc2:
+                                                st.metric(
+                                                    "Top-3 %",
+                                                    f"{track_results['metrics']['top3_accuracy']:.1%}",
+                                                )
+                                            with tc3:
+                                                st.metric(
+                                                    "Top-4 %",
+                                                    f"{track_results['metrics']['top4_accuracy']:.1%}",
+                                                )
+                                            st.info(
+                                                f"💾 Saved: {track_results.get('model_path', 'N/A')}"
+                                            )
+
+                                            # Save track ML profile
+                                            _track_intel.save_track_ml_profile(
+                                                track_code=selected_track,
+                                                model_path=track_results["model_path"],
+                                                n_features=track_results["metrics"].get(
+                                                    "n_features", 0
+                                                ),
+                                                hidden_dim=64,
+                                                val_metrics=track_results["metrics"],
+                                                races_trained=track_results.get(
+                                                    "n_races", 0
+                                                ),
+                                            )
+
+                                            # Reload ML blend engine if available
+                                            if ML_BLEND_AVAILABLE and _ml_blend:
+                                                _ml_blend.reload_model()
+                                    except Exception as e:
+                                        st.error(f"Per-track retrain error: {e}")
+                                        import traceback
+
+                                        st.code(traceback.format_exc())
+                        else:
+                            st.warning(
+                                f"⏳ {selected_track} has only {track_race_count} races. "
+                                f"Need {min_track_races}+ for per-track retraining."
+                            )
+                else:
+                    st.info(
+                        "📋 No track data available yet. Submit race results to build intelligence profiles."
+                    )
 
     except Exception as e:
         st.error(f"Error in Gold High-IQ System: {e}")
