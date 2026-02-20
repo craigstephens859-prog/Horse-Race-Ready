@@ -730,7 +730,7 @@ class TrackIntelligenceEngine:
                     last_updated = excluded.last_updated
             """,
                 (
-                    track_code,
+                    profile.track_code,
                     surface,
                     distance_bucket,
                     condition_bucket,
@@ -744,7 +744,7 @@ class TrackIntelligenceEngine:
             conn.commit()
             conn.close()
             logger.info(
-                f"Track intelligence saved: {track_code} ({profile.total_races} races)"
+                f"Track intelligence saved: {profile.track_code} ({profile.total_races} races)"
             )
 
         except Exception as e:
