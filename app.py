@@ -12601,14 +12601,19 @@ else:
 
                                                     # TRACK INTELLIGENCE: Auto-rebuild profile for this track after new results
                                                     try:
-                                                        if TRACK_INTEL_AVAILABLE and _track_intel is not None:
+                                                        if (
+                                                            TRACK_INTEL_AVAILABLE
+                                                            and _track_intel is not None
+                                                        ):
                                                             _rebuild_track = (
                                                                 race_id.split("_")[0]
                                                                 if "_" in race_id
                                                                 else ""
                                                             )
                                                             if _rebuild_track:
-                                                                _track_intel.update_after_submission(_rebuild_track)
+                                                                _track_intel.update_after_submission(
+                                                                    _rebuild_track
+                                                                )
                                                                 logger.info(
                                                                     f"🧠 Track Intelligence profile rebuilt for {_rebuild_track}"
                                                                 )
@@ -13608,6 +13613,33 @@ else:
                 )
 
                 # ═══ TIER 1 — Engine Status Bar ═══
+                # Show active analysis banner if user has parsed PPs
+                _active_track = st.session_state.get("track_name", "").strip()
+                _active_track_upper = (
+                    _active_track.upper()
+                    if _active_track and _active_track != "Unknown Track"
+                    else ""
+                )
+                if _active_track_upper:
+                    _at_races = _cal_tracks.get(_active_track_upper, {}).get(
+                        "races_trained_on",
+                        _ti_tracks.get(_active_track_upper, {}).get("total_races", 0),
+                    )
+                    _at_conf = _cal_tracks.get(_active_track_upper, {}).get(
+                        "avg_confidence", 0
+                    )
+                    _at_style = _ti_tracks.get(_active_track_upper, {}).get(
+                        "style_bias", "—"
+                    )
+                    st.info(
+                        f"🏇 **Currently Analyzing: {_active_track}** — "
+                        f"{_at_races} historical races | "
+                        f"Confidence: {_at_conf:.0%} | "
+                        f"Style Bias: {_at_style}"
+                        if _active_track_upper in _all_track_codes
+                        else f"🏇 **Currently Analyzing: {_active_track}** — New track, no historical data yet"
+                    )
+
                 st.markdown("---")
                 _es1, _es2, _es3, _es4 = st.columns(4)
                 with _es1:
@@ -13708,9 +13740,14 @@ else:
 
                     # ═══ TIER 4 — Deep-Dive Panel ═══
                     st.markdown("---")
+                    # Auto-select the track being analyzed (if it exists in profiles)
+                    _default_idx = 0
+                    if _active_track_upper and _active_track_upper in _all_track_codes:
+                        _default_idx = _all_track_codes.index(_active_track_upper)
                     _selected_track = st.selectbox(
                         "Select track for deep analysis:",
                         _all_track_codes,
+                        index=_default_idx,
                         key="ti_deep_selector",
                     )
 
