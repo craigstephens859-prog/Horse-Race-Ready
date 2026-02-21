@@ -16,8 +16,8 @@ print("STEP 1: CHUNKING")
 print("=" * 80)
 chunks = parser._split_into_chunks(pp_text, debug=True)
 print(f"\nTotal chunks found: {len(chunks)}")
-for i, (post, name, style, quirin, block) in enumerate(chunks):
-    print(f"\n--- Chunk {i+1}: Post={post}, Name='{name}', Style={style}, Quirin={quirin}")
+for i, (program, post, name, style, quirin, block) in enumerate(chunks):
+    print(f"\n--- Chunk {i+1}: Program={program}, Post={post}, Name='{name}', Style={style}, Quirin={quirin}")
     print(f"    Block length: {len(block)} chars")
     # Show first 200 and last 200 chars of block
     print(f"    Block start: {repr(block[:200])}")

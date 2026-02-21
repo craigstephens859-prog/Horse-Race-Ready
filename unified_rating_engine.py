@@ -639,6 +639,7 @@ class UnifiedRatingEngine:
                 {
                     "Horse": name,
                     "Post": horse.post,
+                    "Program": horse.program_number,
                     "Rating": components.final_rating,
                     "Pace_Style": horse.pace_style,
                     "Quirin": horse.quirin_points,

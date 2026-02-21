@@ -1974,7 +1974,33 @@ def extract_morning_line_by_horse(pp_text: str) -> dict[str, str]:
 
 
 ANGLE_LINE_RE = re.compile(
-    r"(?mi)^\s*(\d{4}\s+)?(1st\s*time\s*str|Debut\s*MdnSpWt|Maiden\s*Sp\s*Wt|2nd\s*career\s*race|Turf\s*to\s*Dirt|Dirt\s*to\s*Turf|Shipper|Blinkers\s*(?:on|off)|(?:\d+(?:-\d+)?)\s*days?Away|JKYw/\s*Sprints|JKYw/\s*Trn\s*L(?:30|45|60)\b|JKYw/\s*[EPS]|JKYw/\s*NA\s*types)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$"
+    r"""(?mix)^\s*\+?           # optional + prefix (positive trend indicator)
+    (                              # ── category capture group ──
+      \d{4}                        # year-based stats  (2025, 2024 …)
+    | JKYw/\s*(?:                  # jockey angle variants
+        Sprints                    #   JKYw/ Sprints
+      | Routes                     #   JKYw/ Routes
+      | Trn\s*L(?:30|45|60)        #   JKYw/ Trn L30/L45/L60
+      | (?:[EPS]|NA)\s*types       #   JKYw/ S types, E types, P types, NA types
+      )
+    | 1st\s*time\s*(?:str|Turf|Dirt|AW)  # first time surface / distance
+    | Debut\s*MdnSpWt              # debut maiden special weight
+    | Maiden\s*Sp\s*Wt             # maiden special weight
+    | 2nd\s*career\s*race          # 2nd career race
+    | Turf\s*to\s*Dirt             # surface switch
+    | Dirt\s*to\s*Turf             # surface switch
+    | Rte\s*to\s*Sprint            # distance switch
+    | Sprint\s*to\s*Rte            # distance switch
+    | MdnClm\s*to\s*Mdn            # class change
+    | Shipper                      # shipper
+    | Blinkers\s*(?:on|off)        # equipment change
+    | (?:\d+(?:-\d+)?)\s*days?Away # layoff
+    | Sprints                      # standalone distance
+    | Routes                       # standalone distance
+    | Dirt\s*starts                # standalone surface
+    | Turf\s*starts                # standalone surface
+    )\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$
+    """
 )
 
 
@@ -1985,7 +2011,7 @@ def parse_angles_for_block(block) -> pd.DataFrame:
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
     for m in ANGLE_LINE_RE.finditer(block_str):
-        _yr, cat, starts, win, itm, roi = m.groups()
+        cat, starts, win, itm, roi = m.groups()
         rows.append(
             {
                 "Category": re.sub(r"\s+", " ", cat.strip()),
@@ -6495,7 +6521,7 @@ def analyze_class_movement(
     # Get recent class levels
     recent_levels = []
     for race in past_races[:5]:  # Last 5 races
-        race_class = race.get("class", "")
+        race_class = race.get("class", race.get("race_type", ""))
         for key in class_hierarchy:
             if key.lower() in race_class.lower():
                 recent_levels.append(class_hierarchy[key])
@@ -6643,6 +6669,20 @@ def parse_race_history_from_block(block: str) -> list[dict]:
                     speed_fig = fig
                     break
 
+            # Finish position: scan position numbers in running-line area
+            # (matches elite_parser_v2_gold._parse_race_history logic)
+            finish_pos = 0
+            fin_matches = re.findall(r"(\d{1,2})[ƒ®«ª³©¨°¬²‚±¹²³⁴⁵⁶⁷⁸⁹⁰ⁿ]*", line[80:])
+            if fin_matches:
+                for fm in reversed(fin_matches):
+                    try:
+                        f_val = int(fm)
+                        if 1 <= f_val <= 20:
+                            finish_pos = f_val
+                            break
+                    except ValueError:
+                        continue
+
             if date_str and (distance_f > 0 or race_type):
                 races.append(
                     {
@@ -6653,6 +6693,7 @@ def parse_race_history_from_block(block: str) -> list[dict]:
                         "distance_f": round(distance_f, 1),
                         "race_type": race_type,
                         "speed_fig": speed_fig,
+                        "finish_pos": finish_pos,
                     }
                 )
         except Exception:
@@ -7059,7 +7100,7 @@ def analyze_distance_from_history(
                 "distance": r.get("distance", ""),
                 "speed_fig": r.get("speed_fig", 0),
                 "race_type": r.get("race_type", ""),
-                "finish_pos": 0,
+                "finish_pos": r.get("finish_pos", 0),
             }
         )
 
@@ -7571,9 +7612,13 @@ def compute_bias_ratings(
                         )
 
                         # Convert unified engine output to app.py format
+                        # CRITICAL FIX: Use actual program numbers (saddle-cloth)
+                        # instead of sequential range(1,N) which overwrote real #s
                         unified_ratings = pd.DataFrame(
                             {
-                                "#": range(1, len(results_df_filtered) + 1),
+                                "#": results_df_filtered["Program"].astype(str)
+                                if "Program" in results_df_filtered.columns
+                                else results_df_filtered["Post"].astype(str),
                                 "Post": results_df_filtered["Post"].astype(str),
                                 "Horse": results_df_filtered["Horse"],
                                 "Style": results_df_filtered.get("Pace_Style", "NA"),
@@ -7741,6 +7786,7 @@ def compute_bias_ratings(
                                 # Use df_styles (original parameter = df_final_field copy)
                                 ml_val = None
                                 post_val = ""
+                                prog_val = ""
                                 style_val = "NA"
                                 quirin_val = 0.0
                                 pp_val = 0.0
@@ -7748,6 +7794,7 @@ def compute_bias_ratings(
                                     if ff_row.get("Horse") == mh:
                                         ml_val = ff_row.get("ML", "")
                                         post_val = str(ff_row.get("Post", ""))
+                                        prog_val = str(ff_row.get("#", post_val))
                                         style_val = str(
                                             ff_row.get(
                                                 "Style", ff_row.get("BRIS Style", "NA")
@@ -7782,9 +7829,7 @@ def compute_bias_ratings(
 
                                 missing_rows.append(
                                     {
-                                        "#": len(unified_ratings)
-                                        + len(missing_rows)
-                                        + 1,
+                                        "#": prog_val or post_val,
                                         "Post": post_val,
                                         "Horse": mh,
                                         "Style": style_val,
@@ -8121,6 +8166,9 @@ def compute_bias_ratings(
         # Per-horse PP block for tier-2 searches (falls back to full pp_text only if block not found)
         _horse_block = _horse_pp_blocks.get(name, pp_text)
 
+        # Parse structured race history ONCE for this horse (reused by distance, class, form, surface)
+        horse_race_history = parse_race_history_from_block(_horse_block)
+
         # ---- DISTANCE SPECIALIST BONUS (Race 4 Oaklawn tuning) ----
         # Winnemac Avenue: 9-4-2-0 at distance = 44% wins, yet got 0 credit
         # Parse 'Dis (XXX) starts wins - places - shows' from PP header
@@ -8255,50 +8303,28 @@ def compute_bias_ratings(
         # ELITE: Jockey/Trainer Performance Impact
         tier2_bonus += calculate_jockey_trainer_impact(name, pp_text)
 
-        # PHASES 2 & 3: Class Movement & Form Cycle Analysis (Feb 13, 2026)
-        # Class dropper bonus: +3-5% accuracy on class drop patterns
-        # BRIDGE: Skip if unified engine already computed class drop bonus
+        # PHASES 2 & 3: Class Movement & Form Cycle — upgraded Feb 20, 2026
+        # OLD CODE had two critical bugs:
+        #   1. Class hack used undefined `claiming_price` (always NameError → silent skip)
+        #   2. Form hack searched full `pp_text` (ALL horses) instead of per-horse block
+        # Now uses the proper dead-function implementations with structured race history.
         try:
-            if not use_unified_engine and pp_text and claiming_price:
-                claiming_pattern = r"(\d+)(?:clm|CLM|Clm)"
-                claiming_matches = re.findall(claiming_pattern, pp_text[:2000])
-                if claiming_matches and len(claiming_matches) >= 2:
-                    past_prices = [int(p) for p in claiming_matches[:5]]
-                    avg_past = sum(past_prices) / len(past_prices)
-                    if claiming_price < avg_past * 0.70:
-                        tier2_bonus += 0.12  # Significant class drop
-                    elif claiming_price < avg_past * 0.85:
-                        tier2_bonus += 0.08  # Moderate class drop
-                    elif claiming_price > avg_past * 1.30:
-                        tier2_bonus -= 0.08  # Significant class rise
-                    elif claiming_price > avg_past * 1.15:
-                        tier2_bonus -= 0.04  # Moderate class rise
-        except:
-            pass
+            # Reuse race history already parsed at top of tier2 section
+            if horse_race_history:
+                # --- CLASS MOVEMENT (analyze_class_movement) ---
+                # Uses structured race_type hierarchy instead of fragile claiming regex
+                class_result = analyze_class_movement(
+                    horse_race_history,
+                    race_type,
+                    st.session_state.get("purse_val", 20000),
+                )
+                tier2_bonus += class_result.get("bonus", 0.0)
 
-        # Form cycle bonus: +2-4% accuracy on improving/declining form
-        try:
-            if pp_text:
-                finish_pattern = r"(?:^|\s)(\d+)(?:st|nd|rd|th)(?:\s|$)"
-                finishes = [
-                    int(f) for f in re.findall(finish_pattern, pp_text[:2000])[:5]
-                ]
-                if len(finishes) >= 3:
-                    if finishes[0] < finishes[1] < finishes[2]:
-                        tier2_bonus += 0.10  # Strong improving form
-                    elif finishes[0] < finishes[1]:
-                        tier2_bonus += 0.06  # Moderate improving form
-                    elif finishes[0] > finishes[1] > finishes[2]:
-                        tier2_bonus -= 0.08  # Declining form
-
-                figure_pattern = r"(?:BSF|Spd:?)\s*(\d+)"
-                figs = [int(f) for f in re.findall(figure_pattern, pp_text[:2000])[:5]]
-                if len(figs) >= 3:
-                    if figs[0] > figs[1] > figs[2]:
-                        tier2_bonus += 0.08  # Improving speed
-                    elif figs[0] < figs[1] < figs[2]:
-                        tier2_bonus -= 0.06  # Declining speed
-        except:
+                # --- FORM CYCLE (analyze_form_cycle) ---
+                # Uses per-horse finish positions + speed figures (not mixed pp_text)
+                form_result = analyze_form_cycle(horse_race_history)
+                tier2_bonus += form_result.get("bonus", 0.0)
+        except Exception:
             pass
 
         # ELITE: Track Condition Granularity
@@ -8328,7 +8354,6 @@ def compute_bias_ratings(
         # ======================== DISTANCE MOVEMENT ANALYSIS (V2 — Feb 10, 2026) ========================
         # Uses ACTUAL per-race distance data parsed from running lines (not starved anymore)
         try:
-            horse_race_history = parse_race_history_from_block(_horse_block)
             if horse_race_history:
                 # Use the NEW bridge function that feeds real distance data
                 distance_analysis = analyze_distance_from_history(
@@ -8360,8 +8385,6 @@ def compute_bias_ratings(
         # BRIDGE: Skip surface switch & workout if unified engine already handled
         if not use_unified_engine:
             try:
-                if not horse_race_history:
-                    horse_race_history = parse_race_history_from_block(_horse_block)
                 if horse_race_history:
                     # Build pedigree data dict for surface switch evaluation
                     _ped = (
@@ -8759,10 +8782,8 @@ def compute_bias_ratings(
                         ):
                             _past_class = 6  # Major claiming drop
 
-                if (
-                    _past_class >= _today_class + 2
-                    or _past_class >= 7
-                    and _today_class <= 4
+                if (_past_class >= _today_class + 2) or (
+                    _past_class >= 7 and _today_class <= 4
                 ):
                     # Major class drop: halve the negative tier2 penalty
                     tier2_bonus *= 0.5
@@ -9969,7 +9990,9 @@ st.dataframe(
 # ===================== D. Strategy Builder & Classic Report =====================
 
 
-def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""):
+def build_component_breakdown(
+    primary_df, name_to_post, name_to_odds, pp_text="", name_to_prog=None
+):
     """
     GOLD STANDARD: Build detailed component breakdown with complete mathematical transparency.
 
@@ -10025,11 +10048,14 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
             pass  # Fall back to default
 
     breakdown = "### Component Breakdown (Top 5 Horses)\n"
+    # CRITICAL FIX: Use program number for horse labels (what bettors see on tote board)
+    _prog_map = name_to_prog if name_to_prog else name_to_post
+
     breakdown += "_Mathematical transparency: Shows exactly what the system sees in each horse_\n\n"
 
     for idx, row in top_horses.iterrows():
         horse_name = row.get("Horse", "Unknown")
-        post = name_to_post.get(horse_name, "?")
+        prog = _prog_map.get(horse_name, "?")
         ml = name_to_odds.get(horse_name, "?")
 
         # SAFE EXTRACTION: Get rating with error handling
@@ -10039,7 +10065,7 @@ def build_component_breakdown(primary_df, name_to_post, name_to_odds, pp_text=""
             final_rating = 0.0
 
         breakdown += (
-            f"**#{post} {horse_name}** (ML {ml}) - **Rating: {final_rating:.2f}**\n"
+            f"**#{prog} {horse_name}** (ML {ml}) - **Rating: {final_rating:.2f}**\n"
         )
 
         # CORE COMPONENTS: Extract with validation
@@ -10104,6 +10130,7 @@ def build_betting_strategy(
     ppi_val: float,
     smart_money_horses: list[dict] = None,
     name_to_ml: dict[str, str] = None,
+    name_to_prog: dict[str, str] = None,
 ) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,
@@ -10112,6 +10139,8 @@ def build_betting_strategy(
     Args:
         smart_money_horses: List of horses with significant ML→Live odds drops for Smart Money Alert
         name_to_ml: Dictionary mapping horse names to ML odds (for comparison with live odds)
+        name_to_prog: Dictionary mapping horse names to program numbers (saddle cloth).
+                      If None, falls back to name_to_post for backward compatibility.
     """
 
     import numpy as np
@@ -10121,6 +10150,11 @@ def build_betting_strategy(
         smart_money_horses = []
     if name_to_ml is None:
         name_to_ml = {}
+    # CRITICAL FIX: Use program numbers for all horse labels/betting references
+    # Program # = saddle cloth / tote board number (what bettors actually bet on)
+    # Falls back to post position for backward compatibility
+    if name_to_prog is None:
+        name_to_prog = name_to_post
 
     # --- GOLD STANDARD: Build probability dictionary with validation ---
     # (Populated early so underlay/overlay detection works correctly)
@@ -10319,16 +10353,16 @@ def build_betting_strategy(
 
     # --- 1. Helper Functions ---
     def format_horse_list(horse_names: list[str]) -> str:
-        """Creates a bulleted list of horses with post, name, and odds (shows ML → Live if different)."""
+        """Creates a bulleted list of horses with program#, name, and odds (shows ML → Live if different)."""
         if not horse_names:
             return "* None"
         lines = []
-        # Sort horses by post number before displaying
+        # Sort horses by program number before displaying
         sorted_horses = sorted(
-            horse_names, key=lambda name: int(name_to_post.get(name, "999"))
+            horse_names, key=lambda name: int(name_to_prog.get(name, "999"))
         )
         for name in sorted_horses:
-            post = name_to_post.get(name, "??")
+            prog = name_to_prog.get(name, "??")
             current_odds = name_to_odds.get(name, "N/A")
             ml_odds = name_to_ml.get(name, "")
 
@@ -10338,7 +10372,7 @@ def build_betting_strategy(
             else:
                 odds_display = current_odds
 
-            lines.append(f"* **#{post} - {name}** ({odds_display})")
+            lines.append(f"* **#{prog} - {name}** ({odds_display})")
         return "\n".join(lines)
 
     def get_bet_cost(base: float, num_combos: int) -> str:
@@ -10500,9 +10534,9 @@ def build_betting_strategy(
     )  # Define underlay as < 3/1
 
     if is_overlay:
-        contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
+        contender_report += f"\n**Value Note:** Top pick **#{name_to_prog.get(top_rated_horse)} - {top_rated_horse}** looks like a good value bet (Overlay).\n"
     elif is_underlay:
-        contender_report += f"\n**Value Note:** Top pick **#{name_to_post.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
+        contender_report += f"\n**Value Note:** Top pick **#{name_to_prog.get(top_rated_horse)} - {top_rated_horse}** might be overbet (Underlay at {top_ml_str}). Consider using more underneath than on top.\n"
 
     # --- 5. Build Simplified Blueprint Section ---
     blueprint_report = "### Betting Strategy Blueprints (Scale Base Bets to Budget: Max ~$50 Recommended)\n"
@@ -10524,13 +10558,13 @@ def build_betting_strategy(
         blueprint_report += f"* **Exacta Part-Wheel:** `A / B,C` ({nA}x{nB + nC}) - {get_min_cost_str(1.00, nA, nB + nC)}\n"
         if nA >= 2:
             ex_box_combos = get_box_combos(nA, 2)
-            blueprint_report += f"* **Exacta Box (A-Group):** `{', '.join(map(str, [int(name_to_post.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(1.00, ex_box_combos)}\n"
+            blueprint_report += f"* **Exacta Box (A-Group):** `{', '.join(map(str, [int(name_to_prog.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(1.00, ex_box_combos)}\n"
 
         # Trifecta Examples
         blueprint_report += f"* **Trifecta Part-Wheel:** `A / B / C` ({nA}x{nB}x{nC}) - {get_min_cost_str(0.50, nA, nB, nC)}\n"
         if nA >= 3:
             tri_box_combos = get_box_combos(nA, 3)
-            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str, [int(name_to_post.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
+            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str, [int(name_to_prog.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
 
         blueprint_report += (
             "_Structure: Use A-horses on top, spread underneath with B and C._\n"
@@ -10558,14 +10592,18 @@ def build_betting_strategy(
         blueprint_report += f"* **Exacta (Part-Wheel):** `A / B,C` ({nA}x{nB + nC}) - {get_min_cost_str(1.00, nA, nB + nC)}\n"
         if nA >= 3:  # Example box if A group is large enough
             tri_box_combos = get_box_combos(nA, 3)
-            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str, [int(name_to_post.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
+            blueprint_report += f"* **Trifecta Box (A-Group):** `{', '.join(map(str, [int(name_to_prog.get(h, '0')) for h in A_group]))}` BOX - {get_bet_cost(0.50, tri_box_combos)}\n"
         blueprint_report += f"* **Trifecta (Part-Wheel):** `A / B,C / B,C,D` ({nA}x{nB + nC}x{nB + nC + nD}) - {get_min_cost_str(0.50, nA, nB + nC, nB + nC + nD)}\n"
         blueprint_report += f"* **Superfecta (Part-Wheel):** `A / B,C / B,C,D / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}) - {get_min_cost_str(0.10, nA, nB + nC, nB + nC + nD, nAll)}\n"
         if field_size >= 7:  # Only suggest SH5 if 7+ runners
             blueprint_report += f"* **Super High-5 (Part-Wheel):** `A / B,C / B,C,D / ALL / ALL` ({nA}x{nB + nC}x{nB + nC + nD}x{nAll}x{nAll}) - {get_min_cost_str(1.00, nA, nB + nC, nB + nC + nD, nAll, nAll)}\n"
 
     detailed_breakdown = build_component_breakdown(
-        primary_df, name_to_post, name_to_odds, pp_text=pp_text
+        primary_df,
+        name_to_post,
+        name_to_odds,
+        pp_text=pp_text,
+        name_to_prog=name_to_prog,
     )
 
     component_report = "### What Our System Sees in Top Contenders\n\n"
@@ -10587,9 +10625,9 @@ def build_betting_strategy(
     }
 
     for pos, (horse, prob) in enumerate(finishing_order, 1):
-        post = name_to_post.get(horse, "?")
+        prog = name_to_prog.get(horse, "?")
         odds = name_to_odds.get(horse, "?")
-        finishing_order_report += f"* **{position_names[pos]} • #{post} {horse}** (Odds: {odds}) — {prob * 100:.1f}% conditional probability\n"
+        finishing_order_report += f"* **{position_names[pos]} • #{prog} {horse}** (Odds: {odds}) — {prob * 100:.1f}% conditional probability\n"
 
     finishing_order_report += "\n💡 **Use These Rankings:** Build your exotic tickets using this exact finishing order for optimal probability-based coverage.\n\n"
 
@@ -10628,7 +10666,7 @@ def build_betting_strategy(
         )
 
         # Win bet on top pick
-        bankroll_report += f"* **Win Bet** ($20): $20 on #{name_to_post.get(all_horses[0], '?')} {all_horses[0]}\n"
+        bankroll_report += f"* **Win Bet** ($20): $20 on #{name_to_prog.get(all_horses[0], '?')} {all_horses[0]}\n"
 
         # Exacta
         ex_combos = nA * nB
@@ -10947,6 +10985,16 @@ else:
                         df_final_field["Post"].values, index=df_final_field["Horse"]
                     ).to_dict()
 
+                    # CRITICAL FIX: Build program-number mapping for consistent display
+                    # Program # = saddle cloth / tote board number (what bettors use)
+                    # Post = starting gate position (informational only)
+                    if "#" in df_final_field.columns:
+                        name_to_prog = pd.Series(
+                            df_final_field["#"].values, index=df_final_field["Horse"]
+                        ).to_dict()
+                    else:
+                        name_to_prog = name_to_post.copy()  # Fallback: prog = post
+
                     # Store Section A data in session state for Section E validation
                     # This ensures the validation uses the ACTUAL post numbers from the race setup
                     post_to_name = {int(v): k for k, v in name_to_post.items()}
@@ -10986,7 +11034,9 @@ else:
                                         smart_money_horses.append(
                                             {
                                                 "name": horse_name,
-                                                "post": row.get("Post"),
+                                                "post": name_to_prog.get(
+                                                    horse_name, row.get("Post")
+                                                ),
                                                 "ml": ml_odds,
                                                 "live": live_odds,
                                                 "ratio": ratio,
@@ -11155,6 +11205,7 @@ else:
                     ppi_val,
                     smart_money_horses,
                     name_to_ml,
+                    name_to_prog,
                 )
 
                 # Store strategy report in session state
@@ -11583,7 +11634,10 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             horse_dict = {
                                 "program_number": int(
                                     safe_float(
-                                        name_to_post.get(horse_name, rank_idx + 1),
+                                        name_to_prog.get(
+                                            horse_name,
+                                            name_to_post.get(horse_name, rank_idx + 1),
+                                        ),
                                         rank_idx + 1,
                                     )
                                 ),
@@ -13402,13 +13456,15 @@ else:
             except Exception:
                 pass
 
+            # Determine admin access WITHOUT st.stop() (which kills Tab 5)
+            _retrain_unlocked = False
             if not admin_password:
-                # No secret configured — block everyone on deployed, allow locally
+                # No secret configured — block on deployed, allow locally
                 if is_render() or os.environ.get("STREAMLIT_SERVER_HEADLESS"):
                     st.warning("🔒 Model retraining is restricted to administrators.")
                     st.info("Contact support if you need access to this feature.")
-                    st.stop()
-                # Local dev — allow through (no secret needed)
+                else:
+                    _retrain_unlocked = True  # Local dev — no secret needed
             else:
                 if "admin_authenticated" not in st.session_state:
                     st.session_state.admin_authenticated = False
@@ -13425,172 +13481,178 @@ else:
                             st.rerun()
                         else:
                             st.error("Incorrect password.")
-                    st.stop()
+                else:
+                    _retrain_unlocked = True  # Admin authenticated
 
-            st.markdown("""
-            ### Retrain ML Model with Real Data
+            if _retrain_unlocked:
+                st.markdown("""
+                ### Retrain ML Model with Real Data
 
-            Once you have **50+ completed races**, retrain the model to learn from real outcomes.
-            The model uses PyTorch with Plackett-Luce ranking loss for optimal accuracy.
-            Features are auto-standardised. Early stopping prevents overfitting.
-            """)
+                Once you have **50+ completed races**, retrain the model to learn from real outcomes.
+                The model uses PyTorch with Plackett-Luce ranking loss for optimal accuracy.
+                Features are auto-standardised. Early stopping prevents overfitting.
+                """)
 
-            # Check if ready
-            ready_to_train = stats.get("total_races", 0) >= 50
+                # Check if ready
+                ready_to_train = stats.get("total_races", 0) >= 50
 
-            if not ready_to_train:
-                st.warning(
-                    f"⏳ Need at least 50 completed races. Currently: {stats.get('total_races', 0)}"
-                )
-                st.info("💡 Complete more races in the 'Submit Actual Top 4' tab.")
-            else:
-                st.success(
-                    f"✅ Ready to train! {stats.get('total_races', 0)} races available."
-                )
-
-                # Training parameters — tuned for small horse racing datasets
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    epochs = st.number_input(
-                        "Max Epochs",
-                        min_value=20,
-                        max_value=300,
-                        value=100,
-                        help="Training stops early if val loss plateaus (patience=15)",
+                if not ready_to_train:
+                    st.warning(
+                        f"⏳ Need at least 50 completed races. Currently: {stats.get('total_races', 0)}"
                     )
-                with col2:
-                    learning_rate = st.select_slider(
-                        "Learning Rate",
-                        options=[0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005],
-                        value=0.0005,
-                        help="Lower = more stable. 0.0005 is optimal for <200 races",
-                    )
-                with col3:
-                    batch_size = st.selectbox(
-                        "Batch Size (races)",
-                        [1, 2, 4, 8, 16],
-                        index=2,
-                        help="Number of races per gradient update. 4 is optimal for <200 races",
+                    st.info("💡 Complete more races in the 'Submit Actual Top 4' tab.")
+                else:
+                    st.success(
+                        f"✅ Ready to train! {stats.get('total_races', 0)} races available."
                     )
 
-                # Train button
-                if st.button("🚀 Start Retraining", type="primary", key="retrain_btn"):
-                    with st.spinner(
-                        f"Training model on {stats.get('total_races', 0)} races... This may take 2-5 minutes..."
+                    # Training parameters — tuned for small horse racing datasets
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        epochs = st.number_input(
+                            "Max Epochs",
+                            min_value=20,
+                            max_value=300,
+                            value=100,
+                            help="Training stops early if val loss plateaus (patience=15)",
+                        )
+                    with col2:
+                        learning_rate = st.select_slider(
+                            "Learning Rate",
+                            options=[0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005],
+                            value=0.0005,
+                            help="Lower = more stable. 0.0005 is optimal for <200 races",
+                        )
+                    with col3:
+                        batch_size = st.selectbox(
+                            "Batch Size (races)",
+                            [1, 2, 4, 8, 16],
+                            index=2,
+                            help="Number of races per gradient update. 4 is optimal for <200 races",
+                        )
+
+                    # Train button
+                    if st.button(
+                        "🚀 Start Retraining", type="primary", key="retrain_btn"
                     ):
-                        try:
-                            from retrain_model import retrain_model
+                        with st.spinner(
+                            f"Training model on {stats.get('total_races', 0)} races... This may take 2-5 minutes..."
+                        ):
+                            try:
+                                from retrain_model import retrain_model
 
-                            results = retrain_model(
-                                db_path=gold_db.db_path,
-                                epochs=epochs,
-                                learning_rate=learning_rate,
-                                batch_size=batch_size,
-                                min_races=50,
+                                results = retrain_model(
+                                    db_path=gold_db.db_path,
+                                    epochs=epochs,
+                                    learning_rate=learning_rate,
+                                    batch_size=batch_size,
+                                    min_races=50,
+                                )
+
+                                if "error" in results:
+                                    st.error(f"❌ Training failed: {results['error']}")
+                                else:
+                                    st.success("✅ Training complete!")
+
+                                    # Display results (validation set accuracy)
+                                    st.caption(
+                                        "Validation accuracy: retrained model tested on "
+                                        "held-out races it was NOT trained on."
+                                    )
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.metric(
+                                            "Val Winner Accuracy",
+                                            f"{results['metrics']['winner_accuracy']:.1%}",
+                                            help="% of validation races where the retrained model's #1 pick was the actual winner",
+                                        )
+                                    with col2:
+                                        st.metric(
+                                            "Val Top-3 Accuracy",
+                                            f"{results['metrics']['top3_accuracy']:.1%}",
+                                            help="Avg overlap between model's top 3 and actual top 3 on validation races",
+                                        )
+                                    with col3:
+                                        st.metric(
+                                            "Val Top-4 Accuracy",
+                                            f"{results['metrics']['top4_accuracy']:.1%}",
+                                            help="Avg overlap between model's top 4 and actual top 4 on validation races",
+                                        )
+
+                                    st.info(
+                                        f"⏱️ Training time: {results.get('duration', 0):.1f} seconds"
+                                    )
+                                    epochs_info = f"Best epoch: {results.get('best_epoch', '?')} / {results.get('total_epochs_run', '?')} run"
+                                    if results.get("early_stopped"):
+                                        epochs_info += " (early stopped)"
+                                    st.info(f"📈 {epochs_info}")
+                                    st.info(
+                                        f"💾 Model saved: {results.get('model_path', 'N/A')}"
+                                    )
+
+                            except Exception as e:
+                                st.error(f"Training error: {e}")
+                                import traceback
+
+                                st.code(traceback.format_exc())
+
+                    # Training history
+                    st.markdown("---")
+                    st.markdown("### Training History")
+
+                    try:
+                        import sqlite3
+
+                        # CRITICAL FIX: Add timeout to prevent database lock hangs
+                        conn = sqlite3.connect(gold_db.db_path, timeout=10.0)
+                        history_df = pd.read_sql_query(
+                            """
+                            SELECT
+                                retrain_timestamp,
+                                total_races_used,
+                                val_winner_accuracy,
+                                val_top3_accuracy,
+                                val_top5_accuracy,
+                                training_duration_seconds
+                            FROM retraining_history
+                            ORDER BY retrain_timestamp DESC
+                            LIMIT 10
+                        """,
+                            conn,
+                        )
+                        conn.close()
+
+                        if not history_df.empty:
+                            history_df.columns = [
+                                "Timestamp",
+                                "Races Used",
+                                "Winner Acc",
+                                "Top-3 Acc",
+                                "Top-4 Acc",
+                                "Duration (s)",
+                            ]
+                            history_df["Winner Acc"] = (
+                                history_df["Winner Acc"] * 100
+                            ).round(1).astype(str) + "%"
+                            history_df["Top-3 Acc"] = (
+                                history_df["Top-3 Acc"] * 100
+                            ).round(1).astype(str) + "%"
+                            history_df["Top-4 Acc"] = (
+                                history_df["Top-4 Acc"] * 100
+                            ).round(1).astype(str) + "%"
+                            history_df["Duration (s)"] = history_df[
+                                "Duration (s)"
+                            ].round(1)
+
+                            st.dataframe(
+                                history_df, use_container_width=True, hide_index=True
                             )
-
-                            if "error" in results:
-                                st.error(f"❌ Training failed: {results['error']}")
-                            else:
-                                st.success("✅ Training complete!")
-
-                                # Display results (validation set accuracy)
-                                st.caption(
-                                    "Validation accuracy: retrained model tested on "
-                                    "held-out races it was NOT trained on."
-                                )
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric(
-                                        "Val Winner Accuracy",
-                                        f"{results['metrics']['winner_accuracy']:.1%}",
-                                        help="% of validation races where the retrained model's #1 pick was the actual winner",
-                                    )
-                                with col2:
-                                    st.metric(
-                                        "Val Top-3 Accuracy",
-                                        f"{results['metrics']['top3_accuracy']:.1%}",
-                                        help="Avg overlap between model's top 3 and actual top 3 on validation races",
-                                    )
-                                with col3:
-                                    st.metric(
-                                        "Val Top-4 Accuracy",
-                                        f"{results['metrics']['top4_accuracy']:.1%}",
-                                        help="Avg overlap between model's top 4 and actual top 4 on validation races",
-                                    )
-
-                                st.info(
-                                    f"⏱️ Training time: {results.get('duration', 0):.1f} seconds"
-                                )
-                                epochs_info = f"Best epoch: {results.get('best_epoch', '?')} / {results.get('total_epochs_run', '?')} run"
-                                if results.get("early_stopped"):
-                                    epochs_info += " (early stopped)"
-                                st.info(f"📈 {epochs_info}")
-                                st.info(
-                                    f"💾 Model saved: {results.get('model_path', 'N/A')}"
-                                )
-
-                        except Exception as e:
-                            st.error(f"Training error: {e}")
-                            import traceback
-
-                            st.code(traceback.format_exc())
-
-                # Training history
-                st.markdown("---")
-                st.markdown("### Training History")
-
-                try:
-                    import sqlite3
-
-                    # CRITICAL FIX: Add timeout to prevent database lock hangs
-                    conn = sqlite3.connect(gold_db.db_path, timeout=10.0)
-                    history_df = pd.read_sql_query(
-                        """
-                        SELECT
-                            retrain_timestamp,
-                            total_races_used,
-                            val_winner_accuracy,
-                            val_top3_accuracy,
-                            val_top5_accuracy,
-                            training_duration_seconds
-                        FROM retraining_history
-                        ORDER BY retrain_timestamp DESC
-                        LIMIT 10
-                    """,
-                        conn,
-                    )
-                    conn.close()
-
-                    if not history_df.empty:
-                        history_df.columns = [
-                            "Timestamp",
-                            "Races Used",
-                            "Winner Acc",
-                            "Top-3 Acc",
-                            "Top-4 Acc",
-                            "Duration (s)",
-                        ]
-                        history_df["Winner Acc"] = (
-                            history_df["Winner Acc"] * 100
-                        ).round(1).astype(str) + "%"
-                        history_df["Top-3 Acc"] = (history_df["Top-3 Acc"] * 100).round(
-                            1
-                        ).astype(str) + "%"
-                        history_df["Top-4 Acc"] = (history_df["Top-4 Acc"] * 100).round(
-                            1
-                        ).astype(str) + "%"
-                        history_df["Duration (s)"] = history_df["Duration (s)"].round(1)
-
-                        st.dataframe(
-                            history_df, use_container_width=True, hide_index=True
-                        )
-                    else:
-                        st.info(
-                            "No training history yet. Train the model to see results here."
-                        )
-                except Exception:
-                    st.warning("Could not load training history.")
+                        else:
+                            st.info(
+                                "No training history yet. Train the model to see results here."
+                            )
+                    except Exception:
+                        st.warning("Could not load training history.")
 
         # Tab 5: Track Intelligence — Unified Command Center
         with tab_track_intel:

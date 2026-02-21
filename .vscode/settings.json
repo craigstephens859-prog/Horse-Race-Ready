@@ -7,5 +7,40 @@
             "source.organizeImports.ruff": "explicit"
         }
     },
-    "ruff.path": ["${workspaceFolder}/venv/Scripts/ruff.exe"]
+    "ruff.path": [
+        "${workspaceFolder}/venv/Scripts/ruff.exe"
+    ],
+    "chat.tools.edits.autoApprove": {
+        "**/.git/**": true,
+        "**/.vscode/*.json": true,
+        "**/{package.json,server.xml,build.rs,web.config,.gitattributes,.env}": true,
+        "**/*.{code-workspace,csproj,fsproj,vbproj,vcxproj,proj,targets,props}": true,
+        "**/*.lock": true,
+        "**/*-lock.{yaml,json}": true
+    },
+    "gitlens.ai.vscode.model": "",
+    "workbench.editor.autoLockGroups": {
+        "dbcode.dataFileViewer": true,
+        "appmap.views.appMapFile": true,
+        "gitlens.rebase": true
+    },
+    "github.copilot.chat.codesearch.enabled": true,
+    "github.copilot.chat.generateTests.codeLens": true,
+    "chat.tools.terminal.ignoreDefaultAutoApproveRules": true,
+    "java.debug.settings.hotCodeReplace": "auto",
+    "css.customData": [
+        "replace_string_in_file",
+        "multi_replace_string_in_file"
+    ],
+    "github.copilot.chat.copilotMemory.enabled": true,
+    "github.copilot.chat.claudeAgent.allowDangerouslySkipPermissions": true,
+    "chat.tools.terminal.sandbox.enabled": true,
+    "chat.tools.terminal.autoReplyToPrompts": true,
+    "chat.agentSessionProjection.enabled": true,
+    "chat.alternativeToolAction.enabled": true,
+    "chat.checkpoints.showFileChanges": true,
+    "chat.customAgentInSubagent.enabled": true,
+    "chat.editor.wordWrap": "on",
+    "chat.edits2.enabled": true,
+    "editor.allowVariableFontsInAccessibilityMode": true
 }

@@ -468,10 +468,10 @@ class GoldStandardBRISNETParser:
                 return {}
 
             # Step 2: Parse each horse
-            for post, name, style, quirin, block in chunks:
+            for program, post, name, style, quirin, block in chunks:
                 try:
                     horse_data = self._parse_single_horse(
-                        post, name, style, quirin, block, pp_text, debug
+                        program, post, name, style, quirin, block, pp_text, debug
                     )
                     horses[name] = horse_data
                     self.parsing_stats["horses_parsed"] += 1
@@ -488,7 +488,9 @@ class GoldStandardBRISNETParser:
                     logger.error(traceback.format_exc())
 
                     # Create fallback data
-                    horses[name] = self._create_fallback_data(post, name, block, str(e))
+                    horses[name] = self._create_fallback_data(
+                        program, post, name, block, str(e)
+                    )
                     self.parsing_stats["fallback_used"] += 1
 
             if debug:
@@ -668,13 +670,15 @@ class GoldStandardBRISNETParser:
 
     def _split_into_chunks(
         self, pp_text: str, debug: bool = False
-    ) -> list[tuple[str, str, str, float, str]]:
+    ) -> list[tuple[str, str, str, str, float, str]]:
         """
         Splits PP into individual horse blocks.
         Uses progressive pattern matching (strict → permissive).
 
         Returns:
-            [(post, name, style, quirin, block), ...]
+            [(program, post, name, style, quirin, block), ...]
+            program = saddle-cloth / program number (what you bet)
+            post    = starting gate position
         """
         chunks = []
 
@@ -716,7 +720,7 @@ class GoldStandardBRISNETParser:
                     )
                     block = pp_text[start:end]
 
-                    chunks.append((post, name, style, quirin, block))
+                    chunks.append((program, post, name, style, quirin, block))
 
                 # Success - stop trying patterns
                 break
@@ -730,6 +734,7 @@ class GoldStandardBRISNETParser:
 
     def _parse_single_horse(
         self,
+        program: str,
         post: str,
         name: str,
         style: str,
@@ -740,17 +745,19 @@ class GoldStandardBRISNETParser:
     ) -> HorseData:
         """
         Parse all fields for a single horse with confidence tracking.
+        program = saddle-cloth / program number (what bettors use)
+        post    = starting gate position
         """
         if debug:
             logger.info(f"\n{'─' * 60}")
-            logger.info(f"Parsing: {name} (Post {post})")
+            logger.info(f"Parsing: {name} (Program #{program}, Post {post})")
             logger.info(f"{'─' * 60}")
 
         # Initialize horse data
         horse = HorseData(
             post=post,
             name=name,
-            program_number=post,
+            program_number=program,
             pace_style=style,
             quirin_points=quirin,
             style_strength=self._calculate_style_strength(style, quirin),
@@ -2887,7 +2894,7 @@ class GoldStandardBRISNETParser:
     # ============ FALLBACK DATA ============
 
     def _create_fallback_data(
-        self, post: str, name: str, block: str, error: str
+        self, program: str, post: str, name: str, block: str, error: str
     ) -> HorseData:
         """
         Create minimal HorseData when parsing fails completely.
@@ -2895,7 +2902,7 @@ class GoldStandardBRISNETParser:
         return HorseData(
             post=post,
             name=name,
-            program_number=post,
+            program_number=program,
             pace_style="NA",
             quirin_points=0.0,
             style_strength="Unknown",

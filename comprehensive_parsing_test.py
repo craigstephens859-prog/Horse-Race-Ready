@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Comprehensive parsing accuracy test for all 6 horses"""
+
 import re
+
 import pandas as pd
-import numpy as np
 
 # Load the exact parsing functions from app.py
 HORSE_HDR_RE = re.compile(
@@ -13,82 +14,129 @@ HORSE_HDR_RE = re.compile(
     (E\/P|EP|E|P|S|NA)      # style
     (?:\s+(\d+))?           # optional quirin
     \s*\)\s*$              #
-    """, re.VERBOSE
+    """,
+    re.VERBOSE,
 )
+
 
 def split_into_horse_chunks(pp_text: str):
     chunks = []
     matches = list(HORSE_HDR_RE.finditer(pp_text or ""))
     for i, m in enumerate(matches):
         start = m.end()
-        end = matches[i+1].start() if i+1 < len(matches) else len(pp_text)
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(pp_text)
         post = m.group(1).strip()
         name = m.group(2).strip()
+        style = m.group(3).strip() if m.group(3) else "NA"
+        quirin = int(m.group(4)) if m.group(4) else 0
         block = pp_text[start:end]
-        chunks.append((post, name, block))
+        chunks.append((post, name, style, quirin, block))
     return chunks
+
 
 def parse_jockey_trainer_for_block(block: str, debug: bool = False) -> dict:
     """Parse jockey and trainer names from a horse's PP text block"""
-    result = {'jockey': '', 'trainer': ''}
-    
+    result = {"jockey": "", "trainer": ""}
+
     if not block:
         return result
-    
+
     # Parse jockey - appears on a line by itself in ALL CAPS before "Trnr:"
-    jockey_match = re.search(r'^([A-Z][A-Z\s\'.-]+?)\s*\([\d\s-]+%\)', block, re.MULTILINE)
+    jockey_match = re.search(
+        r"^([A-Z][A-Z\s\'.-]+?)\s*\([\d\s-]+%\)", block, re.MULTILINE
+    )
     if jockey_match:
         jockey_name = jockey_match.group(1).strip()
-        jockey_name = ' '.join(jockey_name.split())
-        result['jockey'] = jockey_name
+        jockey_name = " ".join(jockey_name.split())
+        result["jockey"] = jockey_name
         if debug:
             print(f"  ✓ Jockey found: '{jockey_name}'")
-    
+
     # Parse trainer - appears on line starting with "Trnr:"
-    trainer_match = re.search(r'Trnr:\s*([A-Za-z][A-Za-z\s,\'.-]+?)\s*\([\d\s-]+%\)', block, re.MULTILINE)
+    trainer_match = re.search(
+        r"Trnr:\s*([A-Za-z][A-Za-z\s,\'.-]+?)\s*\([\d\s-]+%\)", block, re.MULTILINE
+    )
     if trainer_match:
         trainer_name = trainer_match.group(1).strip()
-        trainer_name = ' '.join(trainer_name.split())
-        result['trainer'] = trainer_name
+        trainer_name = " ".join(trainer_name.split())
+        result["trainer"] = trainer_name
         if debug:
             print(f"  ✓ Trainer found: '{trainer_name}'")
-    
+
     return result
+
 
 def parse_running_style_for_block(block: str, debug: bool = False) -> dict:
     """Parse running style from a horse's PP text block header"""
-    result = {'running_style': ''}
-    
+    result = {"running_style": ""}
+
     if not block:
         return result
-    
+
     # Parse running style from header - appears in parentheses after horse name
-    style_match = re.search(r'^\s*\d+\s+[A-Za-z\s=\'-]+\s+\(([A-Z/]+)\s+\d+\)', block, re.MULTILINE)
+    style_match = re.search(
+        r"^\s*\d+\s+[A-Za-z\s=\'-]+\s+\(([A-Z/]+)\s+\d+\)", block, re.MULTILINE
+    )
     if style_match:
         running_style = style_match.group(1).strip()
-        result['running_style'] = running_style
+        result["running_style"] = running_style
         if debug:
             print(f"  ✓ Running Style found: '{running_style}'")
-    
+
     return result
 
+
 ANGLE_LINE_RE = re.compile(
-    r'(?mi)^\s*(\d{4}\s+)?(1st\s*time\s*str|Debut\s*MdnSpWt|Maiden\s*Sp\s*Wt|2nd\s*career\s*race|Turf\s*to\s*Dirt|Dirt\s*to\s*Turf|Shipper|Blinkers\s*(?:on|off)|(?:\d+(?:-\d+)?)\s*days?Away|JKYw/\s*Sprints|JKYw/\s*Trn\s*L(?:30|45|60)\b|JKYw/\s*[EPS]|JKYw/\s*NA\s*types)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$'
+    r"""(?mix)^\s*\+?           # optional + prefix (positive trend indicator)
+    (                              # ── category capture group ──
+      \d{4}                        # year-based stats  (2025, 2024 …)
+    | JKYw/\s*(?:                  # jockey angle variants
+        Sprints                    #   JKYw/ Sprints
+      | Routes                     #   JKYw/ Routes
+      | Trn\s*L(?:30|45|60)        #   JKYw/ Trn L30/L45/L60
+      | (?:[EPS]|NA)\s*types       #   JKYw/ S types, E types, P types, NA types
+      )
+    | 1st\s*time\s*(?:str|Turf|Dirt|AW)  # first time surface / distance
+    | Debut\s*MdnSpWt              # debut maiden special weight
+    | Maiden\s*Sp\s*Wt             # maiden special weight
+    | 2nd\s*career\s*race          # 2nd career race
+    | Turf\s*to\s*Dirt             # surface switch
+    | Dirt\s*to\s*Turf             # surface switch
+    | Rte\s*to\s*Sprint            # distance switch
+    | Sprint\s*to\s*Rte            # distance switch
+    | MdnClm\s*to\s*Mdn            # class change
+    | Shipper                      # shipper
+    | Blinkers\s*(?:on|off)        # equipment change
+    | (?:\d+(?:-\d+)?)\s*days?Away # layoff
+    | Sprints                      # standalone distance
+    | Routes                       # standalone distance
+    | Dirt\s*starts                # standalone surface
+    | Turf\s*starts                # standalone surface
+    )\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+(?:\.\d+)?)\s*$
+    """
 )
+
 
 def parse_angles_for_block(block: str, debug: bool = False) -> pd.DataFrame:
     rows = []
     matches = list(ANGLE_LINE_RE.finditer(block or ""))
     for m in matches:
-        _yr, cat, starts, win, itm, roi = m.groups()
-        rows.append({"Category": re.sub(r"\s+", " ", cat.strip()),
-                     "Starts": int(starts), "Win%": float(win),
-                     "ITM%": float(itm), "ROI": float(roi)})
+        cat, starts, win, itm, roi = m.groups()
+        rows.append(
+            {
+                "Category": re.sub(r"\s+", " ", cat.strip()),
+                "Starts": int(starts),
+                "Win%": float(win),
+                "ITM%": float(itm),
+                "ROI": float(roi),
+            }
+        )
     if debug and matches:
         print(f"  ✓ Found {len(matches)} angle lines")
     elif debug:
-        print(f"  ✗ No angle lines found")
+        print("  ✗ No angle lines found")
     return pd.DataFrame(rows)
+
 
 # PP text loaded directly
 pp_text = r"""Ultimate PP's Mountaineer ™'Mdn 16.5k 5½ Furlongs 3&up, F & M Wednesday, August 20, 2025 Race 2
@@ -223,58 +271,70 @@ print("=" * 80)
 chunks = split_into_horse_chunks(pp_text)
 print(f"\n✓ Found {len(chunks)} horse chunks\n")
 
-for post, name, block in chunks:
-    print(f"\n{'='*80}")
+for post, name, style, quirin, block in chunks:
+    print(f"\n{'=' * 80}")
     print(f"POST #{post} - {name.upper()}")
-    print(f"{'='*80}")
-    
+    print(f"{'=' * 80}")
+
     # Test jockey/trainer parsing
     print("\n[JOCKEY & TRAINER]")
     jt = parse_jockey_trainer_for_block(block, debug=True)
-    if not jt['jockey']:
-        print(f"  ✗ Jockey NOT found")
-    if not jt['trainer']:
-        print(f"  ✗ Trainer NOT found")
+    if not jt["jockey"]:
+        print("  ✗ Jockey NOT found")
+    if not jt["trainer"]:
+        print("  ✗ Trainer NOT found")
     print(f"  Result: Jockey='{jt['jockey']}' | Trainer='{jt['trainer']}'")
-    
-    # Test running style parsing
+
+    # Running style — extracted from header during chunking
     print("\n[RUNNING STYLE]")
-    rs = parse_running_style_for_block(block, debug=True)
-    if not rs['running_style']:
-        print(f"  ✗ Style NOT found")
-    print(f"  Result: '{rs['running_style']}'")
-    
+    if style and style != "NA":
+        print(f"  ✓ Style: '{style}' (Quirin: {quirin}) — parsed from header")
+    else:
+        print("  ✗ Style NOT found in header")
+
     # Test angle parsing
     print("\n[ANGLES]")
     angles_df = parse_angles_for_block(block, debug=True)
     if angles_df.empty:
-        print(f"  ✗ No angles extracted!")
+        print("  ✗ No angles extracted!")
     else:
-        print(f"  Angles found:")
+        print("  Angles found:")
         for _, row in angles_df.iterrows():
-            print(f"    • {row['Category']}: {row['Starts']} starts, {row['Win%']}% win, {row['ITM%']}% ITM, {row['ROI']:.2f} ROI")
+            print(
+                f"    • {row['Category']}: {row['Starts']} starts, {row['Win%']}% win, {row['ITM%']}% ITM, {row['ROI']:.2f} ROI"
+            )
 
-print(f"\n{'='*80}")
+print(f"\n{'=' * 80}")
 print("PARSING SUMMARY")
-print(f"{'='*80}")
+print(f"{'=' * 80}")
 
 # Count accuracy
 jockeys_found = 0
 trainers_found = 0
 styles_found = 0
-angles_found = 0
+total_angles = 0
+angles_per_horse = []
 
-for post, name, block in chunks:
+for post, name, style, quirin, block in chunks:
     jt = parse_jockey_trainer_for_block(block)
-    rs = parse_running_style_for_block(block)
     angles_df = parse_angles_for_block(block)
-    
-    if jt['jockey']: jockeys_found += 1
-    if jt['trainer']: trainers_found += 1
-    if rs['running_style']: styles_found += 1
-    if not angles_df.empty: angles_found += 1
 
-print(f"\nJockeys: {jockeys_found}/6 found ({'✓ OK' if jockeys_found == 6 else '✗ FAILED'})")
-print(f"Trainers: {trainers_found}/6 found ({'✓ OK' if trainers_found == 6 else '✗ FAILED'})")
+    if jt["jockey"]:
+        jockeys_found += 1
+    if jt["trainer"]:
+        trainers_found += 1
+    if style and style != "NA":
+        styles_found += 1
+    total_angles += len(angles_df)
+    angles_per_horse.append((name, len(angles_df)))
+
+print(
+    f"\nJockeys: {jockeys_found}/6 found ({'✓ OK' if jockeys_found == 6 else '✗ FAILED'})"
+)
+print(
+    f"Trainers: {trainers_found}/6 found ({'✓ OK' if trainers_found == 6 else '✗ FAILED'})"
+)
 print(f"Styles: {styles_found}/6 found ({'✓ OK' if styles_found == 6 else '✗ FAILED'})")
-print(f"Angles: {angles_found}/6 found ({'✓ OK' if angles_found == 6 else '✗ FAILED'})")
+print(f"Angles: {total_angles} total extracted across 6 horses")
+for horse_name, count in angles_per_horse:
+    print(f"  • {horse_name}: {count} angles")
