@@ -4938,8 +4938,30 @@ for _, r in df_final_field.iterrows():
     elif early_speed_impact > 0.3:  # Speed-favoring track
         if horse_style == "E":
             style_adjustment += 1.2  # Bonus for early speed
+        elif horse_style == "P":
+            # SA R8 audit: P-types were over-penalized at speed tracks.
+            # SA meet data showed P impact=1.33 (ABOVE average).
+            # Only penalize P if BRISNET impact values actually suppress P.
+            _weekly_impacts = st.session_state.get("weekly_bias_impacts", {})
+            _p_impact = _weekly_impacts.get("P", 1.0) if _weekly_impacts else 1.0
+            if _p_impact < 0.80:
+                style_adjustment -= 0.5  # Only penalize if P is truly suppressed
+            # else: no penalty — P is competitive at this track
         elif horse_style == "S":
             style_adjustment -= 0.8  # Penalty for closers
+
+    # QSP / STYLE MISMATCH PENALTY (SA R8 audit Feb 20, 2026)
+    # Tapatia Mia: E/P style + QSP=1. Can't be a presser with zero early speed points.
+    # If style claims early speed (E, E/P) but QSP < 3, penalize — style is unreliable.
+    try:
+        _qsp_val = float(r.get("Quirin", np.nan))
+        if pd.notna(_qsp_val):
+            if horse_style in ("E", "E/P") and _qsp_val <= 2:
+                style_adjustment -= 0.6  # Style/QSP mismatch — not a real speed horse
+            elif horse_style in ("E", "E/P") and _qsp_val <= 3:
+                style_adjustment -= 0.3  # Marginal mismatch
+    except (ValueError, TypeError):
+        pass
 
     form_rating += style_adjustment
 
@@ -6540,13 +6562,25 @@ def analyze_class_movement(
     avg_recent = sum(recent_levels) / len(recent_levels)
     class_delta = today_level - avg_recent
 
-    # Determine change
+    # Determine change — GRADUATED SCALE (SA R8 audit Feb 20, 2026)
+    # Old: flat -0.10 for ANY step up. MC32k→OC50k is a 3-level jump (3→5)
+    # but only got -0.10 penalty. Now scales with delta magnitude.
     if class_delta > 1:
         class_change = "up"
-        bonus = -0.10  # Stepping up = tougher
+        if class_delta >= 3:
+            bonus = -0.18  # Major class jump (e.g., MC→ALW/AOC)
+        elif class_delta >= 2:
+            bonus = -0.14  # Significant step up
+        else:
+            bonus = -0.10  # Minor step up
     elif class_delta < -1:
         class_change = "down"
-        bonus = +0.12  # Dropping down = easier
+        if class_delta <= -3:
+            bonus = +0.18  # Major class drop
+        elif class_delta <= -2:
+            bonus = +0.15  # Significant drop
+        else:
+            bonus = +0.12  # Minor drop
     else:
         class_change = "same"
         bonus = 0.0
@@ -6565,7 +6599,7 @@ def analyze_class_movement(
         "class_change": class_change,
         "class_delta": class_delta,
         "pattern": pattern,
-        "bonus": float(np.clip(bonus, -0.15, 0.20)),
+        "bonus": float(np.clip(bonus, -0.20, 0.20)),
     }
 
 
@@ -8304,6 +8338,52 @@ def compute_bias_ratings(
                 form_result = analyze_form_cycle(horse_race_history)
                 tier2_bonus += form_result.get("bonus", 0.0)
         except Exception:
+            pass
+
+        # ======================== REPEAT CONTENDER BONUS (SA R8 audit Feb 20, 2026) ========================
+        # Lino's Angel ran 2nd in THIS EXACT condition (OC50k/n1x) 28 days ago → model missed her.
+        # If a horse placed (1st-3rd) in same race type at same purse level recently, reward.
+        try:
+            if horse_race_history and len(horse_race_history) >= 1:
+                _today_rt_lower = (race_type or "").lower().replace(" ", "")
+                _today_purse_val = st.session_state.get("purse_val", 0)
+                _repeat_bonus = 0.0
+                for _rr in horse_race_history[:3]:  # Last 3 races
+                    _past_rt = (_rr.get("race_type", "") or "").lower().replace(" ", "")
+                    _past_finish = _rr.get("finish_pos", 99)
+                    # Check if same condition family (OC/ALW at similar level)
+                    _same_family = False
+                    if _today_rt_lower and _past_rt:
+                        # Match OC/ALW condition codes (e.g., "oc50k" in both)
+                        for _cond_key in [
+                            "oc50",
+                            "oc20",
+                            "oc40",
+                            "oc62",
+                            "oc80",
+                            "alw",
+                            "aoc",
+                            "stk",
+                            "msw",
+                        ]:
+                            if _cond_key in _today_rt_lower and _cond_key in _past_rt:
+                                _same_family = True
+                                break
+                    if _same_family and 1 <= _past_finish <= 3:
+                        if _past_finish == 1:
+                            _repeat_bonus = max(
+                                _repeat_bonus, 0.25
+                            )  # Won same condition
+                        elif _past_finish == 2:
+                            _repeat_bonus = max(
+                                _repeat_bonus, 0.18
+                            )  # 2nd in same condition
+                        elif _past_finish == 3:
+                            _repeat_bonus = max(
+                                _repeat_bonus, 0.12
+                            )  # 3rd in same condition
+                tier2_bonus += _repeat_bonus
+        except BaseException:
             pass
 
         # ELITE: Track Condition Granularity
