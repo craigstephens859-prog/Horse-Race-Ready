@@ -75,12 +75,11 @@ HISTORICAL_IMPORT_ERROR = None
 
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
-    from horse_angles8 import compute_eight_angles
+    from horse_angles8 import compute_eight_angles  # noqa: F401  # imported for ANGLES_AVAILABLE check
 
     ANGLES_AVAILABLE = True
 except ImportError:
     ANGLES_AVAILABLE = False
-    compute_eight_angles = None
 
 # RACE CLASS PARSER: Comprehensive race type and purse analysis
 try:
@@ -128,7 +127,6 @@ except Exception as e:
 # Loads weights that have been tuned from historical race results
 try:
     from auto_calibration_engine_v2 import (
-        AutoCalibrationEngine,
         auto_calibrate_on_result_submission,
         get_all_track_calibrations_summary,
         get_live_learned_weights,
@@ -244,7 +242,6 @@ try:
     from security_validators import (
         RateLimiter,
         sanitize_pp_text,
-        sanitize_race_metadata,
         validate_distance_string,
         validate_track_name,
     )
@@ -6776,8 +6773,6 @@ def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) ->
         else:
             return 0.0  # Experienced
 
-    return 0.0
-
 
 def calculate_hot_trainer_bonus(
     trainer_win_pct: float,
@@ -7829,7 +7824,7 @@ def compute_bias_ratings(
     race_type: str,
     running_style_bias,  # Can be list or str
     post_bias_pick,  # Can be list or str
-    ppi_value: float = 0.0,  # ppi_value arg seems unused, ppi_map is recalculated
+    _ppi_value: float = 0.0,  # Unused — ppi_map is recalculated inside
     pedigree_per_horse: dict[str, dict] | None = None,
     track_name: str = "",
     pp_text: str = "",
@@ -8509,20 +8504,19 @@ def compute_bias_ratings(
     # ======================== TRACK PATTERN LEARNING: Fetch learned patterns ========================
     _track_patterns: dict = {}
     try:
-        if (track_name and "gold_db" in dir()) or True:
-            # Use the global gold_db instance
-            _gold_db = globals().get("gold_db")
-            if _gold_db and hasattr(_gold_db, "get_track_patterns"):
-                _track_patterns = _gold_db.get_track_patterns(
-                    track_code=track_name,
-                    surface=surface_type,
-                    distance=distance_txt,
+        # Use the global gold_db instance
+        _gold_db = globals().get("gold_db")
+        if _gold_db and hasattr(_gold_db, "get_track_patterns"):
+            _track_patterns = _gold_db.get_track_patterns(
+                track_code=track_name,
+                surface=surface_type,
+                distance=distance_txt,
+            )
+            if _track_patterns:
+                logger.info(
+                    f"📊 Loaded {len(_track_patterns)} track patterns for "
+                    f"{track_name} {surface_type} {distance_txt}"
                 )
-                if _track_patterns:
-                    logger.info(
-                        f"📊 Loaded {len(_track_patterns)} track patterns for "
-                        f"{track_name} {surface_type} {distance_txt}"
-                    )
     except Exception as tp_err:
         logger.debug(f"Track pattern fetch skipped: {tp_err}")
 
@@ -11407,7 +11401,7 @@ def build_betting_strategy(
     return final_report
 
 
-def _build_na_context(primary_df: pd.DataFrame, df_field: pd.DataFrame) -> str:
+def _build_na_context(primary_df: pd.DataFrame, _df_field: pd.DataFrame = None) -> str:
     """Build NA running style context string for Classic Report LLM prompt.
 
     Explains which horses have unknown running styles and what their
