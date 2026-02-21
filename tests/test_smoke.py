@@ -1,14 +1,14 @@
-"""Smoke tests for core rating-engine functions in app.py.
+"""Smoke tests for core rating-engine functions.
 
 These tests verify that critical functions:
   1. Don't crash on typical inputs
   2. Return the correct type
   3. Handle edge cases (empty, None, boundary values)
 
-Strategy: We extract individual pure functions from app.py source using AST
-parsing, then exec them in an isolated namespace.  This avoids importing the
-full 15K-line Streamlit app (which has top-level UI code that can't run in
-a test harness).
+Strategy: We extract individual pure functions from app.py and utils.py source
+using AST parsing, then exec them in an isolated namespace.  This avoids
+importing the full Streamlit app (which has top-level UI code that can't run
+in a test harness).
 
 Run:  python -m pytest tests/test_smoke.py -v
 """
@@ -33,6 +33,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 APP_PY = ROOT / "app.py"
 CONFIG_PY = ROOT / "config.py"
+UTILS_PY = ROOT / "utils.py"
 
 _FUNCTIONS_TO_EXTRACT = [
     "safe_float",
@@ -97,9 +98,14 @@ def _build_namespace() -> dict[str, Any]:
                         with contextlib.suppress(Exception):
                             exec(const_src, ns)  # noqa: S102
 
-    # Extract and exec each function
+    # Phase 2: also read utils.py for extracted utility functions
+    utils_source = UTILS_PY.read_text(encoding="utf-8") if UTILS_PY.exists() else ""
+
+    # Extract and exec each function (search app.py first, then utils.py)
     for name in _FUNCTIONS_TO_EXTRACT:
         func_src = _extract_function_source(source, name)
+        if not func_src and utils_source:
+            func_src = _extract_function_source(utils_source, name)
         if func_src:
             try:
                 exec(func_src, ns)  # noqa: S102
