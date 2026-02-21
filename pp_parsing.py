@@ -1061,8 +1061,7 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
                 result["detection_method"] = "purse_text"
                 result["confidence"] = 0.9
                 break
-            except BaseException:
-                pass
+            except Exception:                pass
 
     # ========== RACE TYPE EXTRACTION (Multi-Pattern) ==========
     race_type_patterns = [
@@ -1124,8 +1123,7 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
                 else:
                     result["purse_amount"] = int(amount_str)
                 result["detection_method"] = "embedded_format"
-            except BaseException:
-                pass
+            except Exception:                pass
 
         # Map prefix to race type if not already found
         if result["race_type_clean"] == "unknown":
@@ -1255,14 +1253,12 @@ def detect_purse_amount(pp_text: str) -> int | None:
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except BaseException:
-            pass
+        except Exception:            pass
     m = re.search(r"(?mi)\b(?:Added|Value)\b[^$\n\r]*\$\s*([\d,]+)", s)
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except BaseException:
-            pass
+        except Exception:            pass
     m = re.search(
         r"(?mi)\b(Mdn|Maiden|Allowance|Alw|Claiming|Clm|Starter|Stake|Stakes)\b[^:\n\r]{0,50}\b(\d{2,4})\s*[Kk]\b",
         s,
@@ -1270,14 +1266,12 @@ def detect_purse_amount(pp_text: str) -> int | None:
     if m:
         try:
             return int(m.group(2)) * 1000
-        except BaseException:
-            pass
+        except Exception:            pass
     m = re.search(r"(?m)\$\s*([\d,]{5,})", s)
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except BaseException:
-            pass
+        except Exception:            pass
     return None
 
 

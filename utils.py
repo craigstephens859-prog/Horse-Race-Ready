@@ -20,8 +20,9 @@ def _distance_bucket_from_text(distance_txt: str) -> str:
     Buckets into ≤6f, 6.5–7f, or 8f+ (routes).
     """
     d = (distance_txt or "").strip().lower()
-    # Furlongs
-    if "furlong" in d:
+
+    # Try to extract numeric furlongs from format like "6f", "6.5f", "5 1/2f"
+    if "f" in d:
         s = d.replace("½", ".5").replace(" 1/2", ".5")
         m = re.search(r"(\d+(?:\.\d+)?)", s)
         if m:
@@ -31,8 +32,9 @@ def _distance_bucket_from_text(distance_txt: str) -> str:
             if val < 8.0:
                 return "6.5–7f"
             return "8f+"
+
     # Miles
-    if "mile" in d:
+    if "mile" in d or "m" in d:
         if "70" in d and "yard" in d:
             return "8f+"
         fracs = {
@@ -118,7 +120,7 @@ def is_marathon_distance(distance_txt: str) -> bool:
         try:
             furlongs = float(distance_lower.replace("f", "").strip())
             return furlongs >= 12.0
-        except BaseException:
+        except Exception:
             pass
 
     # Mile conversions
@@ -144,7 +146,7 @@ def is_sprint_distance(distance_txt: str) -> bool:
         if "f" in distance_txt.lower():
             furlongs = float(distance_txt.lower().replace("f", "").strip())
             return furlongs <= 6.5
-    except BaseException:
+    except Exception:
         pass
     return False
 

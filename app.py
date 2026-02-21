@@ -495,7 +495,7 @@ with progress_col4:
                 st.success(f"💾 {saved_count} Saved")
             else:
                 st.info("💾 No Races Yet")
-        except BaseException:
+        except Exception:
             st.info("💾 Database Ready")
     else:
         st.info("💾 Database Ready")
@@ -2483,7 +2483,7 @@ if GOLD_DB_AVAILABLE and gold_db is not None:
             st.success(
                 f"💾 **Database Active:** {stats.get('total_races', 0)} races with results, {len(pending_races)} pending results"
             )
-    except BaseException:
+    except Exception:
         st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")
 else:
     st.header("E. Gold High-IQ System 🏆 (Real Data → 90% Accuracy)")

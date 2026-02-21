@@ -66,8 +66,6 @@ from utils import (
 logger = logging.getLogger(__name__)
 
 
-
-
 def _get_track_bias_delta(
     track_name: str, surface_type: str, distance_txt: str, style: str, post_str: str
 ) -> float:
@@ -92,8 +90,6 @@ def _get_track_bias_delta(
     return float(np.clip(runstyle_delta + post_delta, -1.0, 1.0))
 
 
-
-
 def analyze_claiming_price_movement(
     recent_prices: list[int], today_price: int
 ) -> float:
@@ -113,8 +109,6 @@ def analyze_claiming_price_movement(
     elif today_price > avg_recent * 1.15:
         bonus -= 0.05
     return bonus
-
-
 
 
 def calculate_trip_quality(positions: list[list[int]], field_size: int = 10) -> float:
@@ -137,8 +131,6 @@ def calculate_trip_quality(positions: list[list[int]], field_size: int = 10) -> 
     if abs(st - pp) >= 4 and finish <= 4:
         bonus += 0.06  # Steadied but recovered
     return bonus
-
-
 
 
 def analyze_pace_figures(
@@ -205,8 +197,6 @@ def analyze_pace_figures(
     return round(float(np.clip(bonus, -0.15, 0.20)), 4)
 
 
-
-
 def detect_bounce_risk(speed_figs: list[int]) -> float:
     """OPTIMIZED Feb 9 2026: Regression-based bounce detection.
 
@@ -251,8 +241,6 @@ def detect_bounce_risk(speed_figs: list[int]) -> float:
     if n >= 3 and min(figs[:3]) >= career_best - 3:
         score += 0.08
     return round(float(np.clip(score, -0.25, 0.20)), 4)
-
-
 
 
 def softmax_from_rating(ratings: np.ndarray, tau: float | None = None) -> np.ndarray:
@@ -324,8 +312,6 @@ def softmax_from_rating(ratings: np.ndarray, tau: float | None = None) -> np.nda
         p = p / p_sum
 
     return p
-
-
 
 
 def compute_ppi(df_styles: pd.DataFrame) -> dict:
@@ -415,8 +401,6 @@ def compute_ppi(df_styles: pd.DataFrame) -> dict:
         by_horse[nm] = round(tailwind, 3)
 
     return {"ppi": round(ppi_val, 3), "by_horse": by_horse}
-
-
 
 
 def apply_enhancements_and_figs(
@@ -551,8 +535,6 @@ def apply_enhancements_and_figs(
     return df
 
 
-
-
 def overlay_table(
     fair_probs: dict[str, float], offered: dict[str, float]
 ) -> pd.DataFrame:
@@ -619,8 +601,6 @@ def overlay_table(
     return pd.DataFrame(rows)
 
 
-
-
 def calculate_layoff_factor(
     days_since_last: int,
     num_workouts: int | None = None,
@@ -664,8 +644,6 @@ def calculate_layoff_factor(
         base *= 1.0 - work_credit
         base += workout_pattern_bonus
     return round(max(base, -3.0), 2)
-
-
 
 
 def evaluate_first_time_starter(
@@ -758,8 +736,6 @@ def evaluate_first_time_starter(
     return float(np.clip(debut_rating, -2.0, 3.5))
 
 
-
-
 def calculate_form_cycle_rating(
     horse_block: str, pedigree: dict, angles_df: pd.DataFrame
 ) -> float:
@@ -817,8 +793,6 @@ def calculate_form_cycle_rating(
             form_rating += 0.4  # Back-to-back wins
 
     return float(np.clip(form_rating, -2.0, 3.0))
-
-
 
 
 def calculate_comprehensive_class_rating(
@@ -1116,8 +1090,6 @@ def calculate_comprehensive_class_rating(
     return np.clip(class_rating, -3.0, 6.0)
 
 
-
-
 def _angles_pedigree_tweak(
     name: str, race_surface: str, race_bucket: str, race_cond: str
 ) -> float:
@@ -1214,8 +1186,6 @@ def _angles_pedigree_tweak(
     )
 
 
-
-
 def _style_bias_label_from_choice(choice: str) -> str:
     # Map single-letter selection into our style_match table buckets
     up = (choice or "").upper()
@@ -1224,8 +1194,6 @@ def _style_bias_label_from_choice(choice: str) -> str:
     if up in ("P", "S"):
         return "closer favoring"
     return "fair/neutral"
-
-
 
 
 def style_match_score_multi(
@@ -1279,8 +1247,6 @@ def style_match_score_multi(
             total_bonus += bonus
 
     return float(np.clip(total_bonus, -1.0, 1.0))
-
-
 
 
 def score_quickplay_comments(comments: dict[str, list[str]]) -> float:
@@ -1351,8 +1317,6 @@ def score_quickplay_comments(comments: dict[str, list[str]]) -> float:
     return float(np.clip(bonus, -1.5, 1.5))
 
 
-
-
 def calculate_weekly_bias_amplifier(impact_values: dict[str, float]) -> float:
     """
     Detect EXTREME weekly track biases and return a multiplier for track_bias_mult.
@@ -1396,8 +1360,6 @@ def calculate_weekly_bias_amplifier(impact_values: dict[str, float]) -> float:
         amp = max(amp, 1.15)  # At least 1.15x when a style is notably weak
 
     return amp
-
-
 
 
 def calculate_style_vs_weekly_bias_bonus(
@@ -1472,8 +1434,6 @@ def calculate_style_vs_weekly_bias_bonus(
     return 0.0
 
 
-
-
 def calculate_post_position_bias_bonus(
     post: str, weekly_post_impacts: dict[str, float]
 ) -> float:
@@ -1522,8 +1482,6 @@ def calculate_post_position_bias_bonus(
         return -0.1  # Slight below average
 
     return 0.0
-
-
 
 
 def calculate_pace_supremacy_bonus(
@@ -1586,12 +1544,10 @@ def calculate_pace_supremacy_bonus(
             # If horse has both strong E1 AND E2 (>= 80), extra bonus for sustained speed
             if horse_e1 >= 85 and best_e2 >= 80 and e1_rank <= 2:
                 bonus += 0.4  # Sustained speed premium
-    except BaseException:
-        pass
+    except Exception as exc:
+        logger.debug("Tier2 calc skipped: %s", exc)
 
     return round(bonus, 2)
-
-
 
 
 def calculate_first_after_claim_bonus(horse_block: str) -> float:
@@ -1652,12 +1608,10 @@ def calculate_first_after_claim_bonus(horse_block: str) -> float:
                     bonus += 0.6  # Good trainer with new claim
                 elif trnr_pct >= 0.18:
                     bonus += 0.3  # Decent trainer with new claim
-    except BaseException:
-        pass
+    except Exception as exc:
+        logger.debug("Tier2 calc skipped: %s", exc)
 
     return bonus
-
-
 
 
 def calculate_spi_bonus(spi: int | None) -> float:
@@ -1674,8 +1628,6 @@ def calculate_spi_bonus(spi: int | None) -> float:
         return 0.0
     else:
         return -0.05
-
-
 
 
 def calculate_surface_specialty_bonus(
@@ -1705,15 +1657,11 @@ def calculate_surface_specialty_bonus(
     return 0.0
 
 
-
-
 def calculate_awd_mismatch_penalty(awd_status: str | None) -> float:
     """Calculate penalty for distance mismatch"""
     if awd_status == "mismatch":
         return -0.10
     return 0.0
-
-
 
 
 def _parse_post_number(post_str: str) -> int | None:
@@ -1732,8 +1680,6 @@ def _parse_post_number(post_str: str) -> int | None:
                 st.session_state.post_parse_failures = []
             st.session_state.post_parse_failures.append(str(post_str))
             return None
-
-
 
 
 def calculate_weather_impact(
@@ -1793,8 +1739,6 @@ def calculate_weather_impact(
                 bonus += 0.05
 
     return float(np.clip(bonus, -0.30, 0.30))
-
-
 
 
 def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
@@ -1867,8 +1811,6 @@ def calculate_jockey_trainer_impact(horse_name: str, pp_text: str) -> float:
     return float(np.clip(bonus, 0, 0.50))
 
 
-
-
 def calculate_track_condition_granular(
     track_info: dict[str, Any], style: str, post: int | str
 ) -> float:
@@ -1927,8 +1869,6 @@ def calculate_track_condition_granular(
     return float(np.clip(bonus, -0.25, 0.25))
 
 
-
-
 def is_elite_trainer(trainer_name):
     """
     Check if trainer is elite (top 5% debut ROI) for FTS handling.
@@ -1945,8 +1885,6 @@ def is_elite_trainer(trainer_name):
     if not trainer_name:
         return False
     return trainer_name in ELITE_TRAINERS  # O(1) lookup via set
-
-
 
 
 def calculate_layoff_bonus(days_off: int, is_marathon: bool = False) -> float:
@@ -1985,8 +1923,6 @@ def calculate_layoff_bonus(days_off: int, is_marathon: bool = False) -> float:
     return 0.0
 
 
-
-
 def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) -> float:
     """
     CALIBRATED: Lightly-raced improver bonus.
@@ -2015,8 +1951,6 @@ def calculate_experience_bonus(career_starts: int, is_marathon: bool = False) ->
             return 0.0  # Normal
         else:
             return 0.0  # Experienced
-
-
 
 
 def calculate_hot_trainer_bonus(
@@ -2096,8 +2030,6 @@ def calculate_hot_trainer_bonus(
     return bonus
 
 
-
-
 def calculate_sprint_post_position_bonus(
     post: int, distance: float, surface: str
 ) -> float:
@@ -2117,8 +2049,6 @@ def calculate_sprint_post_position_bonus(
     return bonus
 
 
-
-
 def calculate_sprint_running_style_bonus(style: str, distance: float) -> float:
     """Early speed 2.05 impact at sprints, pressers 0.00, stalkers 0.20 (death!)"""
     if distance > 6.5:
@@ -2135,8 +2065,6 @@ def calculate_sprint_running_style_bonus(style: str, distance: float) -> float:
         elif "S" in style_upper:
             bonus -= 0.20
     return bonus
-
-
 
 
 def calculate_hot_combo_bonus(
@@ -2159,8 +2087,6 @@ def calculate_hot_combo_bonus(
     elif jockey_pct >= 0.15:
         bonus += 0.05
     return float(np.clip(bonus, 0.0, 0.25))
-
-
 
 
 def analyze_class_movement(
@@ -2266,8 +2192,6 @@ def analyze_class_movement(
         "pattern": pattern,
         "bonus": float(np.clip(bonus, -0.20, 0.20)),
     }
-
-
 
 
 def apply_track_pattern_bonus(
@@ -2447,8 +2371,6 @@ def apply_track_pattern_bonus(
     return {"bonus": round(bonus, 3), "details": details}
 
 
-
-
 def detect_surface_switch(
     race_history: list[dict],
     today_surface: str,
@@ -2562,8 +2484,6 @@ def detect_surface_switch(
     return result
 
 
-
-
 def score_workout_quality(block: str) -> dict[str, Any]:
     """
     Score workout quality from a horse's PP block text.
@@ -2651,8 +2571,6 @@ def score_workout_quality(block: str) -> dict[str, Any]:
     return result
 
 
-
-
 def analyze_distance_from_history(
     race_history: list[dict], today_distance: str
 ) -> dict[str, Any]:
@@ -2679,8 +2597,6 @@ def analyze_distance_from_history(
         )
 
     return analyze_distance_pattern(past_races, today_distance)
-
-
 
 
 def analyze_distance_pattern(
@@ -2754,8 +2670,6 @@ def analyze_distance_pattern(
         "best_fig_at_distance": best_fig,
         "bonus": float(np.clip(bonus, -0.10, 0.10)),
     }
-
-
 
 
 def analyze_form_cycle(past_races: list[dict]) -> dict[str, Any]:
@@ -2836,8 +2750,6 @@ def analyze_form_cycle(past_races: list[dict]) -> dict[str, Any]:
     }
 
 
-
-
 def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
     """Calculate post bias score from multiple selected post biases (aggregates bonuses)"""
     if not post_bias_picks:
@@ -2876,8 +2788,6 @@ def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
     return float(
         np.clip(total_bonus, -0.5, 0.8)
     )  # WIDENED ceiling from 0.5 — let post bias register
-
-
 
 
 def compute_bias_ratings(
@@ -3676,8 +3586,8 @@ def compute_bias_ratings(
             _fe_pace = parse_e1_e2_lp_values(_fe_block)
             if _fe_pace and _fe_pace.get("e1"):
                 _field_e1_values[_fe_name] = max(_fe_pace["e1"][:3])
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
     for _, row in df_styles.iterrows():
         post = str(row.get("Post", row.get("#", "")))
@@ -3752,8 +3662,8 @@ def compute_bias_ratings(
                         tier2_bonus += 0.5  # Strong at distance
                     elif dis_itm_pct >= 0.50:
                         tier2_bonus += 0.3  # Consistently competitive at distance
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ---- TRACK SPECIALIST BONUS (Race 4 Oaklawn tuning) ----
         # Parse track-specific record: 'OP starts wins - places - shows'
@@ -3802,8 +3712,8 @@ def compute_bias_ratings(
                             tier2_bonus += 0.35  # Solid track record
                         elif trk_itm_pct >= 0.45:
                             tier2_bonus += 0.2  # Competitive at track
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ---- P-STYLE ROUTE BONUS (Race 4 Oaklawn tuning) ----
         # P (presser/stalker) styles dominated Race 4 (top 3 all P)
@@ -3825,8 +3735,8 @@ def compute_bias_ratings(
                     race_furlongs = 12.0
             if race_furlongs >= 8.0 and style == "P":
                 tier2_bonus += 0.25  # Route tactical advantage for pressers
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ELITE: Weather Impact
         weather_data = st.session_state.get("weather_data", None)
@@ -3861,8 +3771,8 @@ def compute_bias_ratings(
                     # ROI-positive kicker
                     if blnk_roi is not None and blnk_roi > 0.0:
                         tier2_bonus += 0.4  # Positive ROI is extremely rare & valuable
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ELITE: Jockey/Trainer Performance Impact
         tier2_bonus += calculate_jockey_trainer_impact(name, pp_text)
@@ -3934,8 +3844,8 @@ def compute_bias_ratings(
                                 _repeat_bonus, 0.12
                             )  # 3rd in same condition
                 tier2_bonus += _repeat_bonus
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ELITE: Track Condition Granularity
         track_info = st.session_state.get("track_condition_detail", None)
@@ -3957,8 +3867,8 @@ def compute_bias_ratings(
         try:
             if "f" in distance_txt.lower():
                 race_furlongs = float(distance_txt.lower().replace("f", "").strip())
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ======================== DISTANCE MOVEMENT ANALYSIS (V2 — Feb 10, 2026) ========================
         # Uses ACTUAL per-race distance data parsed from running lines (not starved anymore)
@@ -3983,8 +3893,8 @@ def compute_bias_ratings(
                     distance_bonus += 0.05  # Speed horse cutting back
 
                 tier2_bonus += distance_bonus
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ======================== SURFACE SWITCH DETECTION (Feb 10, 2026) ========================
         # JWB BUG: Last 2 races on DIRT (6.5f, 5f), today's race TURF 1 mile
@@ -4016,8 +3926,8 @@ def compute_bias_ratings(
                     )
                     surface_bonus = surface_result.get("bonus", 0.0)
                     tier2_bonus += surface_bonus
-            except BaseException:
-                pass
+            except Exception as exc:
+                logger.debug("Tier2 calc skipped: %s", exc)
 
             # ======================== WORKOUT QUALITY SCORING (Feb 10, 2026) ========================
             # JWB BUG: Workout rank 43/43 (dead last) was invisible to system.
@@ -4026,8 +3936,8 @@ def compute_bias_ratings(
                 workout_quality = score_workout_quality(_horse_block)
                 workout_bonus = workout_quality.get("quality_bonus", 0.0)
                 tier2_bonus += workout_bonus
-            except BaseException:
-                pass
+            except Exception as exc:
+                logger.debug("Tier2 calc skipped: %s", exc)
 
         # ======================== TRACK PATTERN LEARNING BONUS ========================
         # Apply learned historical patterns at this track/surface/distance.
@@ -4051,8 +3961,8 @@ def compute_bias_ratings(
                         _h_workout = "Sharp"
                     elif wq_b <= -0.05:
                         _h_workout = "Sparse"
-                except BaseException:
-                    pass
+                except Exception as exc:
+                    logger.debug("Tier2 calc skipped: %s", exc)
 
                 tp_result = apply_track_pattern_bonus(
                     track_patterns=_track_patterns,
@@ -4071,8 +3981,8 @@ def compute_bias_ratings(
                     "details", []
                 )  # Reserved for future logging
                 tier2_bonus += tp_bonus
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ======================== MARATHON CALIBRATION (12f+) ========================
         if is_marathon:
@@ -4096,8 +4006,8 @@ def compute_bias_ratings(
                 tier2_bonus += calculate_sprint_post_position_bonus(
                     post_num, race_furlongs, surface_type
                 )
-            except BaseException:
-                pass
+            except Exception as exc:
+                logger.debug("Tier2 calc skipped: %s", exc)
 
             # Running style bias (early speed 2.05 impact!)
             tier2_bonus += calculate_sprint_running_style_bonus(style, race_furlongs)
@@ -4156,8 +4066,8 @@ def compute_bias_ratings(
                             tier2_bonus -= 2.0  # Massive penalty
                         elif career_win_pct < 0.10:  # Less than 10% win rate
                             tier2_bonus -= 1.0  # Significant penalty
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # 6. 2ND OFF LAYOFF BONUS (TUP R7 Feb 2026, enhanced TUP R4 tuning)
         # Winner #4 If You Want It: 2nd start after layoff, improved from Speed 62
@@ -4199,8 +4109,8 @@ def compute_bias_ratings(
                     # --- High ITM kicker (60%+) ---
                     if layoff_itm_pct >= 0.60 and is_second_off_layoff:
                         tier2_bonus += 0.3  # Elite ITM rate kicker
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # 7. BEST SPEED AT DISTANCE BONUS (TUP R7 Feb 2026)
         # Winner #4 If You Want It: Tied #1 with 80 Best Speed at Distance
@@ -4243,8 +4153,8 @@ def compute_bias_ratings(
                                 tier2_bonus += 0.3  # 2nd best
                             elif rank == 3:
                                 tier2_bonus += 0.2  # 3rd best
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # 8. HOT TRAINER BONUS (TUP R6 + R7 Feb 2026 - Winner had 22% trainer, 4-0-0 L14, 2nd time Lasix 33%)
         # Extract trainer win % from PP text
@@ -4275,8 +4185,8 @@ def compute_bias_ratings(
             tier2_bonus += calculate_hot_trainer_bonus(
                 trainer_win_pct, is_hot_l14, is_2nd_lasix_high_pct, trainer_starts
             )
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # 9. RACE AUDIT ENHANCEMENT 3: 1st-After-Claim Trainer Boost
         # Oaklawn R1: Trainer Ashford had 28% win rate on 1st-after-claim but got zero credit
@@ -4355,8 +4265,8 @@ def compute_bias_ratings(
                         tier2_bonus += 0.3  # This runstyle wins majority of races
                     elif style_pct <= 5 and style_pct > 0:
                         tier2_bonus -= 0.2  # This runstyle almost never wins
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # 14. RACE SUMMARY RANKING INTEGRATION (Feb 20, 2026)
         # Uses parsed Race Summary ranking tables to identify top-ranked horses
@@ -4402,8 +4312,8 @@ def compute_bias_ratings(
                     _summary_bonus += 0.15  # Double leader
 
                 tier2_bonus += np.clip(_summary_bonus, -1.0, 2.0)
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # 15. QUICKPLAY COMMENTS INTEGRATION (Feb 20, 2026)
         # Parse Brisnet's pre-analyzed positive (star) and negative (bullet) signals
@@ -4413,8 +4323,8 @@ def compute_bias_ratings(
                 _qp_comments = parse_quickplay_comments(_horse_block)
                 if _qp_comments.get("positive") or _qp_comments.get("negative"):
                     tier2_bonus += score_quickplay_comments(_qp_comments)
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # 16. BRIS RR/CR INTEGRATION (Feb 20, 2026)
         # Parse BRIS Race Rating and Class Rating from past race lines.
@@ -4440,8 +4350,8 @@ def compute_bias_ratings(
                     avg_cr = sum(r.get("cr", 0) for r in _rr_cr_data) / len(_rr_cr_data)
                     if recent_cr > avg_cr * 1.1:
                         tier2_bonus += 0.15  # Stepping up in class AND performing
-        except BaseException:
-            pass
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
 
         # ======================== End Tier 2 Bonuses ========================
 
@@ -4463,8 +4373,8 @@ def compute_bias_ratings(
                     # Bottom 2 in field
                     if cspeed <= _all_speeds_sorted[1]:
                         tier2_bonus *= 0.75
-            except BaseException:
-                pass
+            except Exception as exc:
+                logger.debug("Tier2 calc skipped: %s", exc)
 
         # ════════════════════════════════════════════════════════════════
         # FIX D: TRAINER PENALTY REDUCED FOR CLASS DROPPERS (TUP R6 Feb 19, 2026)
@@ -4527,8 +4437,8 @@ def compute_bias_ratings(
                 ):
                     # Major class drop: halve the negative tier2 penalty
                     tier2_bonus *= 0.5
-            except BaseException:
-                pass
+            except Exception as exc:
+                logger.debug("Tier2 calc skipped: %s", exc)
 
         # CAP tier2_bonus: Bonuses should supplement, not dominate, core ratings
         # FIX C: RACE-TYPE-AWARE TIER2 CAP (TUP R6 Feb 19, 2026)
@@ -4671,8 +4581,8 @@ def compute_bias_ratings(
                     race_quality = "low-maiden"
                 elif purse_amount >= 500000:
                     race_quality = "elite"
-            except BaseException:
-                pass
+            except Exception as exc:
+                logger.debug("Tier2 calc skipped: %s", exc)
 
         # Set component weights based on race quality
         if parser_class_weight is not None:
@@ -4768,8 +4678,8 @@ def compute_bias_ratings(
                         distance_furlongs = 10.0
                     elif "1.125" in distance_txt or "1 1/8" in distance_txt:
                         distance_furlongs = 9.0
-            except BaseException:
-                pass
+            except Exception as exc:
+                logger.debug("Tier2 calc skipped: %s", exc)
 
             # ═══════════════════════════════════════════════════════════════════════
             # UNIVERSAL RACE QUALITY DETECTION (All Tracks, All Types, All Purses)
@@ -4943,9 +4853,19 @@ def compute_bias_ratings(
                 or "tur" in surface_lower
                 or "grass" in surface_lower
             ):
-                # Turf racing: PP has no predictive value (GP R1: highest PP horses lost)
-                # Use pure component model (pace, form, style, jockey are what matter)
-                pp_weight, comp_weight = 0.0, 1.0
+                # Turf racing: PP has limited predictive value (GP R1: highest PP horses lost)
+                # BUT turf sprints (≤7f) still have some speed figure correlation
+                # FIX: Use small PP weight for turf sprints instead of zeroing it entirely
+                if distance_furlongs <= 7.0:
+                    pp_weight, comp_weight = (
+                        0.20,
+                        0.80,
+                    )  # Turf sprint: mostly components, some PP
+                else:
+                    pp_weight, comp_weight = (
+                        0.05,
+                        0.95,
+                    )  # Turf route: near-pure component model
             elif (
                 "synth" in surface_lower
                 or "aw" in surface_lower
@@ -5159,7 +5079,16 @@ def compute_bias_ratings(
                 else:
                     fts_multiplier = base_mult  # 0.75
 
-                R = R * fts_multiplier
+                # FIX: Apply FTS dampener to CORE rating only, not tier2 bonuses.
+                # Tier2 bonuses (trainer angles, track specialist, etc.) shouldn't
+                # be penalized just because the horse is a first-time starter.
+                if _bridge_R is not None:
+                    # Bridge path: separate core from tier2, dampen core only
+                    core_R = _pre_bridge_R * fts_multiplier
+                    R = core_R + tier2_bonus
+                else:
+                    # Traditional path: dampen the base rating (tier2 already included)
+                    R = R * fts_multiplier
         except Exception:
             pass  # Fail gracefully if FTS detection fails
 
@@ -5269,8 +5198,6 @@ def compute_bias_ratings(
     return out.sort_values(by="R", ascending=False)
 
 
-
-
 def fair_probs_from_ratings(
     ratings_df: pd.DataFrame, ml_odds_dict: dict[str, float] | None = None
 ) -> dict[str, float]:
@@ -5345,39 +5272,50 @@ def fair_probs_from_ratings(
 
     # ML ODDS REALITY CHECK: Blend model probabilities with market wisdom
     # The market odds reflect real money and decades of handicapping experience
-    # CALIBRATED (Feb 7, 2026): Softened caps to reduce Rating/Fair% disconnect.
-    # Previously, heavy favorites got Floor=15% even if model rated them 7th,
-    # causing Fair% to be #1 while Rating was #6 (confusing to users).
+    # CALIBRATED Feb 21, 2026: Field-size-aware caps + less aggressive longshot compression.
+    # Previous version forced ALL longshots to the same cap regardless of model rating,
+    # destroying differentiation among 10/1 vs 30/1 shots. New approach preserves
+    # relative ordering while applying sanity bounds.
     if ml_odds_dict:
         adjusted = False
+        field_size = len(result)
+
         for horse, prob in result.items():
             ml_odds = ml_odds_dict.get(horse, 5.0)
 
-            # --- LONGSHOT CAPS: Prevent longshots from getting unrealistic probabilities ---
-            # FIX (Feb 10, 2026): Tightened caps. A 12/1 shot getting 69% probability
-            # passed unchecked previously. Now cap based on realistic ML-odds ranges.
-            # Historical data: TuP CLM 8500 — 83% of winners at <5/1, only 4% at >10/1.
-            if ml_odds >= 30.0 and prob > 0.08:
-                result[horse] = 0.08
+            # --- LONGSHOT CAPS: Sanity-check unrealistically high probabilities ---
+            # These caps prevent a 30/1 shot from getting 40% probability
+            # but use gentler capping that preserves relative model ranking
+            if ml_odds >= 30.0 and prob > 0.10:
+                # Extreme longshot: cap at 10% but preserve relative ordering
+                result[horse] = min(prob, 0.10)
                 adjusted = True
-            elif ml_odds >= 20.0 and prob > 0.12:
-                result[horse] = 0.12
+            elif ml_odds >= 15.0 and prob > 0.18:
+                result[horse] = min(prob, 0.18)
                 adjusted = True
-            elif ml_odds >= 10.0 and prob > 0.20:
-                result[horse] = 0.20  # 10/1+ shots capped at 20%
+            elif ml_odds >= 10.0 and prob > 0.25:
+                # 10/1+ shots: cap at 25% (was 20% — too aggressive)
+                result[horse] = min(prob, 0.25)
                 adjusted = True
-            elif ml_odds >= 6.0 and prob > 0.30:
-                result[horse] = 0.30  # 6/1+ shots capped at 30%
+            elif ml_odds >= 6.0 and prob > 0.35:
+                # 6/1+ shots: cap at 35% (was 30%)
+                result[horse] = min(prob, 0.35)
                 adjusted = True
 
             # --- FAVORITE FLOORS: Prevent strong favorites from being crushed ---
-            # SOFTENED: Only apply to very strong favorites, lower floors
-            # A 1/1 or lower (even money) should never be below ~10%
-            elif ml_odds <= 1.0 and prob < 0.10:
-                result[horse] = max(prob, 0.10)
-                adjusted = True
-            elif ml_odds <= 2.0 and prob < 0.08:
-                result[horse] = max(prob, 0.08)
+            # Field-size-aware: a 1/1 shot in 5-horse field should get ≥15%
+            elif ml_odds <= 1.0:
+                min_floor = max(0.12, 1.0 / (field_size * 1.5))
+                if prob < min_floor:
+                    result[horse] = max(prob, min_floor)
+                    adjusted = True
+            elif ml_odds <= 2.0:
+                min_floor = max(0.08, 1.0 / (field_size * 2.0))
+                if prob < min_floor:
+                    result[horse] = max(prob, min_floor)
+                    adjusted = True
+            elif ml_odds <= 3.0 and prob < 0.06:
+                result[horse] = max(prob, 0.06)
                 adjusted = True
 
         # If we adjusted any probabilities, renormalize
@@ -5387,4 +5325,3 @@ def fair_probs_from_ratings(
                 result = {h: p / total_prob for h, p in result.items()}
 
     return result
-

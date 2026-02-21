@@ -12,8 +12,6 @@ import streamlit as st
 logger = logging.getLogger(__name__)
 
 
-
-
 def str_to_decimal_odds(s: str) -> float | None:
     s = (s or "").strip()
     if not s:
@@ -40,8 +38,6 @@ def str_to_decimal_odds(s: str) -> float | None:
         st.warning(f"Could not parse odds string: '{s}'. Error: {e}")
         return None
     return None
-
-
 
 
 def build_component_breakdown(
@@ -71,20 +67,19 @@ def build_component_breakdown(
     # EXTRACTION: Get top 5 horses by rating
     try:
         top_horses = primary_df.nlargest(5, "R")
-    except BaseException:
+    except Exception:
         # Fallback if rating column has issues
         top_horses = primary_df.head(5)
 
     if top_horses.empty:
         return "No horses to analyze."
 
-    # COMPONENT WEIGHTS: Display weights for breakdown
-    # NOTE: These are DEFAULT weights for display purposes only
-    # ACTUAL weights used in rating calculation are determined by race_class_parser
-    # and vary by race type (G1=10.0, Handicap=7.0, Claiming=2.0, etc.)
+    # COMPONENT WEIGHTS: Display weights matching actual rating_engine.py computation
+    # NOTE: These MUST stay in sync with compute_bias_ratings() in rating_engine.py
+    # Class weight is overridden by race_class_parser when available (1.0-10.0 scale)
     WEIGHTS = {
-        "Cclass": 3.0,  # Default - overridden by parser (1.0-10.0 scale)
-        "Cspeed": 1.8,  # Speed figures - raw ability
+        "Cclass": 2.5,  # Default class weight (parser overrides to 1.0-10.0)
+        "Cspeed": 2.0,  # Speed figures - matches speed_multiplier default range
         "Cform": 1.8,  # Form cycle - current condition
         "Cpace": 1.5,  # Pace advantage - tactical fit
         "Cstyle": 1.2,  # Running style - bias fit
@@ -98,7 +93,7 @@ def build_component_breakdown(
             race_class_data = parse_and_calculate_class(pp_text)
             actual_class_weight = race_class_data["weight"]["class_weight"]
             WEIGHTS["Cclass"] = actual_class_weight  # Use actual weight from parser
-        except BaseException:
+        except Exception:
             pass  # Fall back to default
 
     breakdown = "### Component Breakdown (Top 5 Horses)\n"
@@ -115,7 +110,7 @@ def build_component_breakdown(
         # SAFE EXTRACTION: Get rating with error handling
         try:
             final_rating = float(row.get("R", 0))
-        except BaseException:
+        except Exception:
             final_rating = 0.0
 
         breakdown += (
@@ -137,7 +132,7 @@ def build_component_breakdown(
         for comp_name, weight in WEIGHTS.items():
             try:
                 comp_value = float(row.get(comp_name, 0))
-            except BaseException:
+            except Exception:
                 comp_value = 0.0
 
             components[comp_name] = comp_value
@@ -150,7 +145,7 @@ def build_component_breakdown(
         # TRACK BIAS: Additional component
         try:
             atrack = float(row.get("Atrack", 0))
-        except BaseException:
+        except Exception:
             atrack = 0.0
         breakdown += f"- **Track Bias:** {atrack:+.2f} - Track-specific advantages (style + post combo)\n"
 
@@ -162,7 +157,7 @@ def build_component_breakdown(
         if quirin != "N/A":
             try:
                 quirin = int(float(quirin))
-            except BaseException:
+            except Exception:
                 quirin = "N/A"
         breakdown += f"- **Quirin Points:** {quirin} - BRISNET early pace points\n"
 
@@ -172,8 +167,6 @@ def build_component_breakdown(
     breakdown += "_Note: Positive values = advantages, negative = disadvantages. Weighted contributions show impact on final rating._\n"
 
     return breakdown
-
-
 
 
 def build_betting_strategy(
@@ -198,8 +191,6 @@ def build_betting_strategy(
         name_to_prog: Dictionary mapping horse names to program numbers (saddle cloth).
                       If None, falls back to name_to_post for backward compatibility.
     """
-
-    import numpy as np
 
     # Handle None defaults for mutable default arguments
     if smart_money_horses is None:
@@ -235,7 +226,7 @@ def build_betting_strategy(
 
             # VALIDATION: Probability bounds [0, 1]
             prob = max(0.0, min(1.0, prob))
-        except BaseException:
+        except Exception:
             prob = 1.0 / max(len(primary_df), 1)
 
         primary_probs_dict[horse] = prob
@@ -295,7 +286,7 @@ def build_betting_strategy(
                     prob = float(prob_str)
                     if prob > 1.0:  # Assume percentage
                         prob = prob / 100.0
-            except BaseException:
+            except Exception:
                 prob = 1.0 / len(horses)
 
             # SANITY CHECK: Probability bounds
@@ -398,7 +389,7 @@ def build_betting_strategy(
                     if h_prob > 1.0:
                         h_prob = h_prob / 100.0
                 h_prob = max(0.0, min(1.0, h_prob))
-            except BaseException:
+            except Exception:
                 h_prob = 0.0
 
             alternatives.append((h, h_prob))
@@ -805,4 +796,3 @@ def build_betting_strategy(
 * **Play SH5** mainly on mandatory payout days or when you have a very strong opinion & budget allows.
 """
     return final_report
-

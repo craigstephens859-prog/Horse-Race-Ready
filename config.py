@@ -29,17 +29,50 @@ FTS_PARAMS = {
     "pedigree_confidence": 0.8,  # Crucial for debuts
     "ml_odds_confidence": 0.8,  # Market accuracy for elite FTS
     "live_odds_confidence": 0.9,  # Insider sentiment
-    "base_multiplier": 0.75,  # Base FTS rating multiplier (75% of normal)
-    "elite_trainer_multiplier": 1.2,  # Boost for elite connections (75% * 1.2 = 90%)
+    "base_multiplier": 0.82,  # Base FTS rating multiplier (82% of normal — was 75%, too harsh)
+    "elite_trainer_multiplier": 1.15,  # Boost for elite connections (82% * 1.15 = 94%)
 }
 
 # Elite Trainers: Top 5% debut ROI (expand based on historical data)
 ELITE_TRAINERS = {
-    "Wesley Ward",
+    # Tier 1: Hall of Fame / perennial leaders (20%+ win rate, $10M+ earnings)
     "Todd Pletcher",
     "Bob Baffert",
     "Chad Brown",
     "Steve Asmussen",
+    "Brad Cox",
+    "Bill Mott",
+    "Shug McGaughey",
+    "Mark Casse",
+    # Tier 2: Top 20 national trainers by wins/earnings
+    "Wesley Ward",
+    "Jack Sisterson",
+    "Doug O'Neill",
+    "Mike Maker",
+    "Dale Romans",
+    "Christophe Clement",
+    "Graham Motion",
+    "Ken McPeek",
+    "Dallas Stewart",
+    "Peter Miller",
+    "John Sadler",
+    "Michael McCarthy",
+    "Phil D'Amato",
+    "Jorge Navarro",
+    "Linda Rice",
+    # Tier 3: High-percentage specialists (may not lead wins but elite strike rate)
+    "Tom Amoss",
+    "Ian Wilkes",
+    "Brendan Walsh",
+    "Eddie Kenneally",
+    "Jeff Bonde",
+    "Saffie Joseph Jr.",
+    "Danny Gargan",
+    "John Kimmel",
+    "Rudy Rodriguez",
+    "Al Stall Jr.",
+    "D. Wayne Lukas",
+    "Larry Jones",
 }  # Set for O(1) lookup performance
 
 # ===================== NA Running Style + QSP Parameters =====================

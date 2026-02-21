@@ -174,8 +174,10 @@ class BayesianComponentRater:
 
         # v3 CRITICAL: Apply global dampening so data dominates prior
         # Without this, data_unc ~= base_std -> 50% shrinkage toward prior(0)
-        # With 0.4x, data_unc ~= 0.4*base_std -> ~88% retention of deterministic
-        DAMPENING = 0.4
+        # v4 (Feb 21, 2026): Raised from 0.4 to 0.55 — horses with limited race
+        # history (e.g., 2-3 starts) benefit more from Bayesian adjustment.
+        # 0.55 dampening -> ~82% retention of deterministic value (was ~88%)
+        DAMPENING = 0.55
         total_uncertainty = raw_uncertainty * DAMPENING
 
         return float(np.clip(total_uncertainty, 0.1, 5.0))
@@ -375,12 +377,13 @@ def calculate_final_rating_with_uncertainty(
 
 def example_integration():
     """
-    Example showing how to modify _calculate_components() in unified engine
+    Example showing how to integrate Bayesian uncertainty into the rating engine.
+    This is reference documentation — not called in production.
     """
-    # BEFORE (existing code):
-    # cclass = self._calc_class(horse, today_purse, today_race_type)
-    # cform = self._calc_form(horse)
-    # cspeed = self._calc_speed(horse, horses_in_race)
+    # BEFORE (existing simplified code):
+    # cclass = calc_class(horse, today_purse, today_race_type)
+    # cform = calc_form(horse)
+    # cspeed = calc_speed(horse, horses_in_race)
     # final_rating = (cclass * 2.5) + (cform * 1.8) + (cspeed * 2.0)
 
     # AFTER (with Bayesian enhancement):
@@ -389,20 +392,21 @@ def example_integration():
         enhance_rating_with_bayesian_uncertainty,
     )
 
-    # Calculate deterministic ratings (existing functions)
-    cclass_val = self._calc_class(horse, today_purse, today_race_type)
-    cform_val = self._calc_form(horse)
-    cspeed_val = self._calc_speed(horse, horses_in_race)
+    # Example deterministic values (would come from rating engine in production)
+    cclass_val = 3.5
+    cform_val = 2.1
+    cspeed_val = 4.0
+    horse_data = {"recent_finishes": [1, 2, 3], "days_since_last": 21}
 
     # Enhance with Bayesian uncertainty
     cclass_bayes = enhance_rating_with_bayesian_uncertainty(
-        cclass_val, "class", horse.__dict__, parsing_confidence=0.94
+        cclass_val, "class", horse_data, parsing_confidence=0.94
     )
     cform_bayes = enhance_rating_with_bayesian_uncertainty(
-        cform_val, "form", horse.__dict__, parsing_confidence=0.94
+        cform_val, "form", horse_data, parsing_confidence=0.94
     )
     cspeed_bayes = enhance_rating_with_bayesian_uncertainty(
-        cspeed_val, "speed", horse.__dict__, parsing_confidence=0.94
+        cspeed_val, "speed", horse_data, parsing_confidence=0.94
     )
 
     # Aggregate with uncertainty propagation
