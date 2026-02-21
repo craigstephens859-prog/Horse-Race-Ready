@@ -4,10 +4,19 @@ Betting strategy builder and component breakdown for race analysis.
 """
 
 import logging
+import re
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+try:
+    from race_class_parser import parse_and_calculate_class
+
+    RACE_CLASS_PARSER_AVAILABLE = True
+except ImportError:
+    RACE_CLASS_PARSER_AVAILABLE = False
+    parse_and_calculate_class = None
 
 logger = logging.getLogger(__name__)
 

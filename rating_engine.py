@@ -63,6 +63,14 @@ from utils import (
     safe_int,
 )
 
+try:
+    from race_class_parser import parse_and_calculate_class
+
+    RACE_CLASS_PARSER_AVAILABLE = True
+except ImportError:
+    RACE_CLASS_PARSER_AVAILABLE = False
+    parse_and_calculate_class = None
+
 logger = logging.getLogger(__name__)
 
 
