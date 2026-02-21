@@ -7123,30 +7123,7 @@ def analyze_distance_pattern(
     if not past_races or not today_distance:
         return {"distance_change": "unknown", "distance_delta": 0, "bonus": 0.0}
 
-    # Convert distance to furlongs
-    def distance_to_furlongs(dist_str: str) -> float:
-        dist_str = dist_str.lower().strip()
-        if "f" in dist_str:
-            return float(dist_str.replace("f", "").strip())
-        elif "m" in dist_str:
-            # 1M = 8F, 1 1/16M = 8.5F, 1 1/8M = 9F
-            if "1/16" in dist_str:
-                return 8.5
-            elif "1/8" in dist_str:
-                return 9.0
-            elif "3/16" in dist_str:
-                return 9.5
-            elif "1/4" in dist_str:
-                return 10.0
-            else:
-                return 8.0  # Default 1 mile
-        # Unrecognized format - warn and use default
-        if dist_str and dist_str != "6.0":
-            st.warning(
-                f"⚠️ Unrecognized distance format '{dist_str}' - using 6f default"
-            )
-        return 6.0  # Default
-
+    # Use module-level distance_to_furlongs (defined once, near line 625)
     today_furlongs = distance_to_furlongs(today_distance)
 
     # Analyze past distances
