@@ -75,7 +75,9 @@ HISTORICAL_IMPORT_ERROR = None
 
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
-    from horse_angles8 import compute_eight_angles  # noqa: F401  # imported for ANGLES_AVAILABLE check
+    from horse_angles8 import (
+        compute_eight_angles,  # noqa: F401  # imported for ANGLES_AVAILABLE check
+    )
 
     ANGLES_AVAILABLE = True
 except ImportError:
@@ -144,7 +146,7 @@ except ImportError as e:
     LEARNED_WEIGHTS = {}
     print(f"Adaptive learning not available: {e}")
 
-    def get_all_track_calibrations_summary(db_path=""):
+    def get_all_track_calibrations_summary(_db_path=""):
         return []
 
 
@@ -4085,7 +4087,7 @@ def calculate_comprehensive_class_rating(
         "allowance optional claiming": 5,
         "ao": 5,
         "soc": 5,
-        "starter optional claiming": 5,
+        # "starter optional claiming": 5,  # Duplicate key — already mapped to level 4 above
         # Handicap (Level 6)
         "hcp": 6,
         "handicap": 6,
@@ -4736,7 +4738,7 @@ if df_editor is None or df_editor.empty:
     st.stop()
 
 # CRITICAL: Explicit False check to handle potential NaN values from data_editor
-df_final_field = df_editor[df_editor["Scratched"].fillna(False) == False].copy()
+df_final_field = df_editor[~df_editor["Scratched"].fillna(False)].copy()
 if df_final_field.empty:
     st.warning("⚠️ All horses are scratched.")
     st.stop()
@@ -4771,7 +4773,7 @@ st.session_state["ppi_val"] = ppi_val  # Store for Classic Report
 
 
 def _infer_horse_surface_pref(
-    name: str, ped: dict, ang_df: pd.DataFrame | None, race_surface: str
+    _name: str, _ped: dict, ang_df: pd.DataFrame | None, race_surface: str
 ) -> str:
     cats = (
         " ".join(ang_df["Category"].astype(str).tolist()).lower()
@@ -6928,7 +6930,7 @@ def calculate_hot_combo_bonus(
 
 
 def analyze_class_movement(
-    past_races: list[dict], today_class: str, today_purse: int
+    past_races: list[dict], today_class: str, _today_purse: int = 0
 ) -> dict[str, Any]:
     """
     COMPREHENSIVE: Analyze if horse is stepping up or down in class.
@@ -7175,7 +7177,7 @@ def apply_track_pattern_bonus(
     class_rating: float,
     days_since_last: int,
     workout_pattern: str,
-    prime_power: float,
+    _prime_power: float = 0.0,
     jockey: str = "",
     trainer: str = "",
 ) -> dict:
@@ -7828,8 +7830,8 @@ def compute_bias_ratings(
     pedigree_per_horse: dict[str, dict] | None = None,
     track_name: str = "",
     pp_text: str = "",
-    figs_df: pd.DataFrame = None,
-    dynamic_weights: dict = None,
+    figs_df: pd.DataFrame | None = None,
+    dynamic_weights: dict | None = None,
 ) -> pd.DataFrame:
     """
     Reads 'Cclass' and 'Cform' from df_styles (pre-built), adds Cstyle/Cpost/Cpace/Cspeed (+Atrack),
@@ -9654,7 +9656,7 @@ def compute_bias_ratings(
 
         # Now check if Prime Power is available
         prime_power_raw = safe_float(row.get("Prime Power", 0.0), 0.0)
-        if prime_power_raw > 0:  # noqa: race_class_shown guard below
+        if prime_power_raw > 0:  # noqa: E712  # race_class_shown guard below
             # Normalize Prime Power (typical range: 110-130, clip outliers to 0-2 scale)
             pp_normalized = np.clip(
                 (prime_power_raw - 110) / 20, 0, 2
@@ -10534,11 +10536,12 @@ for i, (rbias, pbias) in enumerate(scenarios):
 
         fair_probs = fair_probs_from_ratings(ratings_df, ml_odds_dict)
         if "Horse" in ratings_df.columns:
+            _fp = fair_probs  # Bind to local to avoid B023 late-binding bug
             ratings_df["Fair %"] = ratings_df["Horse"].map(
-                lambda h: f"{fair_probs.get(h, 0) * 100:.1f}%"
+                lambda h, fp=_fp: f"{fp.get(h, 0) * 100:.1f}%"
             )
             ratings_df["Fair Odds"] = ratings_df["Horse"].map(
-                lambda h: fair_to_american_str(fair_probs.get(h, 0))
+                lambda h, fp=_fp: fair_to_american_str(fp.get(h, 0))
             )
         else:
             ratings_df["Fair %"] = ""
@@ -10703,7 +10706,7 @@ def build_component_breakdown(
 
     breakdown += "_Mathematical transparency: Shows exactly what the system sees in each horse_\n\n"
 
-    for idx, row in top_horses.iterrows():
+    for _idx, row in top_horses.iterrows():
         horse_name = row.get("Horse", "Unknown")
         prog = _prog_map.get(horse_name, "?")
         ml = name_to_odds.get(horse_name, "?")
@@ -10778,9 +10781,9 @@ def build_betting_strategy(
     name_to_odds: dict[str, str],
     field_size: int,
     ppi_val: float,
-    smart_money_horses: list[dict] = None,
-    name_to_ml: dict[str, str] = None,
-    name_to_prog: dict[str, str] = None,
+    smart_money_horses: list[dict] | None = None,
+    name_to_ml: dict[str, str] | None = None,
+    name_to_prog: dict[str, str] | None = None,
 ) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,
@@ -10929,7 +10932,7 @@ def build_betting_strategy(
         remaining_indices = list(range(len(horses)))
         remaining_probs = win_probs.copy()
 
-        for position in range(min(top_n, len(horses))):
+        for _position in range(min(top_n, len(horses))):
             # VALIDATION: Check we have horses remaining
             if len(remaining_indices) == 0:
                 break
@@ -10972,7 +10975,7 @@ def build_betting_strategy(
     most_likely = {}
     selected_horses = {horse for horse, _ in finishing_order}
 
-    for pos_idx, (primary_horse, primary_prob) in enumerate(finishing_order, start=1):
+    for pos_idx, (primary_horse, _primary_prob) in enumerate(finishing_order, start=1):
         # ALTERNATIVE CANDIDATES: Get probabilities for all horses at this position
         # Exclude horses already selected for earlier positions
         alternatives = []
