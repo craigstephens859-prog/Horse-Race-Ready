@@ -1,0 +1,43 @@
+name: CI — Lint, Compile, Test
+on:
+  push:
+    branches: [main, deploy/latest-app]
+  pull_request:
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install core dependencies
+        run: |
+          pip install --quiet streamlit pandas numpy tabulate python-dateutil scipy scikit-learn pulp
+          pip install --quiet ruff vulture pytest
+
+      # ── Gate 1: Syntax ──
+      - name: Compile check (py_compile)
+        run: python -m py_compile app.py
+
+      # ── Gate 2: Real bugs (zero tolerance) ──
+      - name: Ruff — bug rules (must pass)
+        run: >
+          ruff check app.py
+          --select B023,F601,F811,E712,RUF013,ARG001
+          --no-fix
+
+      # ── Gate 3: Full lint (advisory, non-blocking for now) ──
+      - name: Ruff — full lint (advisory)
+        run: ruff check app.py --statistics || true
+
+      # ── Gate 4: Dead code ──
+      - name: Vulture dead code scan
+        run: python -m vulture app.py vulture_whitelist.py --min-confidence 91
+
+      # ── Gate 5: Smoke tests ──
+      - name: Run smoke tests
+        run: python -m pytest tests/test_smoke.py -v --tb=short
