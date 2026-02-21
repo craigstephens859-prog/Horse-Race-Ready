@@ -30,8 +30,6 @@ from pp_parsing import (
     parse_bris_rr_cr_per_race,
     parse_claiming_prices,
     parse_e1_e2_lp_values,
-    parse_earnings_and_class_record,
-    parse_equipment_medication_weight,
     parse_fractional_positions,
     parse_jockey_combo_stats,
     parse_jockey_trainer_full_stats,
@@ -43,7 +41,6 @@ from pp_parsing import (
     parse_prime_power,
     parse_quickplay_comments,
     parse_race_history_from_block,
-    parse_race_shapes,
     parse_race_summary_rankings,
     parse_recent_class_levels,
     parse_recent_races_detailed,
@@ -4376,8 +4373,12 @@ def compute_bias_ratings(
                 _lt_records = parse_lifetime_records(_horse_block)
 
                 # Surface-specific win rate
-                _surf_key = "fst" if surface_type.lower() in ("dirt", "d", "ft") else (
-                    "trf" if surface_type.lower() in ("turf", "tur", "t") else "fst"
+                _surf_key = (
+                    "fst"
+                    if surface_type.lower() in ("dirt", "d", "ft")
+                    else (
+                        "trf" if surface_type.lower() in ("turf", "tur", "t") else "fst"
+                    )
                 )
                 if _surf_key in _lt_records:
                     _sr = _lt_records[_surf_key]
@@ -4408,7 +4409,10 @@ def compute_bias_ratings(
 
                 # Off-track record (when conditions are wet)
                 _cond_lower = (condition_txt or "").lower()
-                if any(w in _cond_lower for w in ("mud", "slop", "wet", "my", "sy", "wf", "gd")):
+                if any(
+                    w in _cond_lower
+                    for w in ("mud", "slop", "wet", "my", "sy", "wf", "gd")
+                ):
                     if "off" in _lt_records:
                         _or = _lt_records["off"]
                         _o_starts = _or.get("starts", 0)
@@ -4421,6 +4425,48 @@ def compute_bias_ratings(
                                 tier2_bonus += 0.15
                         elif _o_starts == 0:
                             tier2_bonus -= 0.15  # Unknown on off track
+
+                # 17b. CAREER RECORD (life) — experience / best speed
+                if "life" in _lt_records:
+                    _life = _lt_records["life"]
+                    _l_starts = _life.get("starts", 0)
+                    _l_wins = _life.get("wins", 0)
+                    _l_best = _life.get("best_speed", 0)
+                    if _l_starts >= 10 and _l_wins > 0:
+                        _l_wpct = _l_wins / _l_starts
+                        if _l_wpct >= 0.30:
+                            tier2_bonus += 0.20  # Career winner
+                        elif _l_wpct >= 0.20:
+                            tier2_bonus += 0.10
+                    if _l_best >= 100:
+                        tier2_bonus += 0.12  # Has hit triple-digit figs
+                    elif _l_best >= 90:
+                        tier2_bonus += 0.05
+
+                # 17c. TRACK RECORD — repeat track specialist
+                if "track" in _lt_records:
+                    _trk = _lt_records["track"]
+                    _t_starts = _trk.get("starts", 0)
+                    _t_wins = _trk.get("wins", 0)
+                    if _t_starts >= 3:
+                        _t_wpct = _t_wins / _t_starts
+                        if _t_wpct >= 0.35:
+                            tier2_bonus += 0.25  # Track specialist
+                        elif _t_wpct >= 0.20:
+                            tier2_bonus += 0.12
+
+                # 17d. CURRENT YEAR FORM — recent year win rate
+                for _yk, _yv in _lt_records.items():
+                    if _yk.startswith("year_") and isinstance(_yv, dict):
+                        _y_starts = _yv.get("starts", 0)
+                        _y_wins = _yv.get("wins", 0)
+                        if _y_starts >= 3:
+                            _y_wpct = _y_wins / _y_starts
+                            if _y_wpct >= 0.30:
+                                tier2_bonus += 0.15  # Hot current year
+                            elif _y_wpct == 0.0 and _y_starts >= 5:
+                                tier2_bonus -= 0.10  # Winless this year
+                        break  # Only most recent year
         except Exception as exc:
             logger.debug("Tier2 calc skipped: %s", exc)
 
@@ -4430,21 +4476,23 @@ def compute_bias_ratings(
         try:
             if _horse_block:
                 _pp_data = parse_prime_power(_horse_block)
-                _pp_rank = _pp_data.get("rank", 0)
-                _pp_rating = _pp_data.get("rating", 0.0)
-                if _pp_rank == 1:
-                    tier2_bonus += 0.40  # Top Prime Power
-                elif _pp_rank == 2:
-                    tier2_bonus += 0.20
-                elif _pp_rank == 3:
-                    tier2_bonus += 0.10
+                _pp_rank = _pp_data.get("rank")
+                _pp_rating = _pp_data.get("rating")
+                if _pp_rank is not None:
+                    if _pp_rank == 1:
+                        tier2_bonus += 0.40  # Top Prime Power
+                    elif _pp_rank == 2:
+                        tier2_bonus += 0.20
+                    elif _pp_rank == 3:
+                        tier2_bonus += 0.10
                 # Also use raw rating tier: 130+ = elite
-                if _pp_rating >= 130:
-                    tier2_bonus += 0.20
-                elif _pp_rating >= 120:
-                    tier2_bonus += 0.10
-                elif _pp_rating < 100 and _pp_rating > 0:
-                    tier2_bonus -= 0.15  # Below-average Prime Power
+                if _pp_rating is not None:
+                    if _pp_rating >= 130:
+                        tier2_bonus += 0.20
+                    elif _pp_rating >= 120:
+                        tier2_bonus += 0.10
+                    elif _pp_rating < 100:
+                        tier2_bonus -= 0.15  # Below-average Prime Power
         except Exception as exc:
             logger.debug("Tier2 calc skipped: %s", exc)
 
@@ -4521,6 +4569,42 @@ def compute_bias_ratings(
                         tier2_bonus += 0.12  # High win% angle
                     elif _a_starts >= 10 and _a_wpct < 0.05:
                         tier2_bonus -= 0.10  # Dead angle
+
+                # 19b. JOCKEY YEAR STATS — full-year performance
+                _jy = _jt_stats.get("jockey_year", {})
+                _jy_starts = _jy.get("starts", 0)
+                _jy_wpct = _jy.get("win_pct", 0.0)
+                _jy_roi = _jy.get("roi", 0.0)
+                if _jy_starts >= 100:
+                    if _jy_wpct >= 0.20 and _jy_roi > 0.0:
+                        tier2_bonus += 0.15  # Profitable year jockey
+                    elif _jy_wpct >= 0.16:
+                        tier2_bonus += 0.08
+                    elif _jy_wpct < 0.08:
+                        tier2_bonus -= 0.08  # Bad year
+
+                # 19c. TRAINER MEET RECORD — local familiarity
+                _tm = _jt_stats.get("trainer_meet", {})
+                _tm_starts = _tm.get("starts", 0)
+                _tm_wpct = _tm.get("win_pct", 0.0)
+                if _tm_starts >= 15:
+                    if _tm_wpct >= 0.22:
+                        tier2_bonus += 0.15  # Elite meet trainer
+                    elif _tm_wpct >= 0.16:
+                        tier2_bonus += 0.08
+                    elif _tm_wpct < 0.08:
+                        tier2_bonus -= 0.10  # Cold trainer
+
+                # 19d. TRAINER YEAR STATS
+                _ty = _jt_stats.get("trainer_year", {})
+                _ty_starts = _ty.get("starts", 0)
+                _ty_wpct = _ty.get("win_pct", 0.0)
+                _ty_roi = _ty.get("roi", 0.0)
+                if _ty_starts >= 50:
+                    if _ty_wpct >= 0.20 and _ty_roi > 0.0:
+                        tier2_bonus += 0.12  # Profitable year trainer
+                    elif _ty_wpct < 0.08:
+                        tier2_bonus -= 0.08
         except Exception as exc:
             logger.debug("Tier2 calc skipped: %s", exc)
 
@@ -4529,7 +4613,11 @@ def compute_bias_ratings(
         try:
             if _horse_block:
                 _pr_details = parse_per_race_details(_horse_block)
-                _odds_list = [r.get("odds", 0.0) for r in _pr_details if r.get("odds", 0) > 0]
+                _odds_list = [
+                    r.get("odds")
+                    for r in _pr_details
+                    if r.get("odds") is not None and r.get("odds") > 0
+                ]
                 if len(_odds_list) >= 3:
                     # Recent odds vs older odds
                     _recent_odds = np.mean(_odds_list[:2])
@@ -4537,20 +4625,38 @@ def compute_bias_ratings(
                     if _older_odds > 0:
                         _odds_trend = (_older_odds - _recent_odds) / _older_odds
                         if _odds_trend > 0.30:
-                            tier2_bonus += 0.20  # Being bet down significantly (improving)
+                            tier2_bonus += (
+                                0.20  # Being bet down significantly (improving)
+                            )
                         elif _odds_trend > 0.15:
                             tier2_bonus += 0.10  # Moderate improvement
                         elif _odds_trend < -0.30:
-                            tier2_bonus -= 0.15  # Drifting out (public losing confidence)
+                            tier2_bonus -= (
+                                0.15  # Drifting out (public losing confidence)
+                            )
 
                 # Per-race comment analysis for trip trouble
                 _trouble_count = 0
                 _good_trip_count = 0
                 for _prd in _pr_details[:5]:
                     _cmt = (_prd.get("comment", "") or "").lower()
-                    if any(w in _cmt for w in ("steadied", "checked", "bumped", "blocked", "wide", "troubled", "impeded")):
+                    if any(
+                        w in _cmt
+                        for w in (
+                            "steadied",
+                            "checked",
+                            "bumped",
+                            "blocked",
+                            "wide",
+                            "troubled",
+                            "impeded",
+                        )
+                    ):
                         _trouble_count += 1
-                    if any(w in _cmt for w in ("briskly", "driving", "urged", "rallied", "gamely")):
+                    if any(
+                        w in _cmt
+                        for w in ("briskly", "driving", "urged", "rallied", "gamely")
+                    ):
                         _good_trip_count += 1
                 if _trouble_count >= 2:
                     tier2_bonus += 0.15  # Trip trouble pattern — likely to improve
@@ -4558,13 +4664,32 @@ def compute_bias_ratings(
                     tier2_bonus += 0.10  # Consistently tries hard
 
                 # Field size competition quality
-                _field_sizes = [r.get("field_size", 0) for r in _pr_details if r.get("field_size", 0) > 0]
+                _field_sizes = [
+                    r.get("field_size")
+                    for r in _pr_details
+                    if r.get("field_size") is not None and r.get("field_size") > 0
+                ]
                 if _field_sizes:
                     _avg_field = np.mean(_field_sizes)
                     if _avg_field >= 10:
                         tier2_bonus += 0.08  # Experienced against large fields
                     elif _avg_field <= 5:
                         tier2_bonus -= 0.08  # Short-field specialist concern
+
+                # 20b. WEIGHT CHANGE TREND — dropping/gaining weight
+                _weights = [
+                    r.get("weight")
+                    for r in _pr_details
+                    if r.get("weight") is not None and r.get("weight") > 0
+                ]
+                if len(_weights) >= 2:
+                    _recent_wt = _weights[0]
+                    _older_wt = np.mean(_weights[1:])
+                    _wt_diff = _recent_wt - _older_wt
+                    if _wt_diff <= -3:
+                        tier2_bonus += 0.10  # Weight dropped (trainer intent)
+                    elif _wt_diff >= 5:
+                        tier2_bonus -= 0.05  # Packing extra weight
         except Exception as exc:
             logger.debug("Tier2 calc skipped: %s", exc)
 
@@ -4576,7 +4701,11 @@ def compute_bias_ratings(
             if _ped:
                 # Sire turf% on turf races
                 _sire_turf = _ped.get("sire_turf_pct", np.nan)
-                if pd.notna(_sire_turf) and surface_type.lower() in ("turf", "tur", "t"):
+                if pd.notna(_sire_turf) and surface_type.lower() in (
+                    "turf",
+                    "tur",
+                    "t",
+                ):
                     if _sire_turf >= 15:
                         tier2_bonus += 0.20  # Strong turf sire
                     elif _sire_turf >= 10:
@@ -4607,7 +4736,9 @@ def compute_bias_ratings(
                 # Sire mud% on wet tracks
                 _sire_mud = _ped.get("sire_mud_pct", np.nan)
                 _cond_lower = (condition_txt or "").lower()
-                if pd.notna(_sire_mud) and any(w in _cond_lower for w in ("mud", "slop", "wet", "my", "sy", "wf")):
+                if pd.notna(_sire_mud) and any(
+                    w in _cond_lower for w in ("mud", "slop", "wet", "my", "sy", "wf")
+                ):
                     if _sire_mud >= 20:
                         tier2_bonus += 0.25  # Mud sire on wet track
                     elif _sire_mud >= 12:
@@ -4622,6 +4753,136 @@ def compute_bias_ratings(
                         tier2_bonus += 0.12
                     elif _ds_turf < 5:
                         tier2_bonus -= 0.10
+
+                # 21b. Damsire SPI (breeding quality of broodmare sire)
+                _ds_spi = _ped.get("damsire_spi", np.nan)
+                if pd.notna(_ds_spi):
+                    if _ds_spi >= 3.0:
+                        tier2_bonus += 0.10  # Elite damsire
+                    elif _ds_spi >= 2.0:
+                        tier2_bonus += 0.05
+
+                # 21c. Pedigree fast-track rating — dirt speed breeding
+                _ped_fast = _ped.get("pedigree_fast", np.nan)
+                if pd.notna(_ped_fast) and surface_type.lower() in (
+                    "dirt",
+                    "d",
+                    "ft",
+                ):
+                    if _ped_fast >= 110:
+                        tier2_bonus += 0.12  # Strong dirt breeding
+                    elif _ped_fast >= 100:
+                        tier2_bonus += 0.05
+                    elif _ped_fast < 80:
+                        tier2_bonus -= 0.08  # Weak dirt breeding
+
+                # 21d. Pedigree distance rating — stamina breeding
+                _ped_dist = _ped.get("pedigree_distance", np.nan)
+                if pd.notna(_ped_dist) and not is_sprint:
+                    if _ped_dist >= 110:
+                        tier2_bonus += 0.12  # Bred for distance
+                    elif _ped_dist >= 100:
+                        tier2_bonus += 0.05
+                    elif _ped_dist < 80 and _ped_dist > 0:
+                        tier2_bonus -= 0.10  # Suspect stamina breeding
+
+                # 21e. Dam production — stakes winners / total winners
+                _dam_starters = _ped.get("dam_starters", np.nan)
+                _dam_winners = _ped.get("dam_winners", np.nan)
+                _dam_sw = _ped.get("dam_sw", np.nan)
+                if pd.notna(_dam_starters) and _dam_starters >= 3:
+                    _dam_win_rate = (
+                        _dam_winners / _dam_starters if pd.notna(_dam_winners) else 0
+                    )
+                    if _dam_win_rate >= 0.60:
+                        tier2_bonus += 0.12  # Prolific dam
+                    elif _dam_win_rate >= 0.40:
+                        tier2_bonus += 0.05
+                    if pd.notna(_dam_sw) and _dam_sw >= 2:
+                        tier2_bonus += 0.10  # Multiple stakes winners from dam
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 22. RACE SHAPES ANALYSIS (Feb 21, 2026)
+        # Positive shape values = slower pace (closing-friendly),
+        # Negative = faster pace (speed-favoring). Match horse style.
+        try:
+            if _horse_block:
+                _shapes = parse_race_shapes(_horse_block)
+                if _shapes:
+                    _avg_1c = np.mean(
+                        [
+                            s.get("shape_1c", 0)
+                            for s in _shapes
+                            if s.get("shape_1c") is not None
+                        ]
+                    )
+                    _avg_2c = np.mean(
+                        [
+                            s.get("shape_2c", 0)
+                            for s in _shapes
+                            if s.get("shape_2c") is not None
+                        ]
+                    )
+                    _style_upper = (style or "NA").upper()
+                    # Closer in closing-friendly shapes
+                    if _avg_2c > 2 and _style_upper in ("S", "SS", "CLOSER"):
+                        tier2_bonus += 0.15  # Closing-friendly pace history
+                    # Speed horse in speed-favoring shapes
+                    elif _avg_1c < -2 and _style_upper in ("E", "EP", "SPEED"):
+                        tier2_bonus += 0.12  # Speed-favoring pace history
+                    # Presser in moderate shapes
+                    elif abs(_avg_1c) <= 1 and _style_upper in ("P", "EP"):
+                        tier2_bonus += 0.08  # Honest-pace shapes
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 23. EARNINGS & CLASS RECORD (Feb 21, 2026)
+        # Career earnings per start is a class indicator. Higher EPS = proven class.
+        try:
+            if _horse_block:
+                _ecr = parse_earnings_and_class_record(_horse_block)
+                _eps = _ecr.get("earnings_per_start")
+                _career_wpct = _ecr.get("career_win_pct")
+                _dist_wpct = _ecr.get("dist_win_pct")
+                _surf_wpct = _ecr.get("surface_win_pct")
+
+                if _eps is not None and _eps > 0:
+                    if _eps >= 30000:
+                        tier2_bonus += 0.20  # High-class earner
+                    elif _eps >= 15000:
+                        tier2_bonus += 0.10
+                    elif _eps < 3000:
+                        tier2_bonus -= 0.08  # Low earner
+
+                if _career_wpct is not None and _career_wpct > 0:
+                    if _career_wpct >= 0.25:
+                        tier2_bonus += 0.10  # Career winner
+                    elif _career_wpct < 0.05 and _career_wpct > 0:
+                        tier2_bonus -= 0.08  # Chronic loser
+
+                if _dist_wpct is not None and _dist_wpct >= 0.30:
+                    tier2_bonus += 0.08  # Distance proven
+                if _surf_wpct is not None and _surf_wpct >= 0.30:
+                    tier2_bonus += 0.08  # Surface proven
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 24. EQUIPMENT / MEDICATION / WEIGHT (Feb 21, 2026)
+        # First-time Lasix, blinkers changes, and apprentice allowances are
+        # significant angles tracked by professional handicappers.
+        try:
+            if _horse_block:
+                _emw = parse_equipment_medication_weight(_horse_block)
+                if _emw.get("first_lasix"):
+                    tier2_bonus += 0.20  # First-time Lasix = major angle
+                if _emw.get("blinkers_change") == "ON":
+                    tier2_bonus += 0.12  # Blinkers on = sharpening focus
+                elif _emw.get("blinkers_change") == "OFF":
+                    tier2_bonus -= 0.05  # Blinkers off = mixed signal
+                _app_allow = _emw.get("apprentice_allowance")
+                if _app_allow is not None and _app_allow >= 5:
+                    tier2_bonus += 0.08  # Significant weight break from apprentice
         except Exception as exc:
             logger.debug("Tier2 calc skipped: %s", exc)
 

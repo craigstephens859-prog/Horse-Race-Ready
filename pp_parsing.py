@@ -633,6 +633,7 @@ def parse_pedigree_snips(block) -> dict:
         "dam_sw": np.nan,  # stakes winners
     }
     if not block:
+        logger.debug("parse_pedigree_snips: empty block")
         return out
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -2088,6 +2089,7 @@ def parse_lifetime_records(block: str) -> dict:
     """
     out = {}
     if not block:
+        logger.debug("parse_lifetime_records: empty block")
         return out
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -2161,6 +2163,8 @@ def parse_lifetime_records(block: str) -> dict:
             if pr:
                 out[label.lower()] = {"ped_rating": int(pr.group(1)), "starts": 0}
 
+    if not out:
+        logger.debug("parse_lifetime_records: block provided but no records extracted")
     return out
 
 
@@ -2171,8 +2175,9 @@ def parse_prime_power(block: str) -> dict:
 
     Returns: {"rating": float, "rank": int, "rank_text": str}
     """
-    out = {"rating": 0.0, "rank": 0, "rank_text": ""}
+    out = {"rating": None, "rank": None, "rank_text": ""}
     if not block:
+        logger.debug("parse_prime_power: empty block")
         return out
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -2184,9 +2189,11 @@ def parse_prime_power(block: str) -> dict:
 
     # Also try format: "L 122" (BRIS Level = normalized Prime Power)
     lv = re.search(r"\bL\s+(\d{2,3})\b", block_str)
-    if lv and out["rating"] == 0.0:
+    if lv and out["rating"] is None:
         out["rating"] = float(lv.group(1))
 
+    if out["rating"] is None and out["rank"] is None:
+        logger.debug("parse_prime_power: block provided but no Prime Power found")
     return out
 
 
@@ -2205,6 +2212,7 @@ def parse_race_shapes(block: str) -> list[dict]:
     """
     shapes = []
     if not block:
+        logger.debug("parse_race_shapes: empty block")
         return shapes
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -2228,6 +2236,8 @@ def parse_race_shapes(block: str) -> list[dict]:
             except (ValueError, IndexError):
                 pass
 
+    if not shapes:
+        logger.debug("parse_race_shapes: block provided but no shapes extracted")
     return shapes[:10]
 
 
@@ -2263,6 +2273,7 @@ def parse_jockey_trainer_full_stats(block: str) -> dict:
         "trainer_angles": [],
     }
     if not block:
+        logger.debug("parse_jockey_trainer_full_stats: empty block")
         return out
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -2404,6 +2415,21 @@ def parse_jockey_trainer_full_stats(block: str) -> dict:
                 }
             )
 
+    _has_data = any(
+        out[k]
+        for k in (
+            "jockey_meet",
+            "trainer_meet",
+            "jockey_year",
+            "trainer_year",
+            "jockey_styles",
+            "trainer_angles",
+        )
+    )
+    if not _has_data:
+        logger.debug(
+            "parse_jockey_trainer_full_stats: block provided but no stats extracted"
+        )
     return out
 
 
@@ -2421,6 +2447,7 @@ def parse_per_race_details(block: str) -> list[dict]:
     """
     races = []
     if not block:
+        logger.debug("parse_per_race_details: empty block")
         return races
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -2439,9 +2466,9 @@ def parse_per_race_details(block: str) -> list[dict]:
             try:
                 race["odds"] = float(odds_m.group(1))
             except ValueError:
-                race["odds"] = 0.0
+                race["odds"] = None
         else:
-            race["odds"] = 0.0
+            race["odds"] = None
 
         # ── JOCKEY NAME ──
         # Jockey name appears after finish position, before weight
@@ -2455,10 +2482,10 @@ def parse_per_race_details(block: str) -> list[dict]:
             try:
                 race["weight"] = int(jockey_m.group(3))
             except ValueError:
-                race["weight"] = 0
+                race["weight"] = None
         else:
             race["jockey"] = ""
-            race["weight"] = 0
+            race["weight"] = None
 
         # ── MEDICATION ──
         # "L" = Lasix, "B" = Bute, "Lb" = both
@@ -2474,11 +2501,11 @@ def parse_per_race_details(block: str) -> list[dict]:
         if last_nums:
             try:
                 fs = int(last_nums[-1])
-                race["field_size"] = fs if 2 <= fs <= 20 else 0
+                race["field_size"] = fs if 2 <= fs <= 20 else None
             except ValueError:
-                race["field_size"] = 0
+                race["field_size"] = None
         else:
-            race["field_size"] = 0
+            race["field_size"] = None
 
         # ── COMMENT ──
         # Trip comment appears after top finishers, before field size
@@ -2509,6 +2536,10 @@ def parse_per_race_details(block: str) -> list[dict]:
 
         races.append(race)
 
+    if not races:
+        logger.debug(
+            "parse_per_race_details: block provided but no race lines extracted"
+        )
     return races[:10]
 
 
@@ -2528,10 +2559,11 @@ def parse_equipment_medication_weight(block: str) -> dict:
         "first_lasix": False,
         "bute": False,
         "blinkers_change": "",
-        "weight": 0,
-        "apprentice_allowance": 0,
+        "weight": None,
+        "apprentice_allowance": None,
     }
     if not block:
+        logger.debug("parse_equipment_medication_weight: empty block")
         return out
     block_str = str(block) if not isinstance(block, str) else block
 
@@ -2563,6 +2595,10 @@ def parse_equipment_medication_weight(block: str) -> dict:
         except ValueError:
             pass
 
+    if out["weight"] is None and not out["lasix"] and not out["bute"]:
+        logger.debug(
+            "parse_equipment_medication_weight: block provided but no equip/med/weight found"
+        )
     return out
 
 
@@ -2579,13 +2615,19 @@ def parse_earnings_and_class_record(block: str) -> dict:
               "dist_win_pct": float, "surface_win_pct": float, "career_win_pct": float}
     """
     out = {
-        "career_earnings": 0,
-        "earnings_per_start": 0.0,
-        "dist_win_pct": 0.0,
-        "surface_win_pct": 0.0,
-        "career_win_pct": 0.0,
+        "career_earnings": None,
+        "earnings_per_start": None,
+        "dist_win_pct": None,
+        "surface_win_pct": None,
+        "career_win_pct": None,
     }
     lifetime = parse_lifetime_records(block)
+
+    if not lifetime:
+        logger.debug(
+            "parse_earnings_and_class_record: no lifetime data to derive earnings"
+        )
+        return out
 
     if "life" in lifetime:
         life = lifetime["life"]
