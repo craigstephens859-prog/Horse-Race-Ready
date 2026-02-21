@@ -2724,10 +2724,14 @@ def apply_enhancements_and_figs(
         positions = parse_fractional_positions(block)
         savant_bonus += calculate_trip_quality(positions, field_size=len(df))
 
-        # 3. E1/E2/LP pace analysis
+        # 3. E1/E2/LP pace analysis — now with BRIS Pace/Speed Par adjustment
         pace_data = parse_e1_e2_lp_values(block)
+        _pars = st.session_state.get("pace_speed_pars", {})
         savant_bonus += analyze_pace_figures(
-            pace_data["e1"], pace_data["e2"], pace_data["lp"]
+            pace_data["e1"], pace_data["e2"], pace_data["lp"],
+            e1_par=_pars.get("e1_par", 0),
+            e2_par=_pars.get("e2_par", 0),
+            lp_par=_pars.get("lp_par", 0),
         )
 
         # 4. Bounce detection
@@ -5109,6 +5113,211 @@ def style_match_score_multi(
 
 
 # ======================== Phase 1: Enhanced Parsing Functions ========================
+
+
+def parse_pace_speed_pars(pp_text: str) -> dict[str, int]:
+    """Parse BRIS Pace & Speed Pars from the PP header area.
+
+    These are the race-level E1, E2/Late, and SPD pars — the AVERAGE pace/speed
+    ratings for the LEADER/WINNER at today's class level and distance.
+    Comparing a horse's figures to these pars reveals if they're above or below
+    class standard.
+
+    Format in PP text: "E1  E2/LATE  SPD" followed by "86  88/ 87  88"
+    Or inline: "E1 E2/Late Spd" headers with values on next line.
+
+    Returns: {"e1_par": int, "e2_par": int, "lp_par": int, "spd_par": int}
+    """
+    pars: dict[str, int] = {}
+    if not pp_text:
+        return pars
+
+    # Pattern 1: "E1  E2/LATE  SPD" on one line, values on next
+    # or "E1  E2/ LATE  SPD" format, then "86  88/ 87  88"
+    header_match = re.search(
+        r"E1\s+E2\s*/?\s*(?:LATE|Late)\s+SPD\s*\n\s*(\d{2,3})\s+(\d{2,3})\s*/?\s*(\d{2,3})\s+(\d{2,3})",
+        pp_text, re.IGNORECASE,
+    )
+    if header_match:
+        pars["e1_par"] = int(header_match.group(1))
+        pars["e2_par"] = int(header_match.group(2))
+        pars["lp_par"] = int(header_match.group(3))
+        pars["spd_par"] = int(header_match.group(4))
+        return pars
+
+    # Pattern 2: Inline "E1 86 E2/Late 88/87 SPD 88" or similar
+    inline_match = re.search(
+        r"E1\s+(\d{2,3})\s+E2\s*/?\s*(?:Late)?\s*(\d{2,3})\s*/?\s*(\d{2,3})\s+SPD\s+(\d{2,3})",
+        pp_text, re.IGNORECASE,
+    )
+    if inline_match:
+        pars["e1_par"] = int(inline_match.group(1))
+        pars["e2_par"] = int(inline_match.group(2))
+        pars["lp_par"] = int(inline_match.group(3))
+        pars["spd_par"] = int(inline_match.group(4))
+        return pars
+
+    # Pattern 3: "BRIS Pace & Speed Pars" section with separated values
+    pars_match = re.search(
+        r"(?:Pace|PACE).*?(?:Speed|SPD).*?Pars?\s*\]?.*?(\d{2,3})\s+(\d{2,3})\s*/?\s*(\d{2,3})\s+(\d{2,3})",
+        pp_text, re.DOTALL | re.IGNORECASE,
+    )
+    if pars_match:
+        pars["e1_par"] = int(pars_match.group(1))
+        pars["e2_par"] = int(pars_match.group(2))
+        pars["lp_par"] = int(pars_match.group(3))
+        pars["spd_par"] = int(pars_match.group(4))
+
+    return pars
+
+
+def parse_quickplay_comments(horse_block: str) -> dict[str, list[str]]:
+    """Parse QuickPlay positive (★) and negative (●) comments for a horse.
+
+    These Brisnet-generated comments are pre-analyzed signals appearing at the
+    top of each horse's PP section:
+    - ★ (star) = Positive comment (e.g., "Won last race", "Rail post winning at 19%")
+    - ● (bullet) = Negative comment (e.g., "Moves up in class", "Poor Speed Figures")
+
+    Returns: {"positive": ["Won last race", ...], "negative": ["Poor Speed Figures", ...]}
+    """
+    result: dict[str, list[str]] = {"positive": [], "negative": []}
+    if not horse_block:
+        return result
+
+    # Find the comments section — appears between header stats and race lines
+    # Look for lines starting with ★ or ● (or text equivalents)
+    for line in horse_block.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Positive signals (★ or star marker)
+        star_comments = re.findall(r"[★\u2605]\s*([^★●\u2605\u25CF]+)", line)
+        for c in star_comments:
+            c = c.strip()
+            if len(c) > 5:  # Filter noise
+                result["positive"].append(c)
+
+        # Negative signals (● or bullet marker)
+        bullet_comments = re.findall(r"[●\u25CF]\s*([^★●\u2605\u25CF]+)", line)
+        for c in bullet_comments:
+            c = c.strip()
+            if len(c) > 5:
+                result["negative"].append(c)
+
+    return result
+
+
+def score_quickplay_comments(comments: dict[str, list[str]]) -> float:
+    """Convert parsed QuickPlay comments into a tier2 bonus/penalty.
+
+    Positive signals get graduated bonuses; negative signals get penalties.
+    Known high-impact patterns are weighted more heavily.
+
+    Returns: float bonus/penalty (typically -1.5 to +1.5)
+    """
+    bonus = 0.0
+    if not comments:
+        return bonus
+
+    # --- Positive signals ---
+    for comment in comments.get("positive", []):
+        c_lower = comment.lower()
+        if "won last race" in c_lower or "won last start" in c_lower:
+            bonus += 0.3  # Winner last out
+        elif "winning at" in c_lower and "clip" in c_lower:
+            bonus += 0.2  # Hot post/jockey/trainer stat
+        elif "sharp" in c_lower and "workout" in c_lower:
+            bonus += 0.2  # Sharp recent work
+        elif "drops" in c_lower or "drop in class" in c_lower:
+            bonus += 0.25  # Class dropper
+        elif "won" in c_lower:
+            bonus += 0.15  # General positive
+        elif "top trainer" in c_lower or "leading" in c_lower:
+            bonus += 0.15
+        elif "improving" in c_lower or "speed figures improving" in c_lower:
+            bonus += 0.2
+        else:
+            bonus += 0.1  # Generic positive
+
+    # --- Negative signals ---
+    for comment in comments.get("negative", []):
+        c_lower = comment.lower()
+        if "poor speed figures" in c_lower or "poor speed" in c_lower:
+            bonus -= 0.3  # Bad speed = major red flag
+        elif "well below" in c_lower and ("avg winning" in c_lower or "average winning" in c_lower):
+            bonus -= 0.35  # Best speed below race average = severe
+        elif "moves up in class" in c_lower or "class from last" in c_lower:
+            bonus -= 0.2  # Stepping up
+        elif "has not raced" in c_lower:
+            # Parse days — "Has not raced in 48 days"
+            days_match = re.search(r"(\d+)\s*days", c_lower)
+            if days_match:
+                days = int(days_match.group(1))
+                if days >= 90:
+                    bonus -= 0.3  # Long layoff
+                elif days >= 45:
+                    bonus -= 0.15  # Moderate layoff
+                else:
+                    bonus -= 0.05  # Short rest
+            else:
+                bonus -= 0.1
+        elif "no wins" in c_lower or "winless" in c_lower:
+            bonus -= 0.2
+        elif "poor" in c_lower or "worst" in c_lower:
+            bonus -= 0.15
+        elif "never won" in c_lower:
+            bonus -= 0.2
+        else:
+            bonus -= 0.1  # Generic negative
+
+    return float(np.clip(bonus, -1.5, 1.5))
+
+
+def parse_bris_rr_cr_per_race(horse_block: str) -> list[dict[str, int]]:
+    """Parse BRIS Race Rating (RR) and Class Rating (CR) from past race lines.
+
+    In the PP, each past race line has RR and CR in columns before the race type.
+    Format: "DATE TRACK  DIST  FRACS  AGE  RR CR RACETYPE"
+    Example: "03Jan26CT  1 1/16 ft  :24  :49  1:15  34  106  Mdn 32k"
+    The RR appears before CR, both appear before the RACETYPE column.
+
+    Pattern from PP: "34 112 79 75/"  where first number after age is RR~CR combined
+    Actually in BRISNET format: position between fractional times and race type
+
+    Returns: [{"rr": 106, "cr": 112}, ...] most recent first
+    """
+    races = []
+    if not horse_block:
+        return races
+
+    # Match race lines by date pattern
+    # Format: DDMonYYTrack  distance  fracs  RR CR RACETYPE
+    # The RR and CR appear as two numbers right before the RACETYPE keyword
+    for line in horse_block.split("\n"):
+        # Only process race lines (start with date like "03Jan26")
+        date_match = re.match(r"(\d{2}[A-Za-z]{3}\d{2})", line.strip())
+        if not date_match:
+            continue
+
+        # Find RR CR before racetype keywords
+        # Pattern: ... number  number  Mdn|Clm|Alw|OC|MC|Stk|G1|G2|G3|Hcp
+        rr_cr_match = re.search(
+            r"(\d{2,3})\s+(\d{2,3})\s+(?:Mdn|Clm|Alw|OC|MC|Stk|Hcp|©|G1|G2|G3)",
+            line,
+        )
+        if rr_cr_match:
+            try:
+                rr = int(rr_cr_match.group(1))
+                cr = int(rr_cr_match.group(2))
+                # Sanity check: RR and CR should be in reasonable range (50-120)
+                if 30 <= rr <= 130 and 30 <= cr <= 130:
+                    races.append({"rr": rr, "cr": cr})
+            except (ValueError, TypeError):
+                pass
+
+    return races[:6]  # Last 6 races
 
 
 def parse_track_bias_stats(pp_text: str) -> dict[str, any]:
@@ -8206,6 +8415,13 @@ def compute_bias_ratings(
     if race_summary_rankings:
         st.session_state["race_summary_rankings"] = race_summary_rankings
 
+    # NEW: Parse BRIS Pace & Speed Pars (E1, E2/Late, SPD)
+    # These are RACE-LEVEL pars (same for all horses) representing the average
+    # pace/speed ratings of the leader/winner at today's class/distance.
+    pace_speed_pars = parse_pace_speed_pars(pp_text) if pp_text else {}
+    if pace_speed_pars:
+        st.session_state["pace_speed_pars"] = pace_speed_pars
+
     # RACE AUDIT ENHANCEMENT: Calculate weekly bias amplifier multiplier
     # When extreme biases detected (e.g., E=2.05, S=0.32), amplify track_bias_mult
     weekly_bias_amplifier = calculate_weekly_bias_amplifier(impact_values)
@@ -9048,6 +9264,42 @@ def compute_bias_ratings(
                     _summary_bonus += 0.15  # Double leader
 
                 tier2_bonus += np.clip(_summary_bonus, -1.0, 2.0)
+        except BaseException:
+            pass
+
+        # 15. QUICKPLAY COMMENTS INTEGRATION (Feb 20, 2026)
+        # Parse Brisnet's pre-analyzed positive (star) and negative (bullet) signals
+        # per horse. These are high-value curated handicapping angles.
+        try:
+            if _horse_block:
+                _qp_comments = parse_quickplay_comments(_horse_block)
+                if _qp_comments.get("positive") or _qp_comments.get("negative"):
+                    tier2_bonus += score_quickplay_comments(_qp_comments)
+        except BaseException:
+            pass
+
+        # 16. BRIS RR/CR INTEGRATION (Feb 20, 2026)
+        # Parse BRIS Race Rating and Class Rating from past race lines.
+        # Use RR trend to detect improving/declining form, and CR to validate class.
+        try:
+            if _horse_block:
+                _rr_cr_data = parse_bris_rr_cr_per_race(_horse_block)
+                if len(_rr_cr_data) >= 2:
+                    # Check RR trend (improving = recent > older)
+                    recent_rr = _rr_cr_data[0].get("rr", 0)
+                    older_rr = sum(r.get("rr", 0) for r in _rr_cr_data[1:]) / len(_rr_cr_data[1:])
+                    if recent_rr > 0 and older_rr > 0:
+                        rr_trend = (recent_rr - older_rr) / max(older_rr, 1)
+                        if rr_trend > 0.05:  # Improving by 5%+
+                            tier2_bonus += min(rr_trend * 2, 0.5)  # Max +0.5
+                        elif rr_trend < -0.05:  # Declining by 5%+
+                            tier2_bonus += max(rr_trend * 1.5, -0.3)  # Max -0.3
+
+                    # CR validation: compare most recent CR to race avg CR
+                    recent_cr = _rr_cr_data[0].get("cr", 0)
+                    avg_cr = sum(r.get("cr", 0) for r in _rr_cr_data) / len(_rr_cr_data)
+                    if recent_cr > avg_cr * 1.1:
+                        tier2_bonus += 0.15  # Stepping up in class AND performing
         except BaseException:
             pass
 
