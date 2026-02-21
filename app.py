@@ -12,6 +12,7 @@
 # - Classic bullet-style report with download buttons
 # - Resilient to older/newer Streamlit rerun APIs
 
+import contextlib
 import logging
 import math
 import os
@@ -294,7 +295,7 @@ try:
 
         # Get most recent save timestamp
         cursor.execute("""
-            SELECT analyzed_timestamp FROM races_analyzed 
+            SELECT analyzed_timestamp FROM races_analyzed
             ORDER BY analyzed_timestamp DESC LIMIT 1
         """)
         last_save = cursor.fetchone()
@@ -908,10 +909,8 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
         # --- Extract Race Number (anchored at end, e.g., "Race 9") ---
         race_num_match = re.search(r"\bRace\s+(\d+)\s*$", text, re.IGNORECASE)
         if race_num_match:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 result["race_number"] = int(race_num_match.group(1))
-            except (ValueError, TypeError):
-                pass
             text = text[: race_num_match.start()].strip()
 
         # --- Extract Date (e.g., "Thursday, February 05, 2026") ---
@@ -989,10 +988,8 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
         type_purse_match = re.search(r"([©¨§]?\w+)\s+(\d+)\w*", text)
         if type_purse_match:
             result["race_type"] = type_purse_match.group(1)
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 result["purse_amount"] = int(type_purse_match.group(2))
-            except (ValueError, TypeError):
-                pass
 
         return result
 
@@ -1027,10 +1024,8 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
         race_type_match = re.search(r"([©¨§]?[A-Za-z]+)\s+(\d+)", part)
         if race_type_match and not result["race_type"]:
             result["race_type"] = race_type_match.group(1)
-            try:
+            with contextlib.suppress(Exception):
                 result["purse_amount"] = int(race_type_match.group(2))
-            except Exception:
-                pass
             continue
 
         # Distance (e.g., "6 Furlongs", "1 Mile", "1„ Mile")
@@ -1066,10 +1061,8 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
         # Race number (e.g., "Race 8")
         race_num_match = re.search(r"race\s+(\d+)", part_lower)
         if race_num_match:
-            try:
+            with contextlib.suppress(Exception):
                 result["race_number"] = int(race_num_match.group(1))
-            except Exception:
-                pass
 
     return result
 
@@ -2089,10 +2082,8 @@ def parse_claiming_prices(block) -> list[int]:
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
     for m in re.finditer(r"Clm\s+(\d+)", block_str):
-        try:
+        with contextlib.suppress(BaseException):
             prices.append(int(m.group(1)))
-        except BaseException:
-            pass
     return prices[:5]
 
 
@@ -3962,7 +3953,7 @@ def parse_recent_class_levels(block) -> list[dict]:
             finish_match = re.search(r"FIN\s+(\d{1,2})[ƒ®«ª³©¨°¬²‚±\s]", line)
             finish_pos = int(finish_match.group(1)) if finish_match else 0
 
-            try:
+            with contextlib.suppress(Exception):
                 races.append(
                     {
                         "race_type": race_type,
@@ -3970,8 +3961,6 @@ def parse_recent_class_levels(block) -> list[dict]:
                         "finish_pos": finish_pos,
                     }
                 )
-            except Exception:
-                pass
 
     return races[:5]  # Last 5 races
 
@@ -7778,7 +7767,7 @@ def post_bias_score(post_bias_pick: str, post_str: str) -> float:
         "favors outside (8+)": lambda p: (
             MODEL_CONFIG["post_bias_outside_bonus"] if p and p >= 8 else 0.0
         ),
-        "no significant post bias": lambda p: 0.0,
+        "no significant post bias": lambda _p: 0.0,
     }
     fn = table.get(pick, table["no significant post bias"])
     return float(np.clip(fn(post), -0.5, 0.5))
@@ -7808,7 +7797,7 @@ def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
         "favors outside (8+)": lambda p: (
             MODEL_CONFIG["post_bias_outside_bonus"] if p and p >= 8 else 0.0
         ),
-        "no significant post bias": lambda p: 0.0,
+        "no significant post bias": lambda _p: 0.0,
     }
 
     # Aggregate bonuses from all selected post biases
@@ -7919,13 +7908,11 @@ def compute_bias_ratings(
                 # Load track-specific weights if available (falls back to global)
                 _track_weights = LEARNED_WEIGHTS
                 if ADAPTIVE_LEARNING_AVAILABLE and track_name:
-                    try:
+                    with contextlib.suppress(Exception):  # Fall back to global weights
                         _track_weights = get_live_learned_weights(
                             PERSISTENT_DB_PATH,
                             track_code=track_name.upper(),
                         )
-                    except Exception:
-                        pass  # Fall back to global weights
 
                 engine = UnifiedRatingEngine(
                     softmax_tau=3.0, learned_weights=_track_weights
@@ -9212,37 +9199,29 @@ def compute_bias_ratings(
 
         # 9. RACE AUDIT ENHANCEMENT 3: 1st-After-Claim Trainer Boost
         # Oaklawn R1: Trainer Ashford had 28% win rate on 1st-after-claim but got zero credit
-        try:
+        with contextlib.suppress(BaseException):
             tier2_bonus += calculate_first_after_claim_bonus(_horse_block)
-        except BaseException:
-            pass
 
         # 10. RACE AUDIT ENHANCEMENT 4: Style vs Weekly Bias Dynamic Penalty/Bonus
         # Oaklawn R1: Stalker impact 0.32 but model ranked S-type Tiffany Twist #1
         # E-type Tell Me When (impact 2.05) was ranked dead last
-        try:
+        with contextlib.suppress(BaseException):
             tier2_bonus += calculate_style_vs_weekly_bias_bonus(style, impact_values)
-        except BaseException:
-            pass
 
         # 11. RACE AUDIT ENHANCEMENT 5: Post Position Bias Multiplier
         # Oaklawn R1: Rail posts 1-3 had 2.59 weekly impact, Sombra Dorada (post 1)
         # finished 2nd but model had her 5th
-        try:
+        with contextlib.suppress(BaseException):
             tier2_bonus += calculate_post_position_bias_bonus(post, weekly_post_impacts)
-        except BaseException:
-            pass
 
         # 12. RACE AUDIT ENHANCEMENT 6: E1/E2 Pace Supremacy Bonus
         # Oaklawn R9: She's Storming had best E1 (91) matching par (91) but got no credit.
         # At speed-biased tracks, the horse with the fastest E1 in the field has a tactical
         # advantage. Combined with E/P style + inside post, this is a MAJOR signal.
-        try:
+        with contextlib.suppress(BaseException):
             tier2_bonus += calculate_pace_supremacy_bonus(
                 name, _horse_block, _field_e1_values, impact_values
             )
-        except BaseException:
-            pass
 
         # 13. TRACK BIAS STATS INTEGRATION (Feb 20, 2026)
         # Uses %Wire, Speed Bias%, WnrAvgBL, and %Races Won from parsed Track Bias Stats.
@@ -12604,7 +12583,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                 f"💾 **Auto-saved to gold database:** `{race_id}`"
                             )
                             st.info(
-                                f"📊 Saved {len(horses_data)} horses with {len([k for k in horses_data[0].keys() if k.startswith('rating_') or k.startswith('angle_')])} ML features each"
+                                f"📊 Saved {len(horses_data)} horses with {len([k for k in horses_data[0] if k.startswith('rating_') or k.startswith('angle_')])} ML features each"
                             )
                             st.session_state["last_saved_race_id"] = race_id
                             st.info(
@@ -12870,7 +12849,7 @@ else:
 
                 # Get all races with status
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         r.race_id,
                         r.track_code,
                         r.race_date,
@@ -13782,7 +13761,7 @@ else:
         with tab_calibration:
             st.markdown("""
             ### 🤖 Real-Time Adaptive Learning Monitor
-            
+
             This dashboard shows **proof** that your model is automatically learning from each race result.
             After every result submission, the system adjusts component weights using gradient descent
             and **persists the learned weights to the database** so they survive restarts.
@@ -13833,12 +13812,12 @@ else:
                         "a_group_drift_gate": ("A-Group Gate", 2.0),
                     }
 
-                    col_idx = 0
-                    for key, (label, default) in odds_weights.items():
+                    for col_idx, (key, (label, default)) in enumerate(
+                        odds_weights.items()
+                    ):
                         with cols2[col_idx]:
                             val = db_learned_weights.get(key, default)
                             st.metric(label, f"{val:.1f}", help=f"Default: {default}")
-                        col_idx += 1
 
                     st.success(
                         "✅ **Weights persist to database** - survive app restarts and Render redeploys!"
@@ -13855,7 +13834,7 @@ else:
                         cursor = conn.cursor()
 
                         cursor.execute("""
-                            SELECT 
+                            SELECT
                                 calibration_timestamp,
                                 races_analyzed,
                                 winner_accuracy,
@@ -13947,7 +13926,7 @@ else:
                     _cal_conn = sqlite3.connect(gold_db.db_path)
                     _cal_cursor = _cal_conn.cursor()
                     _cal_cursor.execute("""
-                        SELECT calibration_timestamp, races_analyzed, winner_accuracy, 
+                        SELECT calibration_timestamp, races_analyzed, winner_accuracy,
                                top3_accuracy, weights_json, improvements_json
                         FROM calibration_history
                         ORDER BY calibration_timestamp DESC
@@ -14130,10 +14109,8 @@ else:
             #   ADMIN_PASSWORD = "your-password-here"
             # Or locally in .streamlit/secrets.toml
             admin_password = ""
-            try:
+            with contextlib.suppress(Exception):
                 admin_password = st.secrets.get("ADMIN_PASSWORD", "")
-            except Exception:
-                pass
 
             # Determine admin access WITHOUT st.stop() (which kills Tab 5)
             _retrain_unlocked = False
@@ -14557,27 +14534,21 @@ else:
 
                         _profile = None
                         if TRACK_INTEL_AVAILABLE and _track_intel is not None:
-                            try:
+                            with contextlib.suppress(Exception):
                                 _profile = _track_intel.build_full_profile(
                                     _selected_track
                                 )
-                            except Exception:
-                                pass
 
                         _accuracy = {}
                         _biases = {}
                         if gold_db:
-                            try:
+                            with contextlib.suppress(Exception):
                                 _accuracy = (
                                     gold_db.calculate_accuracy_stats(_selected_track)
                                     or {}
                                 )
-                            except Exception:
-                                pass
-                            try:
+                            with contextlib.suppress(Exception):
                                 _biases = gold_db.detect_biases(_selected_track) or {}
-                            except Exception:
-                                pass
 
                         _tc_races = _cal_tracks.get(_selected_track, {}).get(
                             "races_trained_on", _profile.total_races if _profile else 0
