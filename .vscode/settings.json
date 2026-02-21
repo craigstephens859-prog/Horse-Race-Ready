@@ -48,5 +48,6 @@
         "reportUnusedVariable": "warning",
         "reportUnusedImport": "warning",
         "reportUnnecessaryComparison": "warning"
-    }
+    },
+    "git.ignoreLimitWarning": true
 }
