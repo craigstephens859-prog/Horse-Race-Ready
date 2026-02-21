@@ -75,6 +75,47 @@ except ImportError:
     RACE_CLASS_PARSER_AVAILABLE = False
     parse_and_calculate_class = None
 
+# ── Optional engine imports (mirrored from app.py for self-containment) ──
+try:
+    from elite_parser_v2_gold import GoldStandardBRISNETParser
+
+    ELITE_PARSER_AVAILABLE = True
+except ImportError:
+    ELITE_PARSER_AVAILABLE = False
+    GoldStandardBRISNETParser = None
+
+try:
+    from unified_rating_engine import UnifiedRatingEngine
+
+    UNIFIED_ENGINE_AVAILABLE = True
+except ImportError:
+    UNIFIED_ENGINE_AVAILABLE = False
+    UnifiedRatingEngine = None
+
+try:
+    from auto_calibration_engine_v2 import get_live_learned_weights
+
+    ADAPTIVE_LEARNING_AVAILABLE = True
+    PERSISTENT_DB_PATH = "gold_high_iq.db"
+    LEARNED_WEIGHTS = get_live_learned_weights(PERSISTENT_DB_PATH)
+except Exception:
+    ADAPTIVE_LEARNING_AVAILABLE = False
+    LEARNED_WEIGHTS = {}
+    PERSISTENT_DB_PATH = "gold_high_iq.db"
+
+    def get_live_learned_weights(_db_path="", **_kw):  # noqa: E302
+        return {}
+
+
+try:
+    from ml_blend_engine import MLBlendEngine
+
+    _ml_blend = MLBlendEngine(model_dir="models")
+    ML_BLEND_AVAILABLE = _ml_blend.model is not None
+except Exception:
+    ML_BLEND_AVAILABLE = False
+    _ml_blend = None
+
 logger = logging.getLogger(__name__)
 
 
