@@ -17,7 +17,6 @@ import logging
 import os
 import re
 from datetime import datetime
-from itertools import product
 from typing import Any
 
 import numpy as np
@@ -80,23 +79,11 @@ except ImportError:
 
 # ML Engine removed — functionality superseded by MLBlendEngine + TrackIntelligenceEngine
 
-# Historical Data System - LAZY LOADED for fast boot times
-# PyTorch is 2-3GB and slows down Render deploys significantly
-# We load it only when Section E is accessed
-HISTORICAL_DATA_AVAILABLE = None  # None = not yet loaded, True/False after load attempt
-HistoricalDataBuilder = None
-convert_to_ml_format = None
-HISTORICAL_IMPORT_ERROR = None
-
 # ULTRATHINK INTEGRATION: Import optimized 8-angle system
 try:
-    from horse_angles8 import (
-        compute_eight_angles,  # noqa: F401  # imported for ANGLES_AVAILABLE check
-    )
-
-    ANGLES_AVAILABLE = True
+    from horse_angles8 import compute_eight_angles  # noqa: F401
 except ImportError:
-    ANGLES_AVAILABLE = False
+    pass
 
 # RACE CLASS PARSER: Comprehensive race type and purse analysis
 try:
@@ -843,16 +830,6 @@ def _get_track_bias_delta(
 # ===================== Core Helpers =====================
 
 
-def detect_valid_race_headers(pp_text: str):
-    toks = ("purse", "furlong", "mile", "clm", "allow", "stake", "pars", "post time")
-    headers = []
-    for m in re.finditer(r"(?mi)^\s*Race\s+(\d+)\b", pp_text or ""):
-        win = (pp_text[m.end() : m.end() + 250] or "").lower()
-        if any(t in win for t in toks):
-            headers.append(int(m.group(1)))
-    return headers
-
-
 HORSE_HDR_RE = re.compile(
     r"""(?mi)^\s*
     (?:POST\s+)?          # optional "POST " prefix
@@ -1334,19 +1311,6 @@ def detect_bounce_risk(speed_figs: list[int]) -> float:
 # ========== END SAVANT ENHANCEMENTS ==========
 
 
-SPEED_FIG_RE = re.compile(
-    # CRITICAL FIX: Match the actual BRISNET format with E1 E2/ LP +calls SPEED_FIG
-    # Example: "88 81/ 77 +4 +1 70"  where 70 is the speed figure
-    r"(?mi)"
-    r"\s+(\d{2,3})"  # E1 pace figure (88)
-    r"\s+(\d{2,3})\s*/\s*(\d{2,3})"  # E2/LP figures (81/ 77)
-    r"\s+[+-]\d+"  # Call position (+4)
-    r"\s+[+-]\d+"  # Call position (+1)
-    r"\s+(\d{2,3})"  # SPEED FIGURE (70) - THIS IS WHAT WE WANT!
-    r"(?:\s|$)"  # End with space or end of line
-)
-
-
 def parse_speed_figures_for_block(block) -> list[int]:
     """Extract speed figures using E2/LP '/' marker, then skip call changes to find fig.
 
@@ -1613,21 +1577,10 @@ def apply_enhancements_and_figs(
         st.caption("No speed figures parsed. R_ENHANCE_ADJ set to 0.")
         df["R_ENHANCE_ADJ"] = 0.0
     else:
-        # 1. Merge the figures into the main ratings dataframe
-        df = df.merge(figs_df[["Horse", "AvgTop2"]], on="Horse", how="left")
-
-        # 2. Calculate the average "AvgTop2" for all horses *in this race*
-        # We fillna with a low value for first-timers
-        df["AvgTop2"] = df["AvgTop2"].fillna(MODEL_CONFIG["first_timer_fig_default"])
-        race_avg_fig = df["AvgTop2"].mean()
-
-        # 3. Define the enhancement (R_ENHANCE_ADJ)
-        SPEED_FIG_WEIGHT = MODEL_CONFIG["speed_fig_weight"]
-
-        df["R_ENHANCE_ADJ"] = (df["AvgTop2"] - race_avg_fig) * SPEED_FIG_WEIGHT
-
-        # 4. Clean up the temporary column
-        df = df.drop(columns=["AvgTop2"])
+        # Traditional path: speed figures already included in base R via
+        # compute_bias_ratings cspeed component. Do NOT add them again here.
+        # Initialize R_ENHANCE_ADJ to 0; angle + savant bonuses applied below.
+        df["R_ENHANCE_ADJ"] = 0.0
 
     # --- END SPEED FIGURE LOGIC ---
 
@@ -1804,250 +1757,6 @@ def overlay_table(
         )
 
     return pd.DataFrame(rows)
-
-
-# ---------- Exotics (Harville + bias anchors) ----------
-
-
-def calculate_exotics_biased(
-    fair_probs: dict[str, float],
-    anchor_first: str | None = None,
-    anchor_second: str | None = None,
-    pool_third: set | None = None,
-    pool_fourth: set | None = None,
-    weights=MODEL_CONFIG["exotic_bias_weights"],
-    top_n: int = 50,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-
-    horses = list(fair_probs.keys())
-    probs = np.array([fair_probs[h] for h in horses])
-    n = len(horses)
-    if n < 2:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    def w_first(h):
-        return weights[0] if anchor_first and h == anchor_first else 1.0
-
-    def w_second(h):
-        return weights[1] if anchor_second and h == anchor_second else 1.0
-
-    def w_third(h):
-        return weights[2] if pool_third and h in pool_third else 1.0
-
-    def w_fourth(h):
-        return weights[3] if pool_fourth and h in pool_fourth else 1.0
-
-    # Add a 5th weight for SH5, re-using 4th
-    def w_fifth(h):
-        return weights[3] if pool_fourth and h in pool_fourth else 1.0
-
-    # EXACTA
-    ex_rows = []
-    for i, j in product(range(n), range(n)):
-        if i == j:
-            continue
-        denom_ex = 1.0 - probs[i]
-        if denom_ex <= 1e-9:
-            continue
-        prob = probs[i] * (probs[j] / denom_ex)
-        prob *= w_first(horses[i]) * w_second(horses[j])
-        ex_rows.append({"Ticket": f"{horses[i]} → {horses[j]}", "Prob": prob})
-
-    # CRITICAL FIX: Validate probability sum before normalization
-    ex_total = sum(r["Prob"] for r in ex_rows)
-    if ex_total <= 1e-9:  # If sum is essentially zero, return empty DataFrame
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    for r in ex_rows:
-        r["Prob"] = r["Prob"] / ex_total
-    for r in ex_rows:
-        if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
-        else:
-            r["Fair Odds"] = float("inf")
-    df_ex = pd.DataFrame(ex_rows).sort_values(by="Prob", ascending=False).head(top_n)
-
-    if n < 3:
-        return df_ex, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-    # TRIFECTA
-    tri_rows = []
-    top8 = np.argsort(-probs)[: min(n, 8)]
-    for i, j, k in product(top8, top8, top8):
-        if len({i, j, k}) != 3:
-            continue
-        denom_ij = 1.0 - probs[i]
-        denom_ijk = 1.0 - probs[i] - probs[j]
-        if denom_ij <= 1e-9 or denom_ijk <= 1e-9:
-            continue
-
-        p_ij = probs[i] * (probs[j] / denom_ij)
-        prob_ijk = p_ij * (probs[k] / denom_ijk)
-        prob_ijk *= w_first(horses[i]) * w_second(horses[j]) * w_third(horses[k])
-        tri_rows.append(
-            {"Ticket": f"{horses[i]} → {horses[j]} → {horses[k]}", "Prob": prob_ijk}
-        )
-
-    tri_total = sum(r["Prob"] for r in tri_rows) or 1.0
-    for r in tri_rows:
-        r["Prob"] = r["Prob"] / tri_total
-    for r in tri_rows:
-        if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
-        else:
-            r["Fair Odds"] = float("inf")
-    df_tri = pd.DataFrame(tri_rows).sort_values(by="Prob", ascending=False).head(top_n)
-
-    if n < 4:
-        return df_ex, df_tri, pd.DataFrame(), pd.DataFrame()
-
-    # SUPERFECTA
-    super_rows = []
-    top6 = np.argsort(-probs)[: min(n, 6)]  # Keep this at top6 for performance
-    for i, j, k, l in product(top6, top6, top6, top6):
-        if len({i, j, k, l}) != 4:
-            continue
-        denom_ij = 1.0 - probs[i]
-        denom_ijk = 1.0 - probs[i] - probs[j]
-        denom_ijkl = 1.0 - probs[i] - probs[j] - probs[k]
-        if denom_ij <= 1e-9 or denom_ijk <= 1e-9 or denom_ijkl <= 1e-9:
-            continue
-
-        p_ij = probs[i] * (probs[j] / denom_ij)
-        p_ijk = p_ij * (probs[k] / denom_ijk)
-        prob_ijkl = p_ijk * (probs[l] / denom_ijkl)
-        prob_ijkl *= (
-            w_first(horses[i])
-            * w_second(horses[j])
-            * w_third(horses[k])
-            * w_fourth(horses[l])
-        )
-        super_rows.append(
-            {
-                "Ticket": f"{horses[i]} → {horses[j]} → {horses[k]} → {horses[l]}",
-                "Prob": prob_ijkl,
-            }
-        )
-
-    super_total = sum(r["Prob"] for r in super_rows) or 1.0
-    for r in super_rows:
-        r["Prob"] = r["Prob"] / super_total
-    for r in super_rows:
-        if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
-        else:
-            r["Fair Odds"] = float("inf")
-    df_super = (
-        pd.DataFrame(super_rows).sort_values(by="Prob", ascending=False).head(top_n)
-    )
-
-    if n < 5:
-        return df_ex, df_tri, df_super, pd.DataFrame()
-
-    # --- NEW: SUPER HIGH 5 ---
-    sh5_rows = []
-    top7 = np.argsort(-probs)[: min(n, 7)]  # Use Top 7 for SH5
-    for i, j, k, l, m in product(top7, top7, top7, top7, top7):
-        if len({i, j, k, l, m}) != 5:
-            continue
-        denom_ij = 1.0 - probs[i]
-        denom_ijk = 1.0 - probs[i] - probs[j]
-        denom_ijkl = 1.0 - probs[i] - probs[j] - probs[k]
-        denom_ijklm = 1.0 - probs[i] - probs[j] - probs[k] - probs[l]
-        if (
-            denom_ij <= 1e-9
-            or denom_ijk <= 1e-9
-            or denom_ijkl <= 1e-9
-            or denom_ijklm <= 1e-9
-        ):
-            continue
-
-        p_ij = probs[i] * (probs[j] / denom_ij)
-        p_ijk = p_ij * (probs[k] / denom_ijk)
-        p_ijkl = p_ijk * (probs[l] / denom_ijkl)
-        prob_ijklm = p_ijkl * (probs[m] / denom_ijklm)
-
-        prob_ijklm *= (
-            w_first(horses[i])
-            * w_second(horses[j])
-            * w_third(horses[k])
-            * w_fourth(horses[l])
-            * w_fifth(horses[m])
-        )
-
-        sh5_rows.append(
-            {
-                "Ticket": f"{horses[i]} → {horses[j]} → {horses[k]} → {horses[l]} → {horses[m]}",
-                "Prob": prob_ijklm,
-            }
-        )
-
-    sh5_total = sum(r["Prob"] for r in sh5_rows) or 1.0
-    for r in sh5_rows:
-        r["Prob"] = r["Prob"] / sh5_total
-    for r in sh5_rows:
-        if r["Prob"] > 1e-9:
-            r["Fair Odds"] = (1.0 / r["Prob"]) - 1
-        else:
-            r["Fair Odds"] = float("inf")
-    df_super_hi_5 = (
-        pd.DataFrame(sh5_rows).sort_values(by="Prob", ascending=False).head(top_n)
-    )
-
-    return df_ex, df_tri, df_super, df_super_hi_5
-
-
-def format_exotics_for_prompt(df: pd.DataFrame, title: str) -> str:
-    if df is None or df.empty:
-        return f"**{title} (Model-Derived)**\nNone.\n"
-    df = df.copy()
-    if "Prob %" not in df.columns:
-        df["Prob %"] = (df["Prob"] * 100).round(2)
-    # Format Fair Odds to handle potential infinity
-    df["Fair Odds"] = df["Fair Odds"].apply(
-        lambda x: f"{x:.2f}" if np.isfinite(x) else "in"
-    )
-    md = df[["Ticket", "Prob %", "Fair Odds"]].to_markdown(index=False)
-    return f"**{title} (Model-Derived)**\n{md}\n"
-
-
-# -------- Class + suitability model --------
-
-
-def calculate_final_rating(
-    race_type,
-    race_surface,
-    race_distance_category,
-    race_surface_condition,
-    horse_surface_pref,
-    horse_distance_pref,
-):
-    """
-    Calculates a final "rating" scalar (lower is better) by combining:
-    base class bias × surface fit × distance fit × condition variance.
-    """
-    base_bias = base_class_bias.get(str(race_type).strip().lower(), 1.10)
-
-    # Surface fit
-    surface_modifier = 1.0
-    if str(horse_surface_pref).lower() == "any":
-        surface_modifier = 1.01
-    elif race_surface.lower() != str(horse_surface_pref).lower():
-        surface_modifier = 1.12
-
-    # Distance fit
-    distance_modifier = 1.0
-    if str(horse_distance_pref).lower() == "any":
-        distance_modifier = 1.02
-    elif race_distance_category != horse_distance_pref:
-        distance_modifier = 1.15
-
-    # Condition variance (confidence)
-    condition_modifier = condition_modifiers.get(
-        str(race_surface_condition).lower(), 1.0
-    )
-
-    final_score = base_bias * surface_modifier * distance_modifier * condition_modifier
-    return round(final_score, 4)
 
 
 # ===================== Form Cycle & Recency Analysis =====================
@@ -2430,140 +2139,6 @@ def calculate_form_cycle_rating(
 
 
 # ===================== Class Rating Calculator (Comprehensive) =====================
-
-
-def extract_race_metadata_from_pp(pp_text: str) -> dict[str, Any]:
-    """
-    🎯 ELITE EXTRACTION: Parse race type and purse from BRISNET PP text header.
-
-    CRITICAL FOR CALIBRATION: All TUP R4/R5/R6/R7 fixes depend on correct race_quality.
-    - Claiming: Speed 2.5x, pace cap +0.75
-    - Allowance: Speed 2.2x, Class 2.5x
-    - Stakes: Speed 1.8x, Class 3.0x
-
-    BRISNET HEADER FORMATS:
-    1. "PURSE $25,000. Claiming. For Three Year Olds..."
-    2. "6th Race. Santa Anita. $50,000 Maiden Special Weight"
-    3. "Race 4 - Clm25000n2L" (embedded in race type)
-    4. "Turf Paradise Race 7 - $6,250 Claiming"
-
-    Returns:
-        dict: {
-            'purse': int,
-            'race_type_raw': str,  # Original text
-            'race_type_normalized': str,  # "claiming", "allowance", etc.
-            'confidence': float,  # 0.0-1.0
-            'source': str  # Where data came from
-        }
-    """
-    result = {
-        "purse": 0,
-        "race_type_raw": "",
-        "race_type_normalized": "unknown",
-        "confidence": 0.0,
-        "source": "none",
-    }
-
-    if not pp_text or len(pp_text) < 50:
-        return result
-
-    # Extract first 500 chars (header section)
-    header = pp_text[:500]
-
-    # ═══════════════ PATTERN 1: "PURSE $X,XXX. Race Type." ═══════════════
-    purse_match = re.search(r"PURSE\s+\$([\d,]+)", header, re.IGNORECASE)
-    if purse_match:
-        try:
-            result["purse"] = int(purse_match.group(1).replace(",", ""))
-            result["confidence"] += 0.5
-            result["source"] = "PURSE header"
-        except ValueError:
-            pass
-
-    # Extract race type after PURSE line
-    if purse_match:
-        after_purse = header[purse_match.end() : purse_match.end() + 100]
-        # Look for race type keywords
-        if re.search(r"\bClaiming\b", after_purse, re.IGNORECASE):
-            result["race_type_raw"] = "Claiming"
-            result["race_type_normalized"] = "claiming"
-            result["confidence"] += 0.5
-        elif re.search(r"\bAllowance\b", after_purse, re.IGNORECASE):
-            result["race_type_raw"] = "Allowance"
-            result["race_type_normalized"] = "allowance"
-            result["confidence"] += 0.5
-        elif re.search(r"\bMaiden\s+Special\s+Weight\b", after_purse, re.IGNORECASE):
-            result["race_type_raw"] = "Maiden Special Weight"
-            result["race_type_normalized"] = "maiden special weight"
-            result["confidence"] += 0.5
-        elif re.search(r"\bMaiden\s+Claiming\b", after_purse, re.IGNORECASE):
-            result["race_type_raw"] = "Maiden Claiming"
-            result["race_type_normalized"] = "maiden claiming"
-            result["confidence"] += 0.5
-        elif re.search(r"\b(Stakes?|G[123]|Grade)\b", after_purse, re.IGNORECASE):
-            result["race_type_raw"] = "Stakes"
-            result["race_type_normalized"] = "stakes"
-            result["confidence"] += 0.5
-
-    # ═══════════════ PATTERN 2: "$X,XXX Race Type" in any line ═══════════════
-    if result["purse"] == 0:
-        money_race_match = re.search(
-            r"\$(\d{1,3}(?:,\d{3})*)\s+(Claiming|Allowance|Maiden|Stakes?)",
-            header,
-            re.IGNORECASE,
-        )
-        if money_race_match:
-            try:
-                result["purse"] = int(money_race_match.group(1).replace(",", ""))
-                result["race_type_raw"] = money_race_match.group(2)
-                result["race_type_normalized"] = money_race_match.group(2).lower()
-                result["confidence"] = 0.8
-                result["source"] = "$X Race Type"
-            except ValueError:
-                pass
-
-    # ═══════════════ PATTERN 3: Embedded in race type code ═══════════════
-    if result["purse"] == 0:
-        # Look for patterns like "Clm25000n2L", "MC50000", "Alw28000"
-        embedded_match = re.search(r"(Clm|MC|Alw|OC)(\d{4,6})", header, re.IGNORECASE)
-        if embedded_match:
-            race_code = embedded_match.group(1).upper()
-            purse_num = embedded_match.group(2)
-            try:
-                result["purse"] = int(purse_num)
-                result["race_type_raw"] = f"{race_code}{purse_num}"
-                result["source"] = "embedded code"
-                result["confidence"] = 0.6
-
-                # Decode race type
-                if race_code in ["CLM", "MC"]:
-                    result["race_type_normalized"] = "claiming"
-                elif race_code in ["ALW", "OC"]:
-                    result["race_type_normalized"] = "allowance"
-            except ValueError:
-                pass
-
-    # ═══════════════ PATTERN 4: "Race X - Race Type" ═══════════════
-    if result["race_type_normalized"] == "unknown":
-        race_type_line = re.search(
-            r"Race\s+\d+\s*-\s*([A-Za-z\s]+)", header, re.IGNORECASE
-        )
-        if race_type_line:
-            race_text = race_type_line.group(1).strip().lower()
-            if "claim" in race_text:
-                result["race_type_normalized"] = "claiming"
-                result["race_type_raw"] = race_type_line.group(1).strip()
-                result["confidence"] += 0.3
-            elif "allow" in race_text:
-                result["race_type_normalized"] = "allowance"
-                result["race_type_raw"] = race_type_line.group(1).strip()
-                result["confidence"] += 0.3
-            elif "maiden" in race_text:
-                result["race_type_normalized"] = "maiden special weight"
-                result["race_type_raw"] = race_type_line.group(1).strip()
-                result["confidence"] += 0.3
-
-    return result
 
 
 def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
@@ -3484,7 +3059,6 @@ pedigree_per_horse: dict[str, dict] = {}
 figs_per_horse: dict[str, list[int]] = {}
 
 # Try to use elite parser first for better accuracy
-elite_parser_used = False
 if (
     ELITE_PARSER_AVAILABLE
     and GoldStandardBRISNETParser is not None
@@ -3497,7 +3071,6 @@ if (
 
         if validation.get("overall_confidence", 0.0) >= 0.6:
             # Use elite parser data
-            elite_parser_used = True
             # Store full elite parsed data for downstream DB storage
             st.session_state["elite_horses_data"] = {
                 name: obj.to_dict() for name, obj in horses.items()
@@ -3580,34 +3153,6 @@ ppi_map_by_horse = ppi_results.get("by_horse", {})
 st.session_state["ppi_val"] = ppi_val  # Store for Classic Report
 
 # ===================== Class build per horse (angles+pedigree in background) =====================
-
-
-def _infer_horse_surface_pref(
-    _name: str, _ped: dict, ang_df: pd.DataFrame | None, race_surface: str
-) -> str:
-    cats = (
-        " ".join(ang_df["Category"].astype(str).tolist()).lower()
-        if (ang_df is not None and not ang_df.empty)
-        else ""
-    )
-    if "dirt to tur" in cats:
-        return "Tur"
-    if "turf to dirt" in cats:
-        return "Dirt"
-    # If nothing clear, use race surface (neutral) to avoid over-penalizing
-    return race_surface
-
-
-def _infer_horse_distance_pref(ped: dict) -> str:
-    awds = [x for x in [ped.get("sire_awd"), ped.get("damsire_awd")] if pd.notna(x)]
-    if not awds:
-        return "any"
-    m = float(np.nanmean(awds))
-    if m <= 6.5:
-        return "≤6"
-    if m >= 7.5:
-        return "8f+"
-    return "6.5–7"
 
 
 def _angles_pedigree_tweak(
@@ -3866,38 +3411,6 @@ def _style_bias_label_from_choice(choice: str) -> str:
     if up in ("P", "S"):
         return "closer favoring"
     return "fair/neutral"
-
-
-def style_match_score(running_style_bias: str, style: str, quirin: float) -> float:
-    """Single-bias style match score with NA QSP handling (Feb 11, 2026)."""
-    bias = (running_style_bias or "").strip().lower()
-    stl = (style or "NA").upper()
-
-    table = MODEL_CONFIG["style_match_table"]
-
-    try:
-        q = float(quirin)
-    except Exception:
-        q = np.nan
-
-    # NA style: use QSP for partial credit (Feb 11, 2026)
-    if stl == "NA" and pd.notna(q) and q >= NA_STYLE_PARAMS["qsp_ep_threshold"]:
-        if "favoring" in bias and "closer" not in bias:
-            base = 0.15 * (q / 8.0)
-        elif "closer" in bias:
-            base = -0.10 * (q / 8.0)
-        else:
-            base = 0.0
-    else:
-        base = table.get(bias, table["fair/neutral"]).get(stl, 0.0)
-
-    if (
-        stl in ("E", "E/P")
-        and pd.notna(q)
-        and q >= MODEL_CONFIG["style_quirin_threshold"]
-    ):
-        base += MODEL_CONFIG["style_quirin_bonus"]
-    return float(np.clip(base, -1.0, 1.0))
 
 
 def style_match_score_multi(
@@ -5179,23 +4692,6 @@ def calculate_track_condition_granular(
 # ======================== MARATHON CALIBRATION (McKnight G3 Learning) ========================
 
 
-def is_fts_in_msw(horse, race_data):
-    """
-    Check if a horse is a First-Time Starter (FTS) in a Maiden Special Weight (MSW) race.
-
-    FTS horses have zero previous racing history (starts == 0) and require special handling
-    for maiden special weight races where pedigree, workouts, and connections matter more.
-
-    Args:
-        horse: Dictionary containing horse data including 'starts' field
-        race_data: Dictionary containing race metadata including 'type' field
-
-    Returns:
-        bool: True if horse is FTS in MSW race, False otherwise
-    """
-    return horse.get("starts", 0) == 0 and race_data.get("type", "").upper() == "MSW"
-
-
 def is_elite_trainer(trainer_name):
     """
     Check if trainer is elite (top 5% debut ROI) for FTS handling.
@@ -5212,280 +4708,6 @@ def is_elite_trainer(trainer_name):
     if not trainer_name:
         return False
     return trainer_name in ELITE_TRAINERS  # O(1) lookup via set
-
-
-def predict_race_with_fts(race_data, score_horse_func, default_params):
-    """
-    Template function demonstrating FTS (First-Time Starter) integration into race prediction.
-
-    This function shows how to:
-    1. Detect FTS horses in MSW races using is_fts_in_msw()
-    2. Apply FTS-specific confidence parameters from FTS_PARAMS
-    3. Apply elite trainer multiplier boost (1.2x for elite trainers)
-    4. Fall back to standard parameters for non-FTS horses
-
-    Integration pattern for existing rating systems:
-    - Check is_fts_in_msw(horse, race_data) before scoring
-    - Use FTS_PARAMS instead of DEFAULT_PARAMS if True
-    - Apply 0.75 base multiplier * 1.2 elite trainer boost
-    - Standard horses use 1.0 multiplier
-
-    Args:
-        race_data: Dict with 'horses' list and 'type' (race type like 'MSW')
-        score_horse_func: Function that takes (horse, params) and returns score
-        default_params: Standard confidence parameters for non-FTS horses
-
-    Returns:
-        List of top 4 horse names sorted by score
-
-    Example:
-        race_data = {
-            'type': 'MSW',
-            'horses': [
-                {'name': 'Horse A', 'starts': 0, 'trainer': 'Wesley Ward'},
-                {'name': 'Horse B', 'starts': 3, 'trainer': 'John Doe'}
-            ]
-        }
-        top_4 = predict_race_with_fts(race_data, score_func, DEFAULT_PARAMS)
-    """
-    scores = {}
-
-    for horse in race_data.get("horses", []):
-        # Apply FTS-specific handling if applicable
-        if is_fts_in_msw(horse, race_data):
-            # Use FTS confidence parameters (higher pedigree/odds, lower speed/form)
-            params = FTS_PARAMS
-            # Base multiplier 0.75 accounts for uncertainty, elite trainer adds 20%
-            trainer_boost = 1.2 if is_elite_trainer(horse.get("trainer", "")) else 1.0
-            multiplier = 0.75 * trainer_boost
-        else:
-            # Standard horses use default parameters and no multiplier adjustment
-            params = default_params
-            multiplier = 1.0
-
-        # Calculate score with appropriate parameters and apply multiplier
-        base_score = score_horse_func(horse, params)
-        scores[horse["name"]] = base_score * multiplier
-
-    # Sort and return top 4 horses
-    top_4 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:4]
-    return [name for name, score in top_4]
-
-
-def parse_race_info(race_data):
-    """
-    Parse race information to identify race classification, maiden status, and FTS horses.
-
-    Production-ready parser for Equibase, DRF, and Brisnet data formats.
-    Handles all race classes: MSW, MCL, ALW, STK, CLM, etc.
-
-    Args:
-        race_data: Dict or DataFrame with race information
-                   Expected keys: 'race_type' (str), 'horses' (list of dicts)
-                   Each horse dict should have: 'name', 'starts', 'past_performances'
-
-    Returns:
-        Dict with exactly 3 keys:
-        {
-            "race_class": str,              # Normalized abbreviation (e.g., "MSW", "MCL")
-            "is_maiden_race": bool,         # True for any maiden type
-            "horses": list[dict]            # Enhanced with "is_first_time_starter"
-        }
-
-    Example:
-        >>> race_data = {
-        ...     'race_type': 'Maiden Special Weight',
-        ...     'horses': [
-        ...         {'name': 'Debut Horse', 'starts': 0},
-        ...         {'name': 'Veteran', 'starts': 5}
-        ...     ]
-        ... }
-        >>> result = parse_race_info(race_data)
-        >>> result['race_class']
-        'MSW'
-        >>> result['is_maiden_race']
-        True
-        >>> result['horses'][0]['is_first_time_starter']
-        True
-    """
-    # Convert DataFrame to dict if needed
-    if isinstance(race_data, pd.DataFrame):
-        race_data = race_data.to_dict("records")[0] if not race_data.empty else {}
-
-    # Race classification mapping (comprehensive coverage)
-    RACE_CLASS_MAP = {
-        # Maiden races
-        "maiden special weight": "MSW",
-        "maiden claiming": "MCL",
-        "maiden": "MSW",  # Default maiden to MSW
-        "msw": "MSW",
-        "mcl": "MCL",
-        "mdn sp wt": "MSW",
-        "mdn clm": "MCL",
-        # Allowance races
-        "allowance": "ALW",
-        "allowance optional claiming": "AOC",
-        "alw": "ALW",
-        "aoc": "AOC",
-        "optional claiming": "AOC",
-        # Stakes races
-        "stakes": "STK",
-        "graded stakes": "GST",
-        "listed stakes": "LST",
-        "stk": "STK",
-        "grd": "GST",
-        "grde": "GST",
-        # Claiming races
-        "claiming": "CLM",
-        "clm": "CLM",
-        "claiming handicap": "CLH",
-        "clh": "CLH",
-        # Handicap races
-        "handicap": "HCP",
-        "hcp": "HCP",
-        # Trial races
-        "trial": "TRL",
-        "trl": "TRL",
-        # Starter races
-        "starter allowance": "STR",
-        "starter optional claiming": "SOC",
-        "starter": "STR",
-        "str": "STR",
-        "soc": "SOC",
-    }
-
-    # Maiden race types (for is_maiden_race detection)
-    MAIDEN_TYPES = {"MSW", "MCL"}
-
-    # Extract race type string
-    race_type_raw = race_data.get("race_type", "") or race_data.get("type", "") or ""
-    race_type_lower = str(race_type_raw).lower().strip()
-
-    # Normalize race class
-    race_class = "UNK"  # Unknown default
-    for key, abbrev in RACE_CLASS_MAP.items():
-        if key in race_type_lower:
-            race_class = abbrev
-            break
-
-    # Check if maiden race
-    is_maiden_race = race_class in MAIDEN_TYPES or "maiden" in race_type_lower
-
-    # Process horses
-    horses = race_data.get("horses", [])
-    if not isinstance(horses, list):
-        horses = []
-
-    enhanced_horses = []
-    for horse in horses:
-        # Ensure horse is a dict
-        if not isinstance(horse, dict):
-            continue
-
-        # Create enhanced horse dict (preserve all original keys)
-        enhanced_horse = horse.copy()
-
-        # Extract starts from various possible fields
-        starts = horse.get("starts", 0)
-        if starts is None or starts == "":
-            starts = 0
-
-        # Try alternative field names if starts is 0
-        if starts == 0:
-            starts = horse.get("career_starts", 0) or 0
-            if starts == 0:
-                # Try to infer from past_performances
-                past_perf = horse.get("past_performances", []) or []
-                if isinstance(past_perf, list):
-                    starts = len(past_perf)
-
-        # Convert to int safely
-        try:
-            starts = int(starts)
-        except (ValueError, TypeError):
-            starts = 0
-
-        # Determine FTS status
-        is_fts = starts == 0
-
-        # Add required fields
-        enhanced_horse["starts"] = starts
-        enhanced_horse["is_first_time_starter"] = is_fts
-
-        # Ensure name field exists
-        if "name" not in enhanced_horse:
-            enhanced_horse["name"] = (
-                horse.get("horse_name", "") or horse.get("Horse", "") or "Unknown"
-            )
-
-        enhanced_horses.append(enhanced_horse)
-
-    # Return strictly formatted dict with EXACTLY 3 keys
-    return {
-        "race_class": race_class,
-        "is_maiden_race": is_maiden_race,
-        "horses": enhanced_horses,
-    }
-
-
-def calculate_workout_bonus_v2(
-    workout_data: dict[str, Any], is_marathon: bool = False
-) -> float:
-    """
-    CALIBRATED: Improved workout bonus emphasizing percentile rankings.
-
-    Key Learning from McKnight G3:
-    - Layabout (WINNER): Bullet 1/2 (Top 50%)
-    - Summer Cause (4th): Bullet 15/16 (Top 94%)
-    - Zverev (5th): Bullet 30/44 (Top 68%)
-
-    Percentile matters MORE than just having a bullet work!
-    """
-    bonus = 0.0
-
-    if not workout_data:
-        return 0.0
-
-    # Calculate percentile if rank/total available
-    percentile = workout_data.get("percentile", 100)
-    if (
-        percentile is None
-        and workout_data.get("work_rank")
-        and workout_data.get("work_total")
-    ):
-        try:
-            rank = int(workout_data["work_rank"])
-            total = int(workout_data["work_total"])
-            percentile = (rank / total) * 100
-        except BaseException:
-            percentile = 100
-
-    # ELITE PERCENTILE BONUSES (from post-race analysis)
-    if percentile <= 10:
-        bonus += 0.25  # TOP 10% = elite work
-    elif percentile <= 25:
-        bonus += 0.15  # TOP 25% = strong work
-    elif percentile <= 50:
-        bonus += 0.10  # TOP 50% = solid work (WINNER range!)
-    elif percentile <= 75:
-        bonus += 0.05  # Top 75%
-    else:
-        bonus += 0.02  # Below 75%
-
-    # Additional bullet work bonus (but smaller than before)
-    quality = workout_data.get("quality", "none")
-    if quality == "bullet":
-        bonus += 0.05  # Reduced from 0.10
-    elif quality == "handily":
-        bonus += 0.03  # Reduced from 0.05
-
-    # Marathon bonus for recent sharp works
-    if is_marathon:
-        days_since = workout_data.get("days_since", 999)
-        if days_since <= 7 and percentile <= 50:
-            bonus += 0.05  # Very recent sharp work
-
-    return float(np.clip(bonus, 0.0, 0.35))
 
 
 def calculate_layoff_bonus(days_off: int, is_marathon: bool = False) -> float:
@@ -6490,57 +5712,7 @@ def analyze_form_cycle(past_races: list[dict]) -> dict[str, Any]:
     }
 
 
-def calculate_workout_bonus(workout_data: dict[str, Any]) -> float:
-    """
-    COMPREHENSIVE: Bonus for workout quality and recency.
-    """
-    if not workout_data:
-        return 0.0
-
-    bonus = 0.0
-
-    # Rating bonus (B = bullet work = fastest of day)
-    rating = workout_data.get("rating", "")
-    if "B" in rating or "b" in rating:
-        bonus += 0.10  # Bullet work
-    elif "H" in rating or "h" in rating:
-        bonus += 0.05  # Handily
-
-    # Rank/percentile bonus (top 20% of works)
-    percentile = workout_data.get("percentile", 0.5)
-    if percentile <= 0.20:
-        bonus += 0.08  # Top 20% work
-    elif percentile <= 0.40:
-        bonus += 0.05  # Top 40% work
-
-    return float(np.clip(bonus, 0, 0.15))
-
-
 # ======================== End ELITE ENHANCEMENTS ========================
-
-
-def post_bias_score(post_bias_pick: str, post_str: str) -> float:
-    pick = (post_bias_pick or "").strip().lower()
-    # ELITE: Use optimized post parser (3x faster than regex)
-    post = _parse_post_number(post_str)
-
-    table = {
-        "favors rail (1)": lambda p: (
-            MODEL_CONFIG["post_bias_rail_bonus"] if p == 1 else 0.0
-        ),
-        "favors inner (1-3)": lambda p: (
-            MODEL_CONFIG["post_bias_inner_bonus"] if p and 1 <= p <= 3 else 0.0
-        ),
-        "favors mid (4-7)": lambda p: (
-            MODEL_CONFIG["post_bias_mid_bonus"] if p and 4 <= p <= 7 else 0.0
-        ),
-        "favors outside (8+)": lambda p: (
-            MODEL_CONFIG["post_bias_outside_bonus"] if p and p >= 8 else 0.0
-        ),
-        "no significant post bias": lambda _p: 0.0,
-    }
-    fn = table.get(pick, table["no significant post bias"])
-    return float(np.clip(fn(post), -0.5, 0.5))
 
 
 def post_bias_score_multi(post_bias_picks: list, post_str: str) -> float:
@@ -7326,6 +6498,18 @@ def compute_bias_ratings(
             raw_speed = (horse_fig - race_avg_fig) * MODEL_CONFIG["speed_fig_weight"]
 
             # ═══════════════════════════════════════════════════════════
+            # CONDITION MODIFIER: Dampen speed figures on off-track days
+            # Speed figures are less predictive on sloppy/muddy/heavy
+            # surfaces because track-variant adjustments are unreliable.
+            # condition_modifiers: fast=1.0, sloppy=1.10, heavy=1.10
+            # Dampening: (1.10-1.0)*1.5 = 15% reduction in speed weight
+            # ═══════════════════════════════════════════════════════════
+            cond_mod = condition_modifiers.get(condition_txt.lower(), 1.0)
+            if cond_mod > 1.0:
+                dampening = 1.0 - (cond_mod - 1.0) * 1.5
+                raw_speed *= max(dampening, 0.60)  # Floor at 60%
+
+            # ═══════════════════════════════════════════════════════════
             # SPEED RECENCY FLOOR (Feb 13, 2026 — TAM R7 Post-Race Fix)
             # If a horse's last figure is >25 below the field's last-race
             # average, its speed component is hard-capped. Prevents stale
@@ -7433,9 +6617,10 @@ def compute_bias_ratings(
                 dis_starts = int(dis_match.group(1))
                 dis_wins = int(dis_match.group(2))
                 dis_places = int(dis_match.group(3))
+                dis_shows = int(dis_match.group(4))
                 if dis_starts >= 4:
                     dis_win_pct = dis_wins / dis_starts
-                    dis_itm_pct = (dis_wins + dis_places) / dis_starts
+                    dis_itm_pct = (dis_wins + dis_places + dis_shows) / dis_starts
                     if dis_win_pct >= 0.35:
                         tier2_bonus += 0.8  # Elite distance specialist
                     elif dis_win_pct >= 0.25:
@@ -7482,9 +6667,10 @@ def compute_bias_ratings(
                     trk_starts = int(trk_match.group(1))
                     trk_wins = int(trk_match.group(2))
                     trk_places = int(trk_match.group(3))
+                    trk_shows = int(trk_match.group(4))
                     if trk_starts >= 4:
                         trk_win_pct = trk_wins / trk_starts
-                        trk_itm_pct = (trk_wins + trk_places) / trk_starts
+                        trk_itm_pct = (trk_wins + trk_places + trk_shows) / trk_starts
                         if trk_win_pct >= 0.30:
                             tier2_bonus += 0.6  # Track specialist
                         elif trk_win_pct >= 0.20:
@@ -8039,7 +7225,7 @@ def compute_bias_ratings(
                 if pct_won:
                     style_pct = pct_won.get(style_upper, 0)
                     if style_upper == "E/P":
-                        style_pct = max(pct_won.get("E/P", 0), pct_won.get("E", 0) // 2)
+                        style_pct = max(pct_won.get("E/P", 0), pct_won.get("E", 0) / 2)
                     if style_pct >= 50:
                         tier2_bonus += 0.3  # This runstyle wins majority of races
                     elif style_pct <= 5 and style_pct > 0:
@@ -8165,18 +7351,17 @@ def compute_bias_ratings(
             try:
                 # Detect major class drop from PP data
                 _class_levels = {
-                    "mdn": 1,
-                    "mc": 2,
-                    "msw": 3,
-                    "clm": 4,
-                    "c": 4,
-                    "alw": 6,
+                    "g1": 11,
+                    "g2": 10,
+                    "g3": 9,
+                    "stk": 8,
                     "aoc": 7,
                     "oc": 7,
-                    "stk": 8,
-                    "g3": 9,
-                    "g2": 10,
-                    "g1": 11,
+                    "alw": 6,
+                    "clm": 4,
+                    "msw": 3,
+                    "mc": 2,
+                    "mdn": 1,
                 }
                 _past_class = 0
                 _today_class = 0
@@ -8510,12 +7695,42 @@ def compute_bias_ratings(
             # (Uses race_metadata already extracted above — no re-extraction needed)
 
             # STEP 2: Override/refine race_quality if we have better purse/type info
+            _pre_refine_quality = race_quality
             if purse_amount >= 500000:
                 race_quality = "elite"
             elif purse_amount >= 150000 and race_quality not in ["elite", "high"]:
                 race_quality = "high"
             elif race_type_clean == "stakes_graded" and race_quality != "elite":
                 race_quality = "elite"
+
+            # If quality was upgraded, recalculate component weights to stay consistent
+            if race_quality != _pre_refine_quality:
+                if parser_class_weight is not None:
+                    if race_quality == "elite":
+                        speed_multiplier = 1.8
+                        form_weight = 2.2
+                    elif race_quality == "high":
+                        speed_multiplier = 2.0
+                        form_weight = 2.0
+                    elif race_quality == "low":
+                        speed_multiplier = 2.5
+                        form_weight = 1.8
+                    else:
+                        speed_multiplier = 2.2
+                        form_weight = 2.0
+                else:
+                    if race_quality in ("low", "low-maiden"):
+                        speed_multiplier = 2.5
+                        class_weight = 2.0
+                        form_weight = 1.8
+                    elif race_quality in ("mid", "mid-maiden", "high"):
+                        speed_multiplier = 2.2
+                        class_weight = 2.5
+                        form_weight = 2.0
+                    else:
+                        speed_multiplier = 1.8
+                        class_weight = 3.0
+                        form_weight = 1.8
 
             # STEP 3: Display detected metadata for user validation (ONCE per race, not per horse)
             if not _race_class_shown:
@@ -11013,9 +10228,6 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             angle_recency = 0.0
                             angle_workout = 0.0
                             angle_connections = 0.0
-                            angle_surface_switch = 0.0
-                            angle_distance_switch = 0.0
-                            angle_debut = 0.0
 
                             if angles_df is not None and not angles_df.empty:
                                 cats_lower = " ".join(
@@ -11044,23 +10256,6 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                                     or "combo" in cats_lower
                                 ):
                                     angle_connections = 1.0
-                                if (
-                                    "turf to dirt" in cats_lower
-                                    or "dirt to turf" in cats_lower
-                                ):
-                                    angle_surface_switch = 1.0
-                                if (
-                                    "distance" in cats_lower
-                                    or "sprint" in cats_lower
-                                    or "route" in cats_lower
-                                ):
-                                    angle_distance_switch = 1.0
-                                if (
-                                    "debut" in cats_lower
-                                    or "1st time" in cats_lower
-                                    or "maiden sp wt" in cats_lower
-                                ):
-                                    angle_debut = 1.0
 
                             horse_dict = {
                                 "program_number": int(
@@ -11723,7 +10918,7 @@ else:
 
                 if selected_idx is not None:
                     selected_race = pending_races[selected_idx]
-                    race_id, track, date, race_num, field_size = selected_race
+                    race_id, _track, _date, race_num, field_size = selected_race
 
                     st.markdown(f"#### 🏇 {race_id}")
                     st.caption(f"{field_size} horses ran in this race")
