@@ -189,6 +189,7 @@ def build_betting_strategy(
     smart_money_horses: list[dict] | None = None,
     name_to_ml: dict[str, str] | None = None,
     name_to_prog: dict[str, str] | None = None,
+    pp_text: str = "",
 ) -> str:
     """
     Builds elite strategy report with finishing order predictions, component transparency,

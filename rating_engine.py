@@ -1103,14 +1103,20 @@ def calculate_comprehensive_class_rating(
 
 
 def _angles_pedigree_tweak(
-    name: str, race_surface: str, race_bucket: str, race_cond: str
+    name: str,
+    race_surface: str,
+    race_bucket: str,
+    race_cond: str,
+    pedigree_per_horse: dict[str, dict] | None = None,
+    angles_per_horse: dict[str, pd.DataFrame] | None = None,
+    race_type_detected: str = "",
 ) -> float:
     """
     Small, capped additive tweak that folds pedigree + common angles into Cclass.
     Positive values help; negatives hurt.
     """
-    ped = pedigree_per_horse.get(name, {}) or {}
-    ang = angles_per_horse.get(name)
+    ped = (pedigree_per_horse or {}).get(name, {}) or {}
+    ang = (angles_per_horse or {}).get(name)
     tweak = 0.0
 
     # 1) Pedigree AWD vs today's distance bucket

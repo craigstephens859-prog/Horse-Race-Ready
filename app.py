@@ -62,7 +62,6 @@ from rating_engine import (  # Phase 4: rating computation engine
 )
 from strategy_builder import (  # Phase 5: betting strategy & component breakdown
     build_betting_strategy,
-    build_component_breakdown,
     str_to_decimal_odds,
 )
 from utils import (  # Phase 2: utility functions
@@ -950,7 +949,15 @@ for _, r in df_final_field.iterrows():
     )
 
     # Add pedigree/angle tweaks on top of class
-    tweak = _angles_pedigree_tweak(name, race_surface, race_bucket, race_cond)
+    tweak = _angles_pedigree_tweak(
+        name,
+        race_surface,
+        race_bucket,
+        race_cond,
+        pedigree_per_horse=pedigree_per_horse,
+        angles_per_horse=angles_per_horse,
+        race_type_detected=race_type_detected,
+    )
     cclass_total = comprehensive_class + tweak
 
     # Calculate form cycle rating
@@ -1741,6 +1748,7 @@ else:
                     smart_money_horses,
                     name_to_ml,
                     name_to_prog,
+                    pp_text=pp_text,
                 )
 
                 # Store strategy report in session state
