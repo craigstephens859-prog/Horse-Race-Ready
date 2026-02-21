@@ -61,7 +61,7 @@ except ImportError:
     def is_render():
         return False
 
-    print("⚠️ db_persistence not available, using local DB path")
+    print("[WARN] db_persistence not available, using local DB path")
 
 # ML Engine removed — functionality superseded by MLBlendEngine + TrackIntelligenceEngine
 
@@ -118,7 +118,7 @@ try:
 
     gold_db = GoldHighIQDatabase(PERSISTENT_DB_PATH)
     GOLD_DB_AVAILABLE = True
-    print(f"✅ Gold DB initialized at: {PERSISTENT_DB_PATH}")
+    print(f"[OK] Gold DB initialized at: {PERSISTENT_DB_PATH}")
 except Exception as e:
     GOLD_DB_AVAILABLE = False
     gold_db = None
@@ -138,7 +138,9 @@ try:
 
     # Load learned weights at startup (persisted from past calibrations)
     LEARNED_WEIGHTS = get_live_learned_weights(PERSISTENT_DB_PATH)
-    print(f"✅ Loaded {len(LEARNED_WEIGHTS)} learned weights from {PERSISTENT_DB_PATH}")
+    print(
+        f"[OK] Loaded {len(LEARNED_WEIGHTS)} learned weights from {PERSISTENT_DB_PATH}"
+    )
 except ImportError as e:
     ADAPTIVE_LEARNING_AVAILABLE = False
     LEARNED_WEIGHTS = {}
@@ -157,10 +159,10 @@ try:
     if ML_BLEND_AVAILABLE:
         _mi = _ml_blend.get_model_info()
         print(
-            f"✅ ML Blend Engine loaded: {_mi.get('model_path', '?')} ({_mi.get('n_features', '?')} features)"
+            f"[OK] ML Blend Engine loaded: {_mi.get('model_path', '?')} ({_mi.get('n_features', '?')} features)"
         )
     else:
-        print("⚠️ ML Blend Engine: no trained model found in models/")
+        print("[WARN] ML Blend Engine: no trained model found in models/")
 except Exception as e:
     ML_BLEND_AVAILABLE = False
     _ml_blend = None
@@ -172,7 +174,7 @@ try:
 
     _track_intel = TrackIntelligenceEngine(db_path=PERSISTENT_DB_PATH)
     TRACK_INTEL_AVAILABLE = True
-    print("✅ Track Intelligence Engine initialized")
+    print("[OK] Track Intelligence Engine initialized")
 except Exception as e:
     TRACK_INTEL_AVAILABLE = False
     _track_intel = None
@@ -230,7 +232,7 @@ try:
     )
 
     INTELLIGENT_LEARNING_AVAILABLE = True
-    print("✅ Intelligent Learning Engine loaded")
+    print("[OK] Intelligent Learning Engine loaded")
 except ImportError as e:
     INTELLIGENT_LEARNING_AVAILABLE = False
     IntelligentLearningEngine = None
