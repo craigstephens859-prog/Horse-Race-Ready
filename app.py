@@ -5111,6 +5111,178 @@ def style_match_score_multi(
 # ======================== Phase 1: Enhanced Parsing Functions ========================
 
 
+def parse_track_bias_stats(pp_text: str) -> dict[str, any]:
+    """Parse comprehensive Track Bias Stats from BRISNET PP text.
+
+    Extracts fields that Impact Values alone don't capture:
+    - pct_wire: % of races won wire-to-wire (high = E dominant)
+    - speed_bias_pct: % races won by E or E/P styles (>60% = speed favoring)
+    - wnr_avg_bl_1st: Winner's avg beaten lengths at 1st call (low = pace contested)
+    - wnr_avg_bl_2nd: Winner's avg beaten lengths at 2nd call
+    - pct_races_won: {E: x%, E/P: x%, P: x%, S: x%} win distribution
+    - num_races: Sample size for confidence weighting
+
+    Prefers Week Totals over Meet Totals when both available.
+    """
+    stats: dict[str, any] = {}
+
+    # --- %Wire ---
+    # Format: "%Wire: 63%" or "%Wire:  77%"
+    wire_match = re.search(r"%Wire:\s*(\d+)%", pp_text, re.IGNORECASE)
+    if wire_match:
+        stats["pct_wire"] = int(wire_match.group(1))
+
+    # --- Speed Bias ---
+    # Format: "Speed Bias: 89%" or "Speed Bias: 92%"
+    # Prefer Week Totals (search after 'Week Totals' first, then Meet)
+    for section_marker in [r"\*\s*Week\s+Totals\s*\*", r"\*\s*MEET\s+Totals\s*\*"]:
+        section_match = re.search(
+            section_marker + r".*?Speed Bias:\s*(\d+)%",
+            pp_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if section_match:
+            stats["speed_bias_pct"] = int(section_match.group(1))
+            break
+
+    # --- WnrAvgBL (Winner's Average Beaten Lengths) ---
+    # Format: "WnrAvgBL" header, then "1stCall: 0.8" and "2ndCall: 0.4"
+    # Prefer Week Totals
+    for section_marker in [r"\*\s*Week\s+Totals\s*\*", r"\*\s*MEET\s+Totals\s*\*"]:
+        wnr_section = re.search(
+            section_marker + r".*?WnrAvgBL.*?1stCall:\s*([\d.]+).*?2ndCall:\s*([\d.]+)",
+            pp_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if wnr_section:
+            stats["wnr_avg_bl_1st"] = float(wnr_section.group(1))
+            stats["wnr_avg_bl_2nd"] = float(wnr_section.group(2))
+            break
+
+    # --- % Races Won per runstyle ---
+    # Format after Runstyle Impact Values row:
+    # "%Races Won   69%   20%   6%   5%" (E, E/P, P, S)
+    for section_marker in [r"\*\s*Week\s+Totals\s*\*", r"\*\s*MEET\s+Totals\s*\*"]:
+        pct_match = re.search(
+            section_marker + r".*?%Races Won\s+(\d+)%\s+(\d+)%\s+(\d+)%\s+(\d+)%",
+            pp_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if pct_match:
+            stats["pct_races_won"] = {
+                "E": int(pct_match.group(1)),
+                "E/P": int(pct_match.group(2)),
+                "P": int(pct_match.group(3)),
+                "S": int(pct_match.group(4)),
+            }
+            break
+
+    # --- Post Bias Avg Win % ---
+    # Format: "Avg Win %  17%  14%  13%  7%" (RAIL, 1-3, 4-7, 8+)
+    for section_marker in [r"\*\s*Week\s+Totals\s*\*", r"\*\s*MEET\s+Totals\s*\*"]:
+        post_win_match = re.search(
+            section_marker + r".*?Avg Win\s*%\s+(\d+)%\s+(\d+)%\s+(\d+)%\s+(\d+)%",
+            pp_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if post_win_match:
+            stats["post_avg_win_pct"] = {
+                "rail": int(post_win_match.group(1)),
+                "inner": int(post_win_match.group(2)),
+                "mid": int(post_win_match.group(3)),
+                "outer": int(post_win_match.group(4)),
+            }
+            break
+
+    # --- # Races (sample size) ---
+    # Format: "# Races: 65" or "# Races: 13"
+    races_match = re.search(r"# Races:\s*(\d+)", pp_text, re.IGNORECASE)
+    if races_match:
+        stats["num_races"] = int(races_match.group(1))
+
+    return stats
+
+
+def parse_race_summary_rankings(pp_text: str) -> dict[str, dict[str, float]]:
+    """Parse Race Summary ranking tables from BRISNET PP text.
+
+    The Race Summary section contains multiple ranking categories:
+    - Speed Last Race: Last speed fig per horse
+    - Back Speed: Best speed at today's dist/surf within 1 year
+    - Current Class: Class rating emphasizing recent at today's dist/surf
+    - Average Class Last 3: Avg class of last 3 starts
+    - Prime Power: Combined handicapping rating
+    - Early Pace Last Race: E1/E2 pace from last race
+    - Late Pace Last Race: Late pace from last race
+
+    Returns dict like:
+    {
+        "Speed Last Race": {"Cherokee Castle": 72, "Cowgirl Attitude": 74, ...},
+        "Current Class": {"Cherokee Castle": 109.4, ...},
+        ...
+    }
+    """
+    rankings: dict[str, dict[str, float]] = {}
+
+    # Each ranking section in the Race Summary follows this layout:
+    # HEADER LINE (bold category name)
+    # number horsename value
+    # number horsename value
+    # ... (one per horse)
+
+    # Categories to parse — these are the column headers in the Race Summary
+    category_patterns = [
+        ("Speed Last Race", r"Speed\s+Last\s+Race"),
+        ("Back Speed", r"Back\s+Speed"),
+        ("Current Class", r"Current\s+Class"),
+        ("Average Class Last 3", r"Average\s+Class\s+Last\s+3"),
+        ("Prime Power", r"Prime\s+Power"),
+        ("Early Pace Last Race", r"Early\s+Pace\s*(?:Last\s+Race)?"),
+        ("Late Pace Last Race", r"Late\s+Pace\s*(?:Last\s+Race)?"),
+    ]
+
+    for cat_name, pattern in category_patterns:
+        # Find section header
+        section_match = re.search(pattern, pp_text, re.IGNORECASE)
+        if not section_match:
+            continue
+
+        # Extract lines after the header — ranking entries
+        start_pos = section_match.end()
+        remaining = pp_text[start_pos : start_pos + 600]  # Enough for ~12 horses
+        lines = remaining.strip().split("\n")
+
+        cat_rankings: dict[str, float] = {}
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Match: "74 Cowgirl Attitude" or "109.4 Cherokee Castle"
+            # Format is: value horsename (rankings are sorted by value)
+            entry_match = re.match(r"^([\d.]+)\s+([A-Za-z][A-Za-z\s']+?)\s*$", line)
+            if entry_match:
+                value = float(entry_match.group(1))
+                horse = entry_match.group(2).strip()
+                cat_rankings[horse] = value
+            else:
+                # Also try: "number horsename value" format used in some sections
+                entry_match2 = re.match(
+                    r"^(\d+)\s+([A-Za-z][A-Za-z\s']+?)\s+([\d.]+)\s*$", line
+                )
+                if entry_match2:
+                    value = float(entry_match2.group(3))
+                    horse = entry_match2.group(2).strip()
+                    cat_rankings[horse] = value
+                elif cat_rankings:
+                    # Non-matching line after we found entries = end of section
+                    break
+
+        if cat_rankings:
+            rankings[cat_name] = cat_rankings
+
+    return rankings
+
+
 def parse_track_bias_impact_values(pp_text: str) -> dict[str, float]:
     """Extract Track Bias Impact Values from '9b. Track Bias (Numerical)' section
     OR from raw BRISNET 'Week Totals' / 'MEET Totals' format."""
@@ -8017,6 +8189,23 @@ def compute_bias_ratings(
     # RACE AUDIT ENHANCEMENT: Parse weekly post-position bias data
     weekly_post_impacts = parse_weekly_post_bias(pp_text) if pp_text else {}
 
+    # CRITICAL FIX (Feb 20, 2026): Store impact_values in session_state so
+    # cross-function code (e.g., P-style bias check at form_cycle L4945)
+    # can access weekly bias data. Previously this key was READ but NEVER WRITTEN,
+    # making the P-style bias fix dead code.
+    if impact_values:
+        st.session_state["weekly_bias_impacts"] = impact_values
+
+    # NEW: Parse comprehensive Track Bias Stats (Wire%, Speed Bias%, WnrAvgBL, %Races Won)
+    track_bias_stats = parse_track_bias_stats(pp_text) if pp_text else {}
+    if track_bias_stats:
+        st.session_state["track_bias_stats"] = track_bias_stats
+
+    # NEW: Parse Race Summary ranking tables (Speed Last Race, Current Class, etc.)
+    race_summary_rankings = parse_race_summary_rankings(pp_text) if pp_text else {}
+    if race_summary_rankings:
+        st.session_state["race_summary_rankings"] = race_summary_rankings
+
     # RACE AUDIT ENHANCEMENT: Calculate weekly bias amplifier multiplier
     # When extreme biases detected (e.g., E=2.05, S=0.32), amplify track_bias_mult
     weekly_bias_amplifier = calculate_weekly_bias_amplifier(impact_values)
@@ -8758,6 +8947,107 @@ def compute_bias_ratings(
             tier2_bonus += calculate_pace_supremacy_bonus(
                 name, _horse_block, _field_e1_values, impact_values
             )
+        except BaseException:
+            pass
+
+        # 13. TRACK BIAS STATS INTEGRATION (Feb 20, 2026)
+        # Uses %Wire, Speed Bias%, WnrAvgBL, and %Races Won from parsed Track Bias Stats.
+        # These fields are NOT captured by Impact Values alone.
+        try:
+            if track_bias_stats and style:
+                style_upper = str(style).upper().strip()
+
+                # --- %Wire bonus: When wire-to-wire win rate is high (>50%), E horses dominate ---
+                pct_wire = track_bias_stats.get("pct_wire", 0)
+                if pct_wire >= 70 and style_upper == "E":
+                    tier2_bonus += 0.5  # Very high wire rate = E horses cruise
+                elif pct_wire >= 50 and style_upper == "E":
+                    tier2_bonus += 0.3  # High wire rate
+                elif pct_wire >= 70 and style_upper == "S":
+                    tier2_bonus -= 0.4  # High wire crushes closers
+
+                # --- Speed Bias % confirmation: When >80% races won by E/EP, amplify E styles ---
+                speed_bias = track_bias_stats.get("speed_bias_pct", 50)
+                if speed_bias >= 85:
+                    if style_upper in ("E", "E/P"):
+                        tier2_bonus += 0.3  # Extreme speed bias track
+                    elif style_upper == "S":
+                        tier2_bonus -= 0.3  # Closers nearly shut out
+                elif speed_bias <= 30:
+                    if style_upper in ("P", "S"):
+                        tier2_bonus += 0.3  # Pace-collapsing track favors closers
+                    elif style_upper == "E":
+                        tier2_bonus -= 0.3  # Speed types can't sustain
+
+                # --- WnrAvgBL: Pace contestation indicator ---
+                # Low WnrAvgBL at 1st call = winners ARE on the lead (speed favored)
+                # High WnrAvgBL = winners rally from behind (closers favored)
+                wnr_bl_1st = track_bias_stats.get("wnr_avg_bl_1st", 0)
+                if wnr_bl_1st > 0:
+                    if wnr_bl_1st <= 1.0 and style_upper in ("E", "E/P"):
+                        tier2_bonus += 0.2  # Winners are close to lead at 1st call
+                    elif wnr_bl_1st >= 4.0 and style_upper in ("P", "S"):
+                        tier2_bonus += 0.3  # Winners rally from way back
+                    elif wnr_bl_1st >= 4.0 and style_upper == "E":
+                        tier2_bonus -= 0.2  # Speed horses collapse here
+
+                # --- %Races Won validation: Cross-check with Impact Values ---
+                pct_won = track_bias_stats.get("pct_races_won", {})
+                if pct_won:
+                    style_pct = pct_won.get(style_upper, 0)
+                    if style_upper == "E/P":
+                        style_pct = max(pct_won.get("E/P", 0), pct_won.get("E", 0) // 2)
+                    if style_pct >= 50:
+                        tier2_bonus += 0.3  # This runstyle wins majority of races
+                    elif style_pct <= 5 and style_pct > 0:
+                        tier2_bonus -= 0.2  # This runstyle almost never wins
+        except BaseException:
+            pass
+
+        # 14. RACE SUMMARY RANKING INTEGRATION (Feb 20, 2026)
+        # Uses parsed Race Summary ranking tables to identify top-ranked horses
+        # across multiple Brisnet metrics (Speed Last Race, Current Class, etc.)
+        try:
+            if race_summary_rankings and name:
+                _summary_bonus = 0.0
+                _top_count = 0  # Count how many categories this horse leads
+
+                for _cat_name, _cat_data in race_summary_rankings.items():
+                    if not _cat_data:
+                        continue
+                    horse_val = _cat_data.get(name)
+                    if horse_val is None:
+                        continue
+
+                    # Determine rank position (1st, 2nd, 3rd...)
+                    sorted_vals = sorted(_cat_data.values(), reverse=True)
+                    try:
+                        _rank = sorted_vals.index(horse_val) + 1
+                    except ValueError:
+                        continue
+
+                    # Graduated bonus by rank position
+                    if _rank == 1:
+                        _summary_bonus += 0.25
+                        _top_count += 1
+                    elif _rank == 2:
+                        _summary_bonus += 0.15
+                    elif _rank == 3:
+                        _summary_bonus += 0.08
+                    # Bottom 2 in any category = penalty
+                    elif _rank >= len(sorted_vals) - 1:
+                        _summary_bonus -= 0.10
+
+                # Multi-category leader bonus: horse that leads 3+ categories
+                # is almost certainly the class of the field
+                if _top_count >= 4:
+                    _summary_bonus += 0.5  # Dominant across metrics
+                elif _top_count >= 3:
+                    _summary_bonus += 0.3  # Multi-category leader
+                elif _top_count >= 2:
+                    _summary_bonus += 0.15  # Double leader
+
+                tier2_bonus += np.clip(_summary_bonus, -1.0, 2.0)
         except BaseException:
             pass
 
