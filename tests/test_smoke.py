@@ -16,6 +16,7 @@ Run:  python -m pytest tests/test_smoke.py -v
 from __future__ import annotations
 
 import ast
+import contextlib
 import logging
 import re
 from pathlib import Path
@@ -31,6 +32,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_PY = ROOT / "app.py"
+CONFIG_PY = ROOT / "config.py"
 
 _FUNCTIONS_TO_EXTRACT = [
     "safe_float",
@@ -60,35 +62,40 @@ def _build_namespace() -> dict[str, Any]:
     """Build a namespace containing extracted functions and their deps."""
     source = APP_PY.read_text(encoding="utf-8")
 
+    # Import config constants directly (they moved from app.py to config.py in Phase 1)
+    from config import MODEL_CONFIG
+
     ns: dict[str, Any] = {
         "pd": pd,
         "np": np,
+        "re": re,
         "Any": Any,
         "__builtins__": __builtins__,
         "logger": logging.getLogger("test_smoke"),
+        "MODEL_CONFIG": MODEL_CONFIG,
     }
 
     # Pull important constants (MODEL_CONFIG, DIST_BUCKET_*, etc.)
-    for m in re.finditer(
-        r"^((?:DIST_BUCKET_|MODEL_CONFIG)\w*\s*=\s*)", source, re.MULTILINE
-    ):
-        # For multi-line dicts, extract from AST instead
-        pass
-
-    # Use AST to grab top-level constants
-    tree = ast.parse(source)
-    src_lines = source.splitlines()
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and (
-                    target.id.startswith("DIST_BUCKET_") or target.id == "MODEL_CONFIG"
-                ):
-                    const_src = "\n".join(src_lines[node.lineno - 1 : node.end_lineno])
-                    try:
-                        exec(const_src, ns)  # noqa: S102
-                    except Exception:
-                        pass
+    # MODEL_CONFIG is now imported from config.py directly (see above).
+    # Also check config.py for any remaining constants needed by extracted functions.
+    for src_text in [
+        source,
+        CONFIG_PY.read_text(encoding="utf-8") if CONFIG_PY.exists() else "",
+    ]:
+        tree = ast.parse(src_text)
+        src_lines = src_text.splitlines()
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and (
+                        target.id.startswith("DIST_BUCKET_")
+                        or target.id == "MODEL_CONFIG"
+                    ):
+                        const_src = "\n".join(
+                            src_lines[node.lineno - 1 : node.end_lineno]
+                        )
+                        with contextlib.suppress(Exception):
+                            exec(const_src, ns)  # noqa: S102
 
     # Extract and exec each function
     for name in _FUNCTIONS_TO_EXTRACT:
