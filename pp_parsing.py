@@ -23,11 +23,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config import TRACK_ALIASES, _CANON_BY_TOKEN
+from config import _CANON_BY_TOKEN, TRACK_ALIASES
 from utils import _normalize_style
 
 logger = logging.getLogger(__name__)
-
 
 
 def _find_header_line(pp_text: str) -> str:
@@ -75,7 +74,6 @@ def _find_header_line(pp_text: str) -> str:
     return ""
 
 
-
 def parse_track_name_from_pp(pp_text: str) -> str:
     """
     Parse track name from BRISNET PP text.
@@ -111,7 +109,6 @@ def parse_track_name_from_pp(pp_text: str) -> str:
     return ""
 
 
-
 def detect_race_number(pp_text: str) -> int | None:
     """Extract race number from PP text header (e.g., 'Race 6')."""
     s = pp_text or ""
@@ -127,7 +124,6 @@ def detect_race_number(pp_text: str) -> int | None:
             # Regex group missing or invalid
             pass
     return None
-
 
 
 def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
@@ -342,7 +338,6 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
     return result
 
 
-
 def detect_race_type(pp_text: str) -> str:
     """
     Normalize many wordings into the exact key set used by base_class_bias.
@@ -404,7 +399,6 @@ def detect_race_type(pp_text: str) -> str:
     return "allowance"
 
 
-
 def _post_bucket(post_str: str) -> str:
     try:
         post = int(re.sub(r"[^\d]", "", str(post_str)))
@@ -420,6 +414,7 @@ def _post_bucket(post_str: str) -> str:
     if 4 <= post <= 7:
         return "mid"
     return "outside"
+
 
 HORSE_HDR_RE = re.compile(
     r"""(?mi)^\s*
@@ -439,7 +434,6 @@ HORSE_HDR_RE = re.compile(
     """,
     re.VERBOSE,
 )
-
 
 
 def calculate_style_strength(style: str, quirin: float) -> str:
@@ -481,7 +475,6 @@ def calculate_style_strength(style: str, quirin: float) -> str:
     return "Solid"
 
 
-
 def split_into_horse_chunks(pp_text: str) -> list[tuple]:
     chunks = []
     matches = list(HORSE_HDR_RE.finditer(pp_text or ""))
@@ -494,7 +487,6 @@ def split_into_horse_chunks(pp_text: str) -> list[tuple]:
         block = pp_text[start:end]
         chunks.append((post, name, block))
     return chunks
-
 
 
 def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
@@ -532,6 +524,7 @@ def extract_horses_and_styles(pp_text: str) -> pd.DataFrame:
         df["Quirin"] = df["Quirin"].clip(lower=0, upper=8)
     return df
 
+
 _ODDS_TOKEN = r"(\d+\s*/\s*\d+|\d+\s*-\s*\d+|[+-]?\d+(?:\.\d+)?)"
 
 # ========================================================
@@ -553,6 +546,7 @@ def extract_morning_line_by_horse(pp_text: str) -> dict[str, str]:
         if m_labeled:
             ml[name.strip()] = m_labeled.group(1).replace(" ", "")
     return ml
+
 
 ANGLE_LINE_RE = re.compile(
     r"""(?mix)^\s*\+?           # optional + prefix (positive trend indicator)
@@ -585,7 +579,6 @@ ANGLE_LINE_RE = re.compile(
 )
 
 
-
 def parse_angles_for_block(block) -> pd.DataFrame:
     rows = []
     if not block:
@@ -606,53 +599,123 @@ def parse_angles_for_block(block) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-
 def parse_pedigree_snips(block) -> dict:
+    """Parse sire/dam stats and pedigree ratings from BRISNET PP block.
+
+    BRISNET Sire Stats format (from actual PP):
+        Sire Stats: AWD 7.4f    9%Mud 190MudSts 10%Turf 8%1stT 0.92spi
+        Dam'sSire:AWD 7.6f   16%Mud 1244MudSts 12%Turf10%1stT 3.91spi
+        Dam Stats: Unraced     3rtW   5str    4w 0sw    0.07dpi
+
+    Fields extracted:
+        sire_awd, sire_mud_pct, sire_mud_starts, sire_turf_pct, sire_fts_pct, sire_spi
+        damsire_awd, damsire_mud_pct, damsire_turf_pct, damsire_fts_pct, damsire_spi
+        dam_dpi, dam_starters, dam_winners, dam_sw
+        pedigree_fast, pedigree_off, pedigree_distance, pedigree_turf
+    """
     out = {
         "sire_awd": np.nan,
-        "sire_1st": np.nan,
-        "sire_mud_pct": np.nan,  # %Mud from Sire Stats (Feb 13, 2026)
+        "sire_1st": np.nan,  # FTS% (first time starter)
+        "sire_mud_pct": np.nan,
+        "sire_mud_starts": np.nan,
+        "sire_turf_pct": np.nan,
+        "sire_fts_pct": np.nan,  # 1stT = first time turf starting %
+        "sire_spi": np.nan,
         "damsire_awd": np.nan,
         "damsire_1st": np.nan,
+        "damsire_mud_pct": np.nan,
+        "damsire_turf_pct": np.nan,
+        "damsire_fts_pct": np.nan,
+        "damsire_spi": np.nan,
         "dam_dpi": np.nan,
+        "dam_starters": np.nan,
+        "dam_winners": np.nan,
+        "dam_sw": np.nan,  # stakes winners
     }
     if not block:
         return out
-    # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
+
+    # ── SIRE STATS ──
+    # Format: "Sire Stats: AWD 7.4f  9%Mud 190MudSts 10%Turf 8%1stT 0.92spi"
+    # FIXED Feb 21 2026: Previous regex expected two % groups between AWD and SPI
+    # but actual BRISNET has: AWD, %Mud, MudSts, %Turf, %1stT, spi
     s = re.search(
-        r"(?mi)^\s*Sire\s*Stats:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi",
+        r"(?i)Sire\s*Stats:\s*AWD\s*(\d+(?:\.\d+)?)\s*f?"
+        r"\s+(\d+)%\s*Mud\s+(\d+)\s*MudSts"
+        r"(?:\s+(\d+)%\s*Turf)?"
+        r"(?:\s+(\d+)%\s*1st\s*T)?"
+        r"(?:\s+(\d+(?:\.\d+)?)\s*spi)?",
         block_str,
     )
     if s:
         out["sire_awd"] = float(s.group(1))
-        out["sire_mud_pct"] = float(s.group(2))  # Group 2 is %Mud
-        out["sire_1st"] = float(s.group(3))  # Group 3 is %-1st
+        out["sire_mud_pct"] = float(s.group(2))
+        out["sire_mud_starts"] = float(s.group(3))
+        if s.group(4):
+            out["sire_turf_pct"] = float(s.group(4))
+        if s.group(5):
+            out["sire_fts_pct"] = float(s.group(5))
+            out["sire_1st"] = float(s.group(5))  # backward compat
+        if s.group(6):
+            out["sire_spi"] = float(s.group(6))
+
+    # ── DAMSIRE STATS ──
+    # Format: "Dam'sSire:AWD 7.6f  16%Mud 1244MudSts 12%Turf10%1stT 3.91spi"
     ds = re.search(
-        r"(?mi)^\s*Dam\'s Sire:\s*AWD\s*(\d+(?:\.\d+)?)\s+(\d+)%.*?(\d+)%.*?(\d+(?:\.\d+)?)\s*spi",
+        r"(?i)Dam'?s?\s*Sire:?\s*AWD\s*(\d+(?:\.\d+)?)\s*f?"
+        r"\s+(\d+)%\s*Mud\s+(\d+)\s*MudSts"
+        r"(?:\s+(\d+)%\s*Turf)?"
+        r"(?:\s+(\d+)%\s*1st\s*T)?"
+        r"(?:\s+(\d+(?:\.\d+)?)\s*(?:spi|dpi))?",
         block_str,
     )
     if ds:
         out["damsire_awd"] = float(ds.group(1))
-        out["damsire_1st"] = float(ds.group(3))
-    d = re.search(r"(?mi)^\s*Dam:\s*DPI\s*(\d+(?:\.\d+)?)\s+(\d+)%", block_str)
-    if d:
-        out["dam_dpi"] = float(d.group(1))
+        out["damsire_mud_pct"] = float(ds.group(2))
+        if ds.group(4):
+            out["damsire_turf_pct"] = float(ds.group(4))
+        if ds.group(5):
+            out["damsire_fts_pct"] = float(ds.group(5))
+            out["damsire_1st"] = float(ds.group(5))  # backward compat
+        if ds.group(6):
+            out["damsire_spi"] = float(ds.group(6))
 
-    # Parse Pedigree breeding ratings: "Pedigree: Fast 85 Off 72 Dist 90 Turf 78"
-    # (Feb 13, 2026 enhancement for surface-switch pedigree integration)
-    ped_ratings = re.search(
-        r"(?mi)Pedigree:\s*Fast\s+(\d+)\s+Off\s+(\d+)\s+Dist\s+(\d+)\s+Turf\s+(\d+)",
+    # ── DAM STATS ──
+    # Format: "Dam Stats: Unraced  3rtW  5str  4w 0sw  0.07dpi"
+    # Also: "Dam Stats: AWD 6.3f" when dam raced
+    d = re.search(
+        r"(?i)Dam\s*Stats:.*?(\d+)\s*str.*?(\d+)\s*w\s+(\d+)\s*sw.*?(\d+(?:\.\d+)?)\s*dpi",
         block_str,
     )
-    if ped_ratings:
-        out["pedigree_fast"] = float(ped_ratings.group(1))
-        out["pedigree_off"] = float(ped_ratings.group(2))
-        out["pedigree_distance"] = float(ped_ratings.group(3))
-        out["pedigree_turf"] = float(ped_ratings.group(4))
+    if d:
+        out["dam_starters"] = float(d.group(1))
+        out["dam_winners"] = float(d.group(2))
+        out["dam_sw"] = float(d.group(3))
+        out["dam_dpi"] = float(d.group(4))
+    else:
+        # Simpler fallback: just grab DPI
+        d2 = re.search(r"(?i)(\d+(?:\.\d+)?)\s*dpi", block_str)
+        if d2:
+            out["dam_dpi"] = float(d2.group(1))
+
+    # ── PEDIGREE BREEDING RATINGS ──
+    # Format from header area: "Fst (104) ... Off (102) ... Dis (106) ... Trf (101)"
+    # or "Fst  (104)  0  1 - 0 - 0  $6,300 81"
+    ped_fst = re.search(r"(?i)\bFst\s*\(?\s*(\d+)\s*\)?", block_str)
+    ped_off = re.search(r"(?i)\bOff\s*\(?\s*(\d+)\s*\)?", block_str)
+    ped_dis = re.search(r"(?i)\bDis\s*\(?\s*(\d+)\s*\)?", block_str)
+    ped_trf = re.search(r"(?i)\bTrf\s*\(?\s*(\d+)\s*\)?", block_str)
+    if ped_fst:
+        out["pedigree_fast"] = float(ped_fst.group(1))
+    if ped_off:
+        out["pedigree_off"] = float(ped_off.group(1))
+    if ped_dis:
+        out["pedigree_distance"] = float(ped_dis.group(1))
+    if ped_trf:
+        out["pedigree_turf"] = float(ped_trf.group(1))
 
     return out
-
 
 
 # ========== SAVANT-LEVEL ENHANCEMENTS (Jan 2026) ==========
@@ -670,7 +733,6 @@ def parse_claiming_prices(block) -> list[int]:
         with contextlib.suppress(BaseException):
             prices.append(int(m.group(1)))
     return prices[:5]
-
 
 
 def detect_lasix_change(block) -> float:
@@ -703,7 +765,6 @@ def detect_lasix_change(block) -> float:
     return bonus
 
 
-
 def parse_fractional_positions(block) -> list[list[int]]:
     """Extract running positions: PP, Start, 1C, 2C, Stretch, Finish."""
     positions = []
@@ -733,7 +794,6 @@ def parse_fractional_positions(block) -> list[list[int]]:
     return positions[:5]
 
 
-
 def parse_e1_e2_lp_values(block) -> dict:
     """Extract E1, E2, and LP pace figures."""
     e1_vals, e2_vals, lp_vals = [], [], []
@@ -751,7 +811,6 @@ def parse_e1_e2_lp_values(block) -> dict:
             # Regex group missing or conversion failed
             pass
     return {"e1": e1_vals[:5], "e2": e2_vals[:5], "lp": lp_vals[:5]}
-
 
 
 # ========== END SAVANT ENHANCEMENTS ==========
@@ -814,7 +873,6 @@ def parse_speed_figures_for_block(block) -> list[int]:
             break
 
     return figs[:10]
-
 
 
 # ===================== Form Cycle & Recency Analysis =====================
@@ -892,7 +950,6 @@ def parse_recent_races_detailed(block) -> list[dict]:
             pass
 
     return sorted(races, key=lambda x: x["days_ago"])[:6]
-
 
 
 def parse_workout_data(block) -> dict:
@@ -1003,7 +1060,6 @@ def parse_workout_data(block) -> dict:
     return workouts
 
 
-
 # ===================== Class Rating Calculator (Comprehensive) =====================
 
 
@@ -1061,7 +1117,8 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
                 result["detection_method"] = "purse_text"
                 result["confidence"] = 0.9
                 break
-            except Exception:                pass
+            except Exception:
+                pass
 
     # ========== RACE TYPE EXTRACTION (Multi-Pattern) ==========
     race_type_patterns = [
@@ -1123,7 +1180,8 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
                 else:
                     result["purse_amount"] = int(amount_str)
                 result["detection_method"] = "embedded_format"
-            except Exception:                pass
+            except Exception:
+                pass
 
         # Map prefix to race type if not already found
         if result["race_type_clean"] == "unknown":
@@ -1146,7 +1204,6 @@ def extract_race_metadata_from_pp_text(pp_text: str) -> dict[str, Any]:
                 result["detection_method"] = "embedded_format"
 
     return result
-
 
 
 def infer_purse_from_race_type(race_type: str) -> int | None:
@@ -1194,7 +1251,6 @@ def infer_purse_from_race_type(race_type: str) -> int | None:
         return 100000  # Stakes minimum
 
     return None
-
 
 
 def parse_recent_class_levels(block) -> list[dict]:
@@ -1253,12 +1309,14 @@ def detect_purse_amount(pp_text: str) -> int | None:
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except Exception:            pass
+        except Exception:
+            pass
     m = re.search(r"(?mi)\b(?:Added|Value)\b[^$\n\r]*\$\s*([\d,]+)", s)
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except Exception:            pass
+        except Exception:
+            pass
     m = re.search(
         r"(?mi)\b(Mdn|Maiden|Allowance|Alw|Claiming|Clm|Starter|Stake|Stakes)\b[^:\n\r]{0,50}\b(\d{2,4})\s*[Kk]\b",
         s,
@@ -1266,14 +1324,15 @@ def detect_purse_amount(pp_text: str) -> int | None:
     if m:
         try:
             return int(m.group(2)) * 1000
-        except Exception:            pass
+        except Exception:
+            pass
     m = re.search(r"(?m)\$\s*([\d,]{5,})", s)
     if m:
         try:
             return int(m.group(1).replace(",", ""))
-        except Exception:            pass
+        except Exception:
+            pass
     return None
-
 
 
 # ======================== Phase 1: Enhanced Parsing Functions ========================
@@ -1343,7 +1402,6 @@ def parse_pace_speed_pars(pp_text: str) -> dict[str, int]:
     return pars
 
 
-
 def parse_quickplay_comments(horse_block: str) -> dict[str, list[str]]:
     """Parse QuickPlay positive (★) and negative (●) comments for a horse.
 
@@ -1381,7 +1439,6 @@ def parse_quickplay_comments(horse_block: str) -> dict[str, list[str]]:
                 result["negative"].append(c)
 
     return result
-
 
 
 def parse_bris_rr_cr_per_race(horse_block: str) -> list[dict[str, int]]:
@@ -1428,7 +1485,6 @@ def parse_bris_rr_cr_per_race(horse_block: str) -> list[dict[str, int]]:
                 pass
 
     return races[:6]  # Last 6 races
-
 
 
 def parse_track_bias_stats(pp_text: str) -> dict[str, any]:
@@ -1526,7 +1582,6 @@ def parse_track_bias_stats(pp_text: str) -> dict[str, any]:
     return stats
 
 
-
 def parse_race_summary_rankings(pp_text: str) -> dict[str, dict[str, float]]:
     """Parse Race Summary ranking tables from BRISNET PP text.
 
@@ -1605,7 +1660,6 @@ def parse_race_summary_rankings(pp_text: str) -> dict[str, dict[str, float]]:
             rankings[cat_name] = cat_rankings
 
     return rankings
-
 
 
 def parse_track_bias_impact_values(pp_text: str) -> dict[str, float]:
@@ -1766,7 +1820,6 @@ def parse_weekly_post_bias(pp_text: str) -> dict[str, float]:
     return post_impacts
 
 
-
 def parse_pedigree_spi(pp_text: str) -> dict[str, int | None]:
     """Extract SPI (Sire Performance Index) from pedigree sections"""
     spi_values = {}
@@ -1792,7 +1845,6 @@ def parse_pedigree_spi(pp_text: str) -> dict[str, int | None]:
             spi_values[horse_name] = None
 
     return spi_values
-
 
 
 def parse_pedigree_surface_stats(pp_text: str) -> dict[str, dict[str, any]]:
@@ -1824,7 +1876,6 @@ def parse_pedigree_surface_stats(pp_text: str) -> dict[str, dict[str, any]]:
     return surface_stats
 
 
-
 def parse_awd_analysis(pp_text: str) -> dict[str, str]:
     """Extract AWD (Avg Winning Distance) analysis from pedigree sections"""
     awd_data = {}
@@ -1844,7 +1895,6 @@ def parse_awd_analysis(pp_text: str) -> dict[str, str]:
             awd_data[horse_name] = "mismatch"
 
     return awd_data
-
 
 
 def parse_jockey_combo_stats(section: str) -> tuple[float, float]:
@@ -1883,7 +1933,6 @@ def parse_jockey_combo_stats(section: str) -> tuple[float, float]:
             combo_win_rate = combo_pct
 
     return jockey_win_rate, combo_win_rate
-
 
 
 # ============ STRUCTURED RACE HISTORY PARSING (Feb 10, 2026) ============
@@ -2020,3 +2069,540 @@ def parse_race_history_from_block(block: str) -> list[dict]:
 
     return races[:10]
 
+
+# ============ COMPREHENSIVE BRIS PP PARSING (Feb 21, 2026) ============
+# New parsers to capture ALL data fields from BRIS Ultimate PPs
+
+
+def parse_lifetime_records(block: str) -> dict:
+    """Parse lifetime/surface/distance sub-records from BRISNET PP header.
+
+    BRISNET format (from header area after pedigree):
+        Life:  7  0 - 1 - 0   $7,428  81  Fst  (104)  0  1 - 0 - 0  $6,300  81
+        2007   1  0 - 0 - 0     $200  76  Off  (102)                    $0
+        2006   6  0 - 1 - 0   $7,228  81  Dis  (106)  4  0 - 0 - 0    $844  76
+        GP     2  0 - 0 - 0     $520  76  Trf  (109?) 0  0 - 0 - 0  $1,128  79
+                                          AW           0  0 - 1 - 1     $0
+
+    Returns dict with sub-dicts for each record category.
+    """
+    out = {}
+    if not block:
+        return out
+    block_str = str(block) if not isinstance(block, str) else block
+
+    # Life record: "Life:  N  W - P - S  $earnings  best_speed"
+    life_m = re.search(
+        r"Life:\s*(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s+\$?([\d,]+)\s+(\d+)",
+        block_str,
+    )
+    if life_m:
+        out["life"] = {
+            "starts": int(life_m.group(1)),
+            "wins": int(life_m.group(2)),
+            "places": int(life_m.group(3)),
+            "shows": int(life_m.group(4)),
+            "earnings": int(life_m.group(5).replace(",", "")),
+            "best_speed": int(life_m.group(6)),
+        }
+
+    # Current year: "2026  N  W - P - S  $earnings  speed" or "2025  ..."
+    for yr_m in re.finditer(
+        r"\b(20\d{2})\s+(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s+\$?([\d,]+)\s+(\d+)",
+        block_str,
+    ):
+        yr = yr_m.group(1)
+        out[f"year_{yr}"] = {
+            "starts": int(yr_m.group(2)),
+            "wins": int(yr_m.group(3)),
+            "places": int(yr_m.group(4)),
+            "shows": int(yr_m.group(5)),
+            "earnings": int(yr_m.group(6).replace(",", "")),
+            "best_speed": int(yr_m.group(7)),
+        }
+
+    # Track record: "GP  N  W - P - S  $earnings  speed" (2-4 letter caps)
+    trk_m = re.search(
+        r"\b([A-Z]{2,4})\s+(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s+\$?([\d,]+)\s+(\d+)",
+        block_str,
+    )
+    if trk_m:
+        out["track"] = {
+            "code": trk_m.group(1),
+            "starts": int(trk_m.group(2)),
+            "wins": int(trk_m.group(3)),
+            "places": int(trk_m.group(4)),
+            "shows": int(trk_m.group(5)),
+            "earnings": int(trk_m.group(6).replace(",", "")),
+            "best_speed": int(trk_m.group(7)),
+        }
+
+    # Surface/distance sub-records: Fst, Off, Dis, Trf, AW
+    for label in ("Fst", "Off", "Dis", "Trf", "AW"):
+        # Format: "Fst  (104)  N  W - P - S  $earnings  speed" or just "Fst  (104)"
+        pat = (
+            rf"\b{label}\s*\(?(\d+)\??\)?\s+"
+            rf"(\d+)\s+(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s+\$?([\d,]+)\s+(\d+)"
+        )
+        sm = re.search(pat, block_str)
+        if sm:
+            out[label.lower()] = {
+                "ped_rating": int(sm.group(1)),
+                "starts": int(sm.group(2)),
+                "wins": int(sm.group(3)),
+                "places": int(sm.group(4)),
+                "shows": int(sm.group(5)),
+                "earnings": int(sm.group(6).replace(",", "")),
+                "best_speed": int(sm.group(7)),
+            }
+        else:
+            # Try to at least get the pedigree rating
+            pr = re.search(rf"\b{label}\s*\(?(\d+)\??\)?", block_str)
+            if pr:
+                out[label.lower()] = {"ped_rating": int(pr.group(1)), "starts": 0}
+
+    return out
+
+
+def parse_prime_power(block: str) -> dict:
+    """Parse BRIS Prime Power Rating from PP header.
+
+    BRISNET format: "Prime Power: 107.2 (10th)" or "Prime Power: 127.9 (1st)"
+
+    Returns: {"rating": float, "rank": int, "rank_text": str}
+    """
+    out = {"rating": 0.0, "rank": 0, "rank_text": ""}
+    if not block:
+        return out
+    block_str = str(block) if not isinstance(block, str) else block
+
+    m = re.search(r"Prime\s*Power:\s*(\d+(?:\.\d+)?)\s*\((\d+)\w*\)", block_str)
+    if m:
+        out["rating"] = float(m.group(1))
+        out["rank"] = int(m.group(2))
+        out["rank_text"] = m.group(0)
+
+    # Also try format: "L 122" (BRIS Level = normalized Prime Power)
+    lv = re.search(r"\bL\s+(\d{2,3})\b", block_str)
+    if lv and out["rating"] == 0.0:
+        out["rating"] = float(lv.group(1))
+
+    return out
+
+
+def parse_race_shapes(block: str) -> list[dict]:
+    """Parse BRIS Race Shapes from workout/bottom area of PP block.
+
+    Race shapes appear at the very bottom of a horse's PP block as two numbers
+    per past race, measuring how fast the leader ran relative to par.
+    Positive = slower than par (closing-friendly), Negative = faster than par (speed-favoring).
+
+    Common BRISNET format at bottom:
+    "●09Feb  Pmm 4f ft  :48  H 1/23  31Jan  Pmm ① (d) 4f fm  :51  B 23/28 ..."
+    Race shapes often appear as signed integers in the race line area.
+
+    Returns: [{"shape_1c": int, "shape_2c": int}, ...] per race
+    """
+    shapes = []
+    if not block:
+        return shapes
+    block_str = str(block) if not isinstance(block, str) else block
+
+    # Race shape pattern: /N/N at end of race line (after speed fig)
+    # or sometimes as standalone signed numbers after the finish position line
+    for line in block_str.split("\n"):
+        if not re.match(r"\d{2}[A-Za-z]{3}\d{2}", line.strip()):
+            continue
+        # Look for race shape markers — typically two numbers at the very end
+        # Format varies: "87  2  1  11  11  1hd  OrtizIJ118  Lb  4.30  ..."
+        # Race shapes: after all running data, look for final pair of small signed numbers
+        shape_m = re.findall(r"([+-]?\d{1,2})\s+([+-]?\d{1,2})\s*$", line.strip())
+        if shape_m:
+            try:
+                shapes.append(
+                    {
+                        "shape_1c": int(shape_m[-1][0]),
+                        "shape_2c": int(shape_m[-1][1]),
+                    }
+                )
+            except (ValueError, IndexError):
+                pass
+
+    return shapes[:10]
+
+
+def parse_jockey_trainer_full_stats(block: str) -> dict:
+    """Parse comprehensive jockey and trainer statistics from BRISNET PP header.
+
+    BRISNET Jockey Stats format (from Part 1 reference):
+        VELASQUEZ CORNELIO (241  43-25-31  18%)    ← meet record
+        2006-2007  1778  16%  44%  -0.30           ← year stats
+        JKYw/ S types  293  15%  47%  +0.09       ← run style stats
+        +JKYw/ Trn L60  3  0%  33%  -2.00         ← trainer combo L60
+        JKYw/ Turf  642  17%  42%  -0.23           ← distance/surface
+
+    BRISNET Trainer Stats format:
+        Trnr: O'Connell Kathleen (22  4-4-2  18%)  ← meet record
+        2006-2007  777  12%  39%  -0.81             ← year stats
+        31-90daysAway  511  12%  37%  -0.80         ← angle stats
+        Turf starts  460  8%  30%  -0.95
+        No class chg  291  9%  35%  -0.87
+
+    Returns dict with jockey and trainer sub-dicts.
+    """
+    out = {
+        "jockey": {},
+        "trainer": {},
+        "jockey_meet": {},
+        "trainer_meet": {},
+        "jockey_year": {},
+        "trainer_year": {},
+        "jockey_styles": {},
+        "jockey_surface": {},
+        "jockey_trainer_l60": {},
+        "trainer_angles": [],
+    }
+    if not block:
+        return out
+    block_str = str(block) if not isinstance(block, str) else block
+
+    # ── JOCKEY MEET RECORD ──
+    # "VELASQUEZ CORNELIO (241  43-25-31  18%)" or "CASTRO E (175  16-17-25  9%)"
+    jm = re.search(
+        r"([A-Z][A-Z'\- ]+?)\s*\((\d+)\s+(\d+)-(\d+)-(\d+)\s+(\d+)%\)",
+        block_str,
+    )
+    if jm:
+        out["jockey"]["name"] = jm.group(1).strip()
+        out["jockey_meet"] = {
+            "starts": int(jm.group(2)),
+            "wins": int(jm.group(3)),
+            "places": int(jm.group(4)),
+            "shows": int(jm.group(5)),
+            "win_pct": int(jm.group(6)) / 100.0,
+        }
+
+    # ── JOCKEY YEAR STATS ──
+    # "2006-2007  1778  16%  44%  -0.30"
+    jy = re.search(
+        r"(\d{4}(?:-\d{4})?)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+\.\d+)",
+        block_str,
+    )
+    if jy:
+        out["jockey_year"] = {
+            "period": jy.group(1),
+            "starts": int(jy.group(2)),
+            "win_pct": int(jy.group(3)) / 100.0,
+            "itm_pct": int(jy.group(4)) / 100.0,
+            "roi": float(jy.group(5)),
+        }
+
+    # ── JOCKEY RUN STYLE STATS ──
+    # "JKYw/ S types  293  15%  47%  +0.09" or "JKYw/ EP types  ..."
+    for js_m in re.finditer(
+        r"JKYw/\s*((?:E/?P?|S|P|E)\s*types?)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+\.\d+)",
+        block_str,
+        re.IGNORECASE,
+    ):
+        style_label = js_m.group(1).strip().upper().replace(" ", "")
+        out["jockey_styles"][style_label] = {
+            "starts": int(js_m.group(2)),
+            "win_pct": int(js_m.group(3)) / 100.0,
+            "itm_pct": int(js_m.group(4)) / 100.0,
+            "roi": float(js_m.group(5)),
+        }
+
+    # ── JOCKEY/TRAINER L60 COMBO ──
+    # "+JKYw/ Trn L60  3  0%  33%  -2.00"
+    jt = re.search(
+        r"JKYw/\s*Trn\s*L60\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+\.\d+)",
+        block_str,
+        re.IGNORECASE,
+    )
+    if jt:
+        out["jockey_trainer_l60"] = {
+            "starts": int(jt.group(1)),
+            "win_pct": int(jt.group(2)) / 100.0,
+            "itm_pct": int(jt.group(3)) / 100.0,
+            "roi": float(jt.group(4)),
+        }
+
+    # ── JOCKEY SURFACE STATS ──
+    # "JKYw/ Turf  642  17%  42%  -0.23" or "JKYw/ Dirt  ..."
+    for jsf in re.finditer(
+        r"JKYw/\s*(Turf|Dirt|Sprints?|Routes?)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+\.\d+)",
+        block_str,
+        re.IGNORECASE,
+    ):
+        surf_label = jsf.group(1).strip().lower()
+        out["jockey_surface"][surf_label] = {
+            "starts": int(jsf.group(2)),
+            "win_pct": int(jsf.group(3)) / 100.0,
+            "itm_pct": int(jsf.group(4)) / 100.0,
+            "roi": float(jsf.group(5)),
+        }
+
+    # ── TRAINER MEET RECORD ──
+    # "Trnr: O'Connell Kathleen (22  4-4-2  18%)"
+    tm = re.search(
+        r"Trnr?:\s*([\w'\- .]+?)\s*\((\d+)\s+(\d+)-(\d+)-(\d+)\s+(\d+)%\)",
+        block_str,
+    )
+    if tm:
+        out["trainer"]["name"] = tm.group(1).strip()
+        out["trainer_meet"] = {
+            "starts": int(tm.group(2)),
+            "wins": int(tm.group(3)),
+            "places": int(tm.group(4)),
+            "shows": int(tm.group(5)),
+            "win_pct": int(tm.group(6)) / 100.0,
+        }
+
+    # ── TRAINER YEAR/ANGLE STATS ──
+    # Multiple lines like: "2006-2007  777  12%  39%  -0.81"
+    # Also angle lines: "31-90daysAway  511  12%  37%  -0.80"
+    # "Turf starts  460  8%  30%  -0.95"
+    # "No class chg  291  9%  35%  -0.87"
+
+    # Find trainer section (after "Trnr:" line)
+    trnr_pos = block_str.find("Trnr:")
+    if trnr_pos == -1:
+        trnr_pos = block_str.find("Trainer:")
+    if trnr_pos >= 0:
+        trainer_section = block_str[trnr_pos : trnr_pos + 800]
+
+        # Trainer year stats (first year pattern after Trnr line)
+        ty = re.search(
+            r"(\d{4}(?:-\d{4})?)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+\.\d+)",
+            trainer_section,
+        )
+        if ty:
+            out["trainer_year"] = {
+                "period": ty.group(1),
+                "starts": int(ty.group(2)),
+                "win_pct": int(ty.group(3)) / 100.0,
+                "itm_pct": int(ty.group(4)) / 100.0,
+                "roi": float(ty.group(5)),
+            }
+
+        # Trainer angle stats (all "description  N  N%  N%  ±N.NN" patterns)
+        for ta_m in re.finditer(
+            r"([A-Za-z][\w /+\-.']*?)\s+(\d+)\s+(\d+)%\s+(\d+)%\s+([+-]?\d+\.\d+)",
+            trainer_section,
+        ):
+            angle_name = ta_m.group(1).strip()
+            # Skip year patterns and the jockey lines
+            if re.match(r"^\d{4}", angle_name) or "JKY" in angle_name.upper():
+                continue
+            out["trainer_angles"].append(
+                {
+                    "angle": angle_name,
+                    "starts": int(ta_m.group(2)),
+                    "win_pct": int(ta_m.group(3)) / 100.0,
+                    "itm_pct": int(ta_m.group(4)) / 100.0,
+                    "roi": float(ta_m.group(5)),
+                }
+            )
+
+    return out
+
+
+def parse_per_race_details(block: str) -> list[dict]:
+    """Parse extended per-race details: odds, jockey, weight, comment, field size.
+
+    Enhances parse_race_history_from_block with additional per-race fields
+    that were previously not extracted.
+
+    BRISNET running line format (Part 2 reference):
+    DATE TRK  DIST  RR RACETYPE  CR E1 E2/ LP SPD PP ST 1C 2C Str FIN  JOCKEY Wgt  Med Eq ODDS  Top Finishers  Comment  #starters
+
+    Returns: [{"date", "odds", "jockey", "weight", "med", "comment", "field_size",
+               "top_3": [str,str,str], "rr": int, "cr": int}, ...]
+    """
+    races = []
+    if not block:
+        return races
+    block_str = str(block) if not isinstance(block, str) else block
+
+    for line in block_str.split("\n"):
+        date_m = re.match(r"(\d{2}[A-Za-z]{3}\d{2})", line.strip())
+        if not date_m:
+            continue
+
+        race = {"date": date_m.group(1)}
+
+        # ── ODDS ──
+        # Odds appear as decimal number near end of data area, typically after weight
+        # Format: "Lb  4.30" or "Lb *1.10" (* = favorite)
+        odds_m = re.search(r"[Ll][Bb]\s+\*?(\d+\.?\d*)", line)
+        if odds_m:
+            try:
+                race["odds"] = float(odds_m.group(1))
+            except ValueError:
+                race["odds"] = 0.0
+        else:
+            race["odds"] = 0.0
+
+        # ── JOCKEY NAME ──
+        # Jockey name appears after finish position, before weight
+        # Format: "FuentesRD118" or "VelasquezC124" (name + weight combined)
+        jockey_m = re.search(
+            r"(\d)\s{2,}([A-Z][a-zA-Z]+(?:[A-Z][A-Za-z]*)?)(\d{2,3})\s",
+            line,
+        )
+        if jockey_m:
+            race["jockey"] = jockey_m.group(2)
+            try:
+                race["weight"] = int(jockey_m.group(3))
+            except ValueError:
+                race["weight"] = 0
+        else:
+            race["jockey"] = ""
+            race["weight"] = 0
+
+        # ── MEDICATION ──
+        # "L" = Lasix, "B" = Bute, "Lb" = both
+        med_m = re.search(r"\b(Lb?|BL?|b)\s+\*?\d+\.\d+", line)
+        if med_m:
+            race["medication"] = med_m.group(1)
+        else:
+            race["medication"] = ""
+
+        # ── FIELD SIZE (number of starters) ──
+        # Appears as last number on the line
+        last_nums = re.findall(r"\b(\d{1,2})\s*$", line.strip())
+        if last_nums:
+            try:
+                fs = int(last_nums[-1])
+                race["field_size"] = fs if 2 <= fs <= 20 else 0
+            except ValueError:
+                race["field_size"] = 0
+        else:
+            race["field_size"] = 0
+
+        # ── COMMENT ──
+        # Trip comment appears after top finishers, before field size
+        # e.g., "Steadied far turn 12" or "Inside; briskly urged 7"
+        comment_m = re.search(
+            r"(?:Lb?|BL?)\s+\*?\d+\.\d+\s+\S+\s+(.+?)\s+\d{1,2}\s*$",
+            line.strip(),
+        )
+        if comment_m:
+            race["comment"] = comment_m.group(1).strip()
+        else:
+            race["comment"] = ""
+
+        # ── RR / CR ──
+        rr_m = re.search(
+            r"(\d{2,3})\s+(\d{2,3})\s+(?:Mdn|Clm|Alw|OC|MC|Stk|Hcp|G[123])",
+            line,
+        )
+        if rr_m:
+            try:
+                rr = int(rr_m.group(1))
+                cr = int(rr_m.group(2))
+                if 30 <= rr <= 130 and 30 <= cr <= 130:
+                    race["rr"] = rr
+                    race["cr"] = cr
+            except ValueError:
+                pass
+
+        races.append(race)
+
+    return races[:10]
+
+
+def parse_equipment_medication_weight(block: str) -> dict:
+    """Parse today's medication, equipment, and weight from PP header.
+
+    BRISNET format (Part 1 #11):
+        L = Lasix, L-bar = First Lasix, B = Bute
+        ON = blinkers on, OFF = blinkers off
+        Weight: "122" (includes jockey), apprentice allowance: smaller number after weight
+
+    Returns: {"lasix": bool, "first_lasix": bool, "bute": bool,
+              "blinkers_change": str, "weight": int, "apprentice_allowance": int}
+    """
+    out = {
+        "lasix": False,
+        "first_lasix": False,
+        "bute": False,
+        "blinkers_change": "",
+        "weight": 0,
+        "apprentice_allowance": 0,
+    }
+    if not block:
+        return out
+    block_str = str(block) if not isinstance(block, str) else block
+
+    # Medication
+    if re.search(r"\bL\b", block_str[:500]):
+        out["lasix"] = True
+    if re.search(r"First\s*(?:time\s*)?Lasix|1st\s*Lasix", block_str, re.IGNORECASE):
+        out["first_lasix"] = True
+        out["lasix"] = True
+    if re.search(r"\bB(?:ute)?\b", block_str[:500]):
+        out["bute"] = True
+
+    # Blinkers
+    if re.search(r"\bON\b", block_str[:300]):
+        out["blinkers_change"] = "ON"
+    elif re.search(r"\bOFF\b", block_str[:300]):
+        out["blinkers_change"] = "OFF"
+
+    # Weight (typically 3-digit number near start: "L 122" or just "122")
+    wt = re.search(r"\b(1[01]\d|1[2-3]\d)\b", block_str[:400])
+    if wt:
+        out["weight"] = int(wt.group(1))
+
+    # Apprentice allowance
+    app = re.search(r"\b(1[01]\d|1[2-3]\d)\s*(\d)\b", block_str[:400])
+    if app:
+        try:
+            out["apprentice_allowance"] = int(app.group(2))
+        except ValueError:
+            pass
+
+    return out
+
+
+def parse_earnings_and_class_record(block: str) -> dict:
+    """Parse earnings and class-level performance from lifetime records.
+
+    Extracts:
+    - Total career earnings
+    - Earnings per start (class indicator)
+    - Win% at today's distance (from Dis record)
+    - Win% on today's surface (from Fst/Trf records)
+
+    Returns: {"career_earnings": int, "earnings_per_start": float,
+              "dist_win_pct": float, "surface_win_pct": float, "career_win_pct": float}
+    """
+    out = {
+        "career_earnings": 0,
+        "earnings_per_start": 0.0,
+        "dist_win_pct": 0.0,
+        "surface_win_pct": 0.0,
+        "career_win_pct": 0.0,
+    }
+    lifetime = parse_lifetime_records(block)
+
+    if "life" in lifetime:
+        life = lifetime["life"]
+        out["career_earnings"] = life.get("earnings", 0)
+        starts = life.get("starts", 0)
+        if starts > 0:
+            out["earnings_per_start"] = out["career_earnings"] / starts
+            out["career_win_pct"] = life.get("wins", 0) / starts
+
+    if "dis" in lifetime:
+        dis = lifetime["dis"]
+        if dis.get("starts", 0) > 0:
+            out["dist_win_pct"] = dis.get("wins", 0) / dis["starts"]
+
+    if "fst" in lifetime:
+        fst = lifetime["fst"]
+        if fst.get("starts", 0) > 0:
+            out["surface_win_pct"] = fst.get("wins", 0) / fst["starts"]
+
+    return out

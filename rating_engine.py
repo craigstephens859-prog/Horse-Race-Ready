@@ -30,13 +30,20 @@ from pp_parsing import (
     parse_bris_rr_cr_per_race,
     parse_claiming_prices,
     parse_e1_e2_lp_values,
+    parse_earnings_and_class_record,
+    parse_equipment_medication_weight,
     parse_fractional_positions,
     parse_jockey_combo_stats,
+    parse_jockey_trainer_full_stats,
+    parse_lifetime_records,
     parse_pace_speed_pars,
     parse_pedigree_spi,
     parse_pedigree_surface_stats,
+    parse_per_race_details,
+    parse_prime_power,
     parse_quickplay_comments,
     parse_race_history_from_block,
+    parse_race_shapes,
     parse_race_summary_rankings,
     parse_recent_class_levels,
     parse_recent_races_detailed,
@@ -4358,6 +4365,263 @@ def compute_bias_ratings(
                     avg_cr = sum(r.get("cr", 0) for r in _rr_cr_data) / len(_rr_cr_data)
                     if recent_cr > avg_cr * 1.1:
                         tier2_bonus += 0.15  # Stepping up in class AND performing
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 17. LIFETIME SURFACE/DISTANCE RECORD (Feb 21, 2026)
+        # Horses with proven records at today's surface or distance get bonuses.
+        # e.g., "Fst: 10 3-2-1" = 30% dirt win rate is a strong signal.
+        try:
+            if _horse_block:
+                _lt_records = parse_lifetime_records(_horse_block)
+
+                # Surface-specific win rate
+                _surf_key = "fst" if surface_type.lower() in ("dirt", "d", "ft") else (
+                    "trf" if surface_type.lower() in ("turf", "tur", "t") else "fst"
+                )
+                if _surf_key in _lt_records:
+                    _sr = _lt_records[_surf_key]
+                    _s_starts = _sr.get("starts", 0)
+                    _s_wins = _sr.get("wins", 0)
+                    if _s_starts >= 3:
+                        _s_wpct = _s_wins / _s_starts
+                        if _s_wpct >= 0.30:
+                            tier2_bonus += 0.35  # Proven surface specialist
+                        elif _s_wpct >= 0.20:
+                            tier2_bonus += 0.20  # Solid on this surface
+                        elif _s_wpct == 0.0 and _s_starts >= 5:
+                            tier2_bonus -= 0.25  # Winless on surface with ample chances
+
+                # Distance-specific win rate
+                if "dis" in _lt_records:
+                    _dr = _lt_records["dis"]
+                    _d_starts = _dr.get("starts", 0)
+                    _d_wins = _dr.get("wins", 0)
+                    if _d_starts >= 3:
+                        _d_wpct = _d_wins / _d_starts
+                        if _d_wpct >= 0.30:
+                            tier2_bonus += 0.30  # Distance specialist
+                        elif _d_wpct >= 0.20:
+                            tier2_bonus += 0.15
+                        elif _d_wpct == 0.0 and _d_starts >= 5:
+                            tier2_bonus -= 0.20  # Never won at this distance
+
+                # Off-track record (when conditions are wet)
+                _cond_lower = (condition_txt or "").lower()
+                if any(w in _cond_lower for w in ("mud", "slop", "wet", "my", "sy", "wf", "gd")):
+                    if "off" in _lt_records:
+                        _or = _lt_records["off"]
+                        _o_starts = _or.get("starts", 0)
+                        _o_wins = _or.get("wins", 0)
+                        if _o_starts >= 2:
+                            _o_wpct = _o_wins / _o_starts
+                            if _o_wpct >= 0.30:
+                                tier2_bonus += 0.40  # Mudder (loves slop)
+                            elif _o_wpct >= 0.15:
+                                tier2_bonus += 0.15
+                        elif _o_starts == 0:
+                            tier2_bonus -= 0.15  # Unknown on off track
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 18. PRIME POWER RANK BONUS (Feb 21, 2026)
+        # BRIS Prime Power combines dozens of factors. The #1 Prime Power horse
+        # wins ~30% of races. Use rank position as a supplementary signal.
+        try:
+            if _horse_block:
+                _pp_data = parse_prime_power(_horse_block)
+                _pp_rank = _pp_data.get("rank", 0)
+                _pp_rating = _pp_data.get("rating", 0.0)
+                if _pp_rank == 1:
+                    tier2_bonus += 0.40  # Top Prime Power
+                elif _pp_rank == 2:
+                    tier2_bonus += 0.20
+                elif _pp_rank == 3:
+                    tier2_bonus += 0.10
+                # Also use raw rating tier: 130+ = elite
+                if _pp_rating >= 130:
+                    tier2_bonus += 0.20
+                elif _pp_rating >= 120:
+                    tier2_bonus += 0.10
+                elif _pp_rating < 100 and _pp_rating > 0:
+                    tier2_bonus -= 0.15  # Below-average Prime Power
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 19. JOCKEY/TRAINER EXTENDED STATS (Feb 21, 2026)
+        # Enhanced connections analysis using meet records, year stats,
+        # run-style specialties, and L60 combo data.
+        try:
+            if _horse_block:
+                _jt_stats = parse_jockey_trainer_full_stats(_horse_block)
+
+                # Jockey meet win rate: high meet % = hot jockey
+                _jm = _jt_stats.get("jockey_meet", {})
+                _jm_starts = _jm.get("starts", 0)
+                _jm_wpct = _jm.get("win_pct", 0.0)
+                if _jm_starts >= 30:
+                    if _jm_wpct >= 0.22:
+                        tier2_bonus += 0.15  # Elite meet jockey
+                    elif _jm_wpct >= 0.16:
+                        tier2_bonus += 0.08
+                    elif _jm_wpct < 0.08:
+                        tier2_bonus -= 0.10  # Cold jockey
+
+                # Jockey run-style specialty match
+                _js = _jt_stats.get("jockey_styles", {})
+                _style_upper = (style or "NA").upper().replace("/", "")
+                _matching_style = None
+                for sk in _js:
+                    if _style_upper in sk or sk in _style_upper:
+                        _matching_style = _js[sk]
+                        break
+                if _matching_style:
+                    _ms_starts = _matching_style.get("starts", 0)
+                    _ms_roi = _matching_style.get("roi", 0.0)
+                    if _ms_starts >= 20 and _ms_roi > 0.0:
+                        tier2_bonus += 0.20  # Profitable with this style
+                    elif _ms_starts >= 20 and _matching_style.get("win_pct", 0) >= 0.18:
+                        tier2_bonus += 0.10
+
+                # Jockey surface/distance specialty
+                _jsf = _jt_stats.get("jockey_surface", {})
+                _surf_match = None
+                if surface_type.lower() in ("turf", "tur", "t"):
+                    _surf_match = _jsf.get("turf", {})
+                elif is_sprint:
+                    _surf_match = _jsf.get("sprints", _jsf.get("sprint", {}))
+                elif not is_sprint:
+                    _surf_match = _jsf.get("routes", _jsf.get("route", {}))
+                if _surf_match and _surf_match.get("starts", 0) >= 20:
+                    if _surf_match.get("roi", 0.0) > 0.0:
+                        tier2_bonus += 0.15  # Profitable on this surface/dist
+                    elif _surf_match.get("win_pct", 0) >= 0.18:
+                        tier2_bonus += 0.08
+
+                # Jockey/Trainer L60 combo with ROI
+                _jtl = _jt_stats.get("jockey_trainer_l60", {})
+                _jtl_starts = _jtl.get("starts", 0)
+                if _jtl_starts >= 5:
+                    _jtl_roi = _jtl.get("roi", 0.0)
+                    _jtl_wpct = _jtl.get("win_pct", 0.0)
+                    if _jtl_roi > 0.0 and _jtl_wpct >= 0.20:
+                        tier2_bonus += 0.30  # Profitable hot combo
+                    elif _jtl_wpct >= 0.25:
+                        tier2_bonus += 0.15
+
+                # Trainer angle bonuses (from the specific angle stats)
+                _ta = _jt_stats.get("trainer_angles", [])
+                for _angle in _ta:
+                    _a_starts = _angle.get("starts", 0)
+                    _a_roi = _angle.get("roi", 0.0)
+                    _a_wpct = _angle.get("win_pct", 0.0)
+                    if _a_starts >= 10 and _a_roi > 0.15:
+                        tier2_bonus += 0.20  # High-ROI trainer angle
+                    elif _a_starts >= 10 and _a_wpct >= 0.25:
+                        tier2_bonus += 0.12  # High win% angle
+                    elif _a_starts >= 10 and _a_wpct < 0.05:
+                        tier2_bonus -= 0.10  # Dead angle
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 20. PER-RACE ODDS TREND ANALYSIS (Feb 21, 2026)
+        # Detects if horse is being bet down (improving) or drifting (declining).
+        try:
+            if _horse_block:
+                _pr_details = parse_per_race_details(_horse_block)
+                _odds_list = [r.get("odds", 0.0) for r in _pr_details if r.get("odds", 0) > 0]
+                if len(_odds_list) >= 3:
+                    # Recent odds vs older odds
+                    _recent_odds = np.mean(_odds_list[:2])
+                    _older_odds = np.mean(_odds_list[2:])
+                    if _older_odds > 0:
+                        _odds_trend = (_older_odds - _recent_odds) / _older_odds
+                        if _odds_trend > 0.30:
+                            tier2_bonus += 0.20  # Being bet down significantly (improving)
+                        elif _odds_trend > 0.15:
+                            tier2_bonus += 0.10  # Moderate improvement
+                        elif _odds_trend < -0.30:
+                            tier2_bonus -= 0.15  # Drifting out (public losing confidence)
+
+                # Per-race comment analysis for trip trouble
+                _trouble_count = 0
+                _good_trip_count = 0
+                for _prd in _pr_details[:5]:
+                    _cmt = (_prd.get("comment", "") or "").lower()
+                    if any(w in _cmt for w in ("steadied", "checked", "bumped", "blocked", "wide", "troubled", "impeded")):
+                        _trouble_count += 1
+                    if any(w in _cmt for w in ("briskly", "driving", "urged", "rallied", "gamely")):
+                        _good_trip_count += 1
+                if _trouble_count >= 2:
+                    tier2_bonus += 0.15  # Trip trouble pattern — likely to improve
+                if _good_trip_count >= 3:
+                    tier2_bonus += 0.10  # Consistently tries hard
+
+                # Field size competition quality
+                _field_sizes = [r.get("field_size", 0) for r in _pr_details if r.get("field_size", 0) > 0]
+                if _field_sizes:
+                    _avg_field = np.mean(_field_sizes)
+                    if _avg_field >= 10:
+                        tier2_bonus += 0.08  # Experienced against large fields
+                    elif _avg_field <= 5:
+                        tier2_bonus -= 0.08  # Short-field specialist concern
+        except Exception as exc:
+            logger.debug("Tier2 calc skipped: %s", exc)
+
+        # 21. SIRE/DAM ENHANCED PEDIGREE ANALYSIS (Feb 21, 2026)
+        # Uses newly parsed sire turf%, sire SPI, damsire SPI, dam DPI
+        # for surface-specific pedigree validation.
+        try:
+            _ped = pedigree_per_horse.get(name, {}) if pedigree_per_horse else {}
+            if _ped:
+                # Sire turf% on turf races
+                _sire_turf = _ped.get("sire_turf_pct", np.nan)
+                if pd.notna(_sire_turf) and surface_type.lower() in ("turf", "tur", "t"):
+                    if _sire_turf >= 15:
+                        tier2_bonus += 0.20  # Strong turf sire
+                    elif _sire_turf >= 10:
+                        tier2_bonus += 0.10
+                    elif _sire_turf < 5:
+                        tier2_bonus -= 0.15  # Sire offspring rarely win on turf
+
+                # Sire SPI (breeding quality indicator)
+                _sire_spi = _ped.get("sire_spi", np.nan)
+                if pd.notna(_sire_spi):
+                    if _sire_spi >= 2.0:
+                        tier2_bonus += 0.15  # Elite sire
+                    elif _sire_spi >= 1.5:
+                        tier2_bonus += 0.08
+                    elif _sire_spi < 0.5:
+                        tier2_bonus -= 0.10  # Below-average sire
+
+                # Dam DPI (broodmare quality)
+                _dam_dpi = _ped.get("dam_dpi", np.nan)
+                if pd.notna(_dam_dpi):
+                    if _dam_dpi >= 2.0:
+                        tier2_bonus += 0.12  # Elite dam
+                    elif _dam_dpi >= 1.0:
+                        tier2_bonus += 0.05
+                    elif _dam_dpi < 0.3 and _dam_dpi > 0:
+                        tier2_bonus -= 0.08  # Weak dam production
+
+                # Sire mud% on wet tracks
+                _sire_mud = _ped.get("sire_mud_pct", np.nan)
+                _cond_lower = (condition_txt or "").lower()
+                if pd.notna(_sire_mud) and any(w in _cond_lower for w in ("mud", "slop", "wet", "my", "sy", "wf")):
+                    if _sire_mud >= 20:
+                        tier2_bonus += 0.25  # Mud sire on wet track
+                    elif _sire_mud >= 12:
+                        tier2_bonus += 0.10
+                    elif _sire_mud < 5:
+                        tier2_bonus -= 0.15  # Sire offspring struggle in mud
+
+                # Damsire turf% on turf
+                _ds_turf = _ped.get("damsire_turf_pct", np.nan)
+                if pd.notna(_ds_turf) and surface_type.lower() in ("turf", "tur", "t"):
+                    if _ds_turf >= 15:
+                        tier2_bonus += 0.12
+                    elif _ds_turf < 5:
+                        tier2_bonus -= 0.10
         except Exception as exc:
             logger.debug("Tier2 calc skipped: %s", exc)
 
