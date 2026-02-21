@@ -2,8 +2,8 @@
 target-version = "py311"
 
 [lint]
-# Enable common rule sets
-select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+# Enable common rule sets + ARG (catches dead parameters like e1_par=0!)
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "ARG", "RUF"]
 
 # Allow all auto-fixable rules
 fixable = ["ALL"]
@@ -14,4 +14,8 @@ ignore = [
     "E741",   # Ambiguous variable names (e.g., 'l', 'R')
     "F841",   # Local variable assigned but never used (some are intentional)
     "F821",   # Undefined name - false positives on module-level constants used in data structures
+    "ARG002", # Unused method argument (common in Streamlit callbacks)
+    "SIM102", # Nested if (style preference)
+    "SIM108", # Ternary operator (style preference)
+    "RUF100", # Unused noqa
 ]

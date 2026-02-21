@@ -834,12 +834,16 @@ def parse_track_name_from_pp(pp_text: str) -> str:
             ):
                 return canon
 
+    logger.debug("parse_track_name_from_pp: no track detected in first 2000 chars")
     return ""
 
 
 def detect_race_number(pp_text: str) -> int | None:
     """Extract race number from PP text header (e.g., 'Race 6')."""
     s = pp_text or ""
+    if not s:
+        logger.debug("detect_race_number: empty pp_text")
+        return None
     # Look for "Race N" pattern in first few lines
     m = re.search(r"(?mi)\bRace\s+(\d+)\b", s[:500])
     if m:
@@ -865,6 +869,7 @@ def parse_brisnet_race_header(pp_text: str) -> dict[str, Any]:
     - track_name, race_number, race_type, purse_amount, distance, age_restriction, sex_restriction, race_date, day_of_week
     """
     if not pp_text:
+        logger.debug("parse_brisnet_race_header: empty pp_text, returning {}")
         return {}
 
     result = {
@@ -2080,6 +2085,7 @@ def parse_claiming_prices(block) -> list[int]:
     """Extract claiming prices from race lines. Returns list of prices (most recent first)."""
     prices = []
     if not block:
+        logger.debug("parse_claiming_prices: empty block")
         return prices
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
@@ -2116,6 +2122,7 @@ def detect_lasix_change(block) -> float:
     """SAVANT ANGLE: Lasix/medication changes. Returns bonus from -0.12 to +0.18"""
     bonus = 0.0
     if not block:
+        logger.debug("detect_lasix_change: empty block")
         return bonus
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
@@ -2145,6 +2152,7 @@ def parse_fractional_positions(block) -> list[list[int]]:
     """Extract running positions: PP, Start, 1C, 2C, Stretch, Finish."""
     positions = []
     if not block:
+        logger.debug("parse_fractional_positions: empty block")
         return positions
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
@@ -2195,6 +2203,7 @@ def parse_e1_e2_lp_values(block) -> dict:
     """Extract E1, E2, and LP pace figures."""
     e1_vals, e2_vals, lp_vals = [], [], []
     if not block:
+        logger.debug("parse_e1_e2_lp_values: empty block")
         return {"e1": e1_vals, "e2": e2_vals, "lp": lp_vals}
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
@@ -2213,14 +2222,18 @@ def analyze_pace_figures(
     e1_vals: list[int],
     e2_vals: list[int],
     lp_vals: list[int],
-    e1_par: int = 0,
-    e2_par: int = 0,
-    lp_par: int = 0,
+    e1_par: int | None = None,
+    e2_par: int | None = None,
+    lp_par: int | None = None,
 ) -> float:
     """OPTIMIZED Feb 9 2026: PAR-adjusted pace analysis with recency-weighted averages.
 
     Returns bonus from -0.15 to +0.20. Uses recency weights [2x, 1x, 0.5x]
     and energy distribution analysis. Validated on Oaklawn R9 (Air of Defiance #2).
+
+    NOTE: e1_par/e2_par/lp_par use None (not 0) as default so callers that fail
+    to provide real pars produce a visible None rather than a silent 0 that
+    passes the `if e1_par and lp_par` guard as falsy.
     """
     bonus = 0.0
     if len(e1_vals) < 2 or len(lp_vals) < 2:
@@ -2276,6 +2289,10 @@ def detect_bounce_risk(speed_figs: list[int]) -> float:
     and career-relative analysis. Validated on Oaklawn R9 (Air of Defiance #2).
     """
     if len(speed_figs) < 2:
+        logger.debug(
+            "detect_bounce_risk: insufficient speed figs (%d), need >= 2",
+            len(speed_figs),
+        )
         return 0.0
     figs = speed_figs[:6]
     n = len(figs)
@@ -2335,6 +2352,7 @@ def parse_speed_figures_for_block(block) -> list[int]:
     """
     figs = []
     if not block:
+        logger.debug("parse_speed_figures_for_block: empty block")
         return figs
 
     # Ensure block is string
@@ -2728,10 +2746,12 @@ def apply_enhancements_and_figs(
         pace_data = parse_e1_e2_lp_values(block)
         _pars = st.session_state.get("pace_speed_pars", {})
         savant_bonus += analyze_pace_figures(
-            pace_data["e1"], pace_data["e2"], pace_data["lp"],
-            e1_par=_pars.get("e1_par", 0),
-            e2_par=_pars.get("e2_par", 0),
-            lp_par=_pars.get("lp_par", 0),
+            pace_data["e1"],
+            pace_data["e2"],
+            pace_data["lp"],
+            e1_par=_pars.get("e1_par") or None,
+            e2_par=_pars.get("e2_par") or None,
+            lp_par=_pars.get("lp_par") or None,
         )
 
         # 4. Bounce detection
@@ -3133,6 +3153,7 @@ def parse_recent_races_detailed(block) -> list[dict]:
     """
     races = []
     if not block:
+        logger.debug("parse_recent_races_detailed: empty block")
         return races
 
     # Ensure block is string
@@ -3195,7 +3216,7 @@ def parse_recent_races_detailed(block) -> list[dict]:
 
 def calculate_layoff_factor(
     days_since_last: int,
-    num_workouts: int = 0,
+    num_workouts: int | None = None,
     workout_pattern_bonus: float = 0.0,
 ) -> float:
     """OPTIMIZED Feb 9 2026: Layoff impact with workout mitigation.
@@ -3204,7 +3225,16 @@ def calculate_layoff_factor(
     Key changes: 60-120d brackets gentler (strategic freshening window),
     workout mitigation 15%/workout up to 60% recovery, max penalty -3.0.
     Validated on Oaklawn R9 (Air of Defiance #2).
+
+    NOTE: num_workouts defaults to None (not 0) so callers that fail to
+    provide workout data produce a debug trace rather than silently skipping
+    the workout mitigation block.
     """
+    _num_workouts = num_workouts if num_workouts is not None else 0
+    if num_workouts is None:
+        logger.debug(
+            "calculate_layoff_factor: num_workouts=None, workout mitigation disabled"
+        )
     if days_since_last <= 14:
         base = 0.5
     elif days_since_last <= 30:
@@ -3222,8 +3252,8 @@ def calculate_layoff_factor(
     else:
         base = -3.0
     # Workout mitigation (up to 60% of penalty recovered)
-    if base < 0 and num_workouts > 0:
-        work_credit = min(num_workouts * 0.15, 0.60)  # 15% per workout
+    if base < 0 and _num_workouts > 0:
+        work_credit = min(_num_workouts * 0.15, 0.60)  # 15% per workout
         base *= 1.0 - work_credit
         base += workout_pattern_bonus
     return round(max(base, -3.0), 2)
@@ -3281,6 +3311,7 @@ def parse_workout_data(block) -> dict:
     }
 
     if not block:
+        logger.debug("parse_workout_data: empty block")
         return workouts
 
     # Ensure block is string
@@ -3903,6 +3934,7 @@ def parse_recent_class_levels(block) -> list[dict]:
     """
     races = []
     if not block:
+        logger.debug("parse_recent_class_levels: empty block")
         return races
     # Ensure block is string
     block_str = str(block) if not isinstance(block, str) else block
@@ -5130,13 +5162,15 @@ def parse_pace_speed_pars(pp_text: str) -> dict[str, int]:
     """
     pars: dict[str, int] = {}
     if not pp_text:
+        logger.debug("parse_pace_speed_pars: empty pp_text")
         return pars
 
     # Pattern 1: "E1  E2/LATE  SPD" on one line, values on next
     # or "E1  E2/ LATE  SPD" format, then "86  88/ 87  88"
     header_match = re.search(
         r"E1\s+E2\s*/?\s*(?:LATE|Late)\s+SPD\s*\n\s*(\d{2,3})\s+(\d{2,3})\s*/?\s*(\d{2,3})\s+(\d{2,3})",
-        pp_text, re.IGNORECASE,
+        pp_text,
+        re.IGNORECASE,
     )
     if header_match:
         pars["e1_par"] = int(header_match.group(1))
@@ -5148,7 +5182,8 @@ def parse_pace_speed_pars(pp_text: str) -> dict[str, int]:
     # Pattern 2: Inline "E1 86 E2/Late 88/87 SPD 88" or similar
     inline_match = re.search(
         r"E1\s+(\d{2,3})\s+E2\s*/?\s*(?:Late)?\s*(\d{2,3})\s*/?\s*(\d{2,3})\s+SPD\s+(\d{2,3})",
-        pp_text, re.IGNORECASE,
+        pp_text,
+        re.IGNORECASE,
     )
     if inline_match:
         pars["e1_par"] = int(inline_match.group(1))
@@ -5160,7 +5195,8 @@ def parse_pace_speed_pars(pp_text: str) -> dict[str, int]:
     # Pattern 3: "BRIS Pace & Speed Pars" section with separated values
     pars_match = re.search(
         r"(?:Pace|PACE).*?(?:Speed|SPD).*?Pars?\s*\]?.*?(\d{2,3})\s+(\d{2,3})\s*/?\s*(\d{2,3})\s+(\d{2,3})",
-        pp_text, re.DOTALL | re.IGNORECASE,
+        pp_text,
+        re.DOTALL | re.IGNORECASE,
     )
     if pars_match:
         pars["e1_par"] = int(pars_match.group(1))
@@ -5168,6 +5204,10 @@ def parse_pace_speed_pars(pp_text: str) -> dict[str, int]:
         pars["lp_par"] = int(pars_match.group(3))
         pars["spd_par"] = int(pars_match.group(4))
 
+    if not pars:
+        logger.debug(
+            "parse_pace_speed_pars: no par pattern matched in %d chars", len(pp_text)
+        )
     return pars
 
 
@@ -5183,6 +5223,7 @@ def parse_quickplay_comments(horse_block: str) -> dict[str, list[str]]:
     """
     result: dict[str, list[str]] = {"positive": [], "negative": []}
     if not horse_block:
+        logger.debug("parse_quickplay_comments: empty horse_block")
         return result
 
     # Find the comments section — appears between header stats and race lines
@@ -5246,7 +5287,9 @@ def score_quickplay_comments(comments: dict[str, list[str]]) -> float:
         c_lower = comment.lower()
         if "poor speed figures" in c_lower or "poor speed" in c_lower:
             bonus -= 0.3  # Bad speed = major red flag
-        elif "well below" in c_lower and ("avg winning" in c_lower or "average winning" in c_lower):
+        elif "well below" in c_lower and (
+            "avg winning" in c_lower or "average winning" in c_lower
+        ):
             bonus -= 0.35  # Best speed below race average = severe
         elif "moves up in class" in c_lower or "class from last" in c_lower:
             bonus -= 0.2  # Stepping up
@@ -5290,6 +5333,7 @@ def parse_bris_rr_cr_per_race(horse_block: str) -> list[dict[str, int]]:
     """
     races = []
     if not horse_block:
+        logger.debug("parse_bris_rr_cr_per_race: empty horse_block")
         return races
 
     # Match race lines by date pattern
@@ -5334,6 +5378,9 @@ def parse_track_bias_stats(pp_text: str) -> dict[str, any]:
     Prefers Week Totals over Meet Totals when both available.
     """
     stats: dict[str, any] = {}
+    if not pp_text:
+        logger.debug("parse_track_bias_stats: empty pp_text")
+        return stats
 
     # --- %Wire ---
     # Format: "%Wire: 63%" or "%Wire:  77%"
@@ -6736,7 +6783,7 @@ def calculate_hot_trainer_bonus(
     trainer_win_pct: float,
     is_hot_l14: bool = False,
     is_2nd_lasix_high_pct: bool = False,
-    trainer_starts: int = 0,
+    trainer_starts: int | None = None,
 ) -> float:
     """
     HOT TRAINER BONUS (TUP R6 + R7 Feb 2026 Calibration)
@@ -6762,6 +6809,12 @@ def calculate_hot_trainer_bonus(
     Returns: Bonus/penalty to add to rating_final
     """
     bonus = 0.0
+    # Default to 0 if None (caller failed to provide trainer starts)
+    _trainer_starts = trainer_starts if trainer_starts is not None else 0
+    if trainer_starts is None:
+        logger.debug(
+            "calculate_hot_trainer_bonus: trainer_starts=None, defaulting to 0"
+        )
 
     # ═══════════════════════════════════════════════════════════════
     # SAMPLE-SIZE AWARE TRAINER PENALTY (Feb 18, 2026 TUP R4 Tuning)
@@ -6769,9 +6822,9 @@ def calculate_hot_trainer_bonus(
     # 2% on 51 starts (LaVanway) is effectively a confirmed loser.
     # ═══════════════════════════════════════════════════════════════
     if trainer_win_pct == 0.0:
-        if trainer_starts >= 30:
+        if _trainer_starts >= 30:
             return -1.8  # Confirmed 0% with huge sample — near-fatal
-        elif trainer_starts >= 15:
+        elif _trainer_starts >= 15:
             return -1.5  # Solid sample 0% — very bad
         else:
             return -1.2  # Small sample 0% — bad but recoverable
@@ -6779,7 +6832,7 @@ def calculate_hot_trainer_bonus(
     # Very low % trainer penalty (1-5%) — AMPLIFIED with sample size
     if trainer_win_pct > 0.0 and trainer_win_pct < 0.05:
         bonus -= 0.9  # Was -0.7: 2% trainer penalty increased
-        if trainer_starts >= 30:
+        if _trainer_starts >= 30:
             bonus -= 0.3  # Extra penalty for confirmed low % with large sample
     elif trainer_win_pct >= 0.05 and trainer_win_pct < 0.10:
         bonus -= 0.5  # Was -0.4: Moderate penalty slightly increased
@@ -8456,7 +8509,7 @@ def compute_bias_ratings(
     # ======================== TRACK PATTERN LEARNING: Fetch learned patterns ========================
     _track_patterns: dict = {}
     try:
-        if track_name and "gold_db" in dir() or True:
+        if (track_name and "gold_db" in dir()) or True:
             # Use the global gold_db instance
             _gold_db = globals().get("gold_db")
             if _gold_db and hasattr(_gold_db, "get_track_patterns"):
@@ -9287,7 +9340,9 @@ def compute_bias_ratings(
                 if len(_rr_cr_data) >= 2:
                     # Check RR trend (improving = recent > older)
                     recent_rr = _rr_cr_data[0].get("rr", 0)
-                    older_rr = sum(r.get("rr", 0) for r in _rr_cr_data[1:]) / len(_rr_cr_data[1:])
+                    older_rr = sum(r.get("rr", 0) for r in _rr_cr_data[1:]) / len(
+                        _rr_cr_data[1:]
+                    )
                     if recent_rr > 0 and older_rr > 0:
                         rr_trend = (recent_rr - older_rr) / max(older_rr, 1)
                         if rr_trend > 0.05:  # Improving by 5%+
@@ -11926,7 +11981,7 @@ Your goal is to present a sophisticated yet clear analysis. Structure your repor
                             "Phase 3 analysis unavailable (missing win probabilities)"
                         )
                 except Exception as e:
-                    phase3_report = f"Phase 3 analysis error: {str(e)}"
+                    phase3_report = f"Phase 3 analysis error: {e!s}"
 
                 # Store Classic Report in session state so it persists across reruns
                 st.session_state["classic_report"] = report
@@ -13492,7 +13547,7 @@ else:
                                                     )
 
                                             except Exception as e:
-                                                st.error(f"❌ Error: {str(e)}")
+                                                st.error(f"❌ Error: {e!s}")
                                                 import traceback
 
                                                 st.code(
@@ -13565,10 +13620,7 @@ else:
                     )
 
                     # 4.5 Show Intelligent Learning Insights (if any)
-                    if (
-                        "last_learning_insights" in st.session_state
-                        and st.session_state["last_learning_insights"]
-                    ):
+                    if st.session_state.get("last_learning_insights"):
                         st.markdown("#### 🎓 Latest Learning Insights")
                         insights = st.session_state["last_learning_insights"]
 
@@ -13695,7 +13747,7 @@ else:
                         )
 
                 except Exception as e:
-                    st.error(f"❌ Database verification failed: {str(e)}")
+                    st.error(f"❌ Database verification failed: {e!s}")
                     st.warning(
                         "⚠️ This may indicate database corruption or file permission issues."
                     )
@@ -14039,7 +14091,7 @@ else:
                     )
 
             except Exception as e:
-                st.error(f"❌ Error loading calibration data: {str(e)}")
+                st.error(f"❌ Error loading calibration data: {e!s}")
                 import traceback
 
                 st.code(traceback.format_exc())

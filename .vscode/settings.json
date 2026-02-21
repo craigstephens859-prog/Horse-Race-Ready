@@ -42,5 +42,11 @@
     "chat.customAgentInSubagent.enabled": true,
     "chat.editor.wordWrap": "on",
     "chat.edits2.enabled": true,
-    "editor.allowVariableFontsInAccessibilityMode": true
+    "editor.allowVariableFontsInAccessibilityMode": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportUnusedVariable": "warning",
+        "reportUnusedImport": "warning",
+        "reportUnnecessaryComparison": "warning"
+    }
 }
